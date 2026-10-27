@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(make *)",
+      "Bash(go build *)",
+      "Bash(go run *)",
+      "Bash(python3 *)",
+      "Bash(git status *)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(cat /sys/kernel/sched_ext/*)",
+      "Bash(./scripts/log_entry.sh *)",
+      "Bash(./scripts/meta.sh *)"
+    ],
+    "deny": [
+      "Bash(sudo rm *)",
+      "Bash(git push --force *)",
+      "Bash(sudo apt *)"
+    ]
+  }
+}
