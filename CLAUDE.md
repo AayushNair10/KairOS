@@ -1,13 +1,18 @@
-# CLAUDE.md — adaptive-sched
+# CLAUDE.md — KairOS
 
 Instructions for Claude when working in this repository.
 
 ## What this project is
-CSE 506 (Fall 2026) individual course project by Aayush Nair: a Linux scheduler
+**KairOS** (repo: https://github.com/AayushNair10/KairOS; scheduler program
+`scx_kairos`). CSE 506 (Fall 2026) individual course project by Aayush Nair: a Linux scheduler
 built with **sched_ext** (eBPF) that adapts **wakeup preemption** to current and
 predicted load, for a latency-critical service colocated with batch work.
-Full design, decisions and related work: `docs/RESEARCH_LOG.md`. Read it before
-starting any non-trivial task.
+Context lives in two files. Read both before starting any non-trivial task:
+- `docs/PROJECT_PLAN.md`: architecture, components, phases with dates,
+  evaluation, deliverables, risks. Check which phase we are in.
+- `docs/RESEARCH_LOG.md`: decisions and their reasons, related work, detailed
+  design (mode tree, classification tree, features A and B, ML), experiment log,
+  results and session history.
 
 AI assistance is allowed by the course, but **I must understand every line of
 code and verify every result**. So:
@@ -25,7 +30,7 @@ Helper tooling (load generator, ML, analysis) may use Go or Python.
 ## Environment
 - Ubuntu 26.04 LTS ARM64 in a Lima VM (`sched`) on a MacBook Air M2. 4 vCPUs,
   4 GB RAM + 4 GB swap. The Mac home folder is mounted read-only; the repo lives
-  in the VM's home (`~/adaptive-sched`).
+  in the VM's home (`~/KairOS`, previously `~/adaptive-sched`).
 - Kernel source for the examples: `~/linux-src` (tag matching `uname -r`);
   build examples with `make -C ~/linux-src/tools/sched_ext` (needs libssl-dev,
   libcap-dev, binutils-dev, llvm-dev for bpftool). Binaries land in
@@ -45,20 +50,20 @@ Helper tooling (load generator, ML, analysis) may use Go or Python.
 
 ## Repository layout
 ```
-scheduler/      adaptive.bpf.c (policy), adaptive.c (loader/stats), Makefile
+scheduler/      scx_kairos.bpf.c (policy), scx_kairos.c (loader/stats), Makefile
 ml/             collect.py, train_burst.py, train_classifier.py, daemon.py
 workloads/      grpcserver/ (Go), loadgen/ (Go, open-loop), traces/
 experiments/    run.sh (harness), configs/
 analysis/       plots.py
 results/        <date>-<name>/ raw data + meta.json (never edit raw data)
-docs/           RESEARCH_LOG.md, proposal/, report/
+docs/           PROJECT_PLAN.md, RESEARCH_LOG.md, proposal/, report/
 scripts/        helpers (log_entry.sh, meta.sh)
 ```
 
 ## Commands
 (Fill in as they become real.)
 - Build scheduler: `make -C scheduler`
-- Load: `sudo ./scheduler/adaptive [--force-preempt|--never-preempt] [--verbose]`
+- Load: `sudo ./scheduler/scx_kairos [--force-preempt|--never-preempt] [--verbose]`
   (Ctrl-C unloads; the kernel falls back to EEVDF)
 - Trace output: `sudo cat /sys/kernel/debug/tracing/trace_pipe`
 - Is it running: `cat /sys/kernel/sched_ext/state` and `cat /sys/kernel/sched_ext/root/ops`

@@ -1,4 +1,4 @@
-# Research Log: Load-Adaptive Wakeup Preemption with sched_ext
+# Research Log: KairOS — Load-Adaptive Wakeup Preemption with sched_ext
 
 CSE 506 (Fall 2026) individual project. Author: Aayush Nair.
 
@@ -260,6 +260,8 @@ choices. Add as you go.)
   github.com/sched-ext/scx (needs clang ≥ 16, libbpf ≥ 1.2.2, Rust ≥ 1.91). C
   examples such as scx_simple are no longer in the scx repo's main tree; build
   them from the matching kernel source's `tools/sched_ext/` with make.
+- Baselines built from sched-ext/scx commit
+  4c63759101a78d3595e8ec27c8c9c5aaac43b1fe. Claude Code 2.1.311 in the VM.
 - Claude Code runs inside the VM (native installer). Lima gives passwordless sudo,
   so Claude Code's permission prompts are the safety net for root commands.
 
@@ -438,5 +440,32 @@ throughput in our experiments, which would make the comparison unfair.
 **Decisions:** Evaluate lavd in its default (autopilot) mode and in its
 performance mode (check exact flag with `scx_lavd --help`), report both. Record
 the scx commit hash used for the baselines.
-**Next:** Record `git -C ~/scx rev-parse HEAD`; install Claude Code; set up
+Baselines built from sched-ext/scx commit
+`4c63759101a78d3595e8ec27c8c9c5aaac43b1fe`. Claude Code 2.1.311 installed in the
+VM at `~/.local/bin/claude` (added to PATH in ~/.bashrc).
+**Next:** Set up
 `~/adaptive-sched`; first session (copy scx_simple as "adaptive", add bpf_printk).
+
+### 2026-10-27 — Project named KairOS; repository connected
+**Did:** Chose the name and created the GitHub repository
+https://github.com/AayushNair10/KairOS. Set git identity (Aayush Nair,
+aayushnair204@gmail.com) and default branch `main`.
+**Decisions:** Project name **KairOS**, after Kairos, the Greek personification
+of the opportune moment (as opposed to Chronos, clock time): the scheduler's job
+is to preempt at the right moment rather than always or never. The name also
+contains "OS". Scheduler program: `scx_kairos`. Imagery for the report/video:
+Kairos holds a balance on a razor's edge (latency vs throughput) and has a
+forelock but a bald back of the head (seize the opportunity as it arrives, i.e.
+switch modes at the start of a burst).
+**Next:** First commit and push; first Claude Code session (rename files to
+KairOS/scx_kairos, record scx commit, copy scx_simple as scx_kairos, add
+bpf_printk, build).
+
+### 2026-10-28 — Repository on GitHub; plan file added
+**Did:** Pushed the repository to https://github.com/AayushNair10/KairOS
+(GitHub CLI login via device code), added `.claude/settings.json`, connected
+VS Code via Remote-SSH to `lima-sched`. Added `docs/PROJECT_PLAN.md` (phases,
+architecture, components, deliverables) so Claude Code sessions have the full
+plan; CLAUDE.md now points to it.
+**Next:** First Claude Code session (phase 2: scx_kairos skeleton with
+bpf_printk, build, screenshot); proposal due Fri Oct 30.
