@@ -115,7 +115,7 @@ initial params, prints and logs stats periodically (CSV).
 |---|---|---|---|
 | 0. Setup | Oct 24–27 | VM, sched_ext check, examples, baselines, Claude Code, GitHub | **Done** (Oct 27) |
 | 1. Proposal | Oct 28–30 | Write 2-page proposal (USENIX template) | Submitted Fri Oct 30 |
-| 2. Skeleton | Oct 28–Nov 3 | Copy scx_simple → scx_kairos, own build, bpf_printk in a callback | Screenshot of callback output |
+| 2. Skeleton | Oct 28–Nov 3 | Copy scx_simple → scx_kairos, own build, bpf_printk in a callback | **Done** (Oct 28) |
 | 3. Workloads | Oct 31–Nov 6 | gRPC server, open-loop loadgen (phases), zstd job, harness | One run produces latency + throughput logs |
 | 4. Load signal + static modes | Nov 3–8 | Timestamps, runnable count, wakeup rate, wait time, timer + EWMAs, forced modes, victim preemption | E1 shows the crossover |
 | 5. Adaptive switching | Nov 8–13 | Mode tree, hysteresis, fast exit, mode logging | Early E2; progress report Fri Nov 13 |

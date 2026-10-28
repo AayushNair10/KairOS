@@ -264,6 +264,63 @@ choices. Add as you go.)
   4c63759101a78d3595e8ec27c8c9c5aaac43b1fe. Claude Code 2.1.311 in the VM.
 - Claude Code runs inside the VM (native installer). Lima gives passwordless sudo,
   so Claude Code's permission prompts are the safety net for root commands.
+- Build (2026-10-28): `make -C scheduler`. `scheduler/Makefile` repeats the
+  compile and skeleton rules of `~/linux-src/tools/sched_ext/Makefile` (whose
+  rules only find sources in its own directory) and reuses that build's
+  `libbpf.a`, libbpf headers, `bpftool` and `vmlinux.h`, plus the scx headers
+  from `tools/sched_ext/include`. Steps: clang `-target bpf` → `bpftool gen
+  object` (one link pass; upstream links three times as a linker self-test) →
+  `bpftool gen skeleton` → cc links the loader with static libbpf. The upstream
+  build must exist first. `vmlinux.h` was dumped from the running kernel's BTF
+  (`/sys/kernel/btf/vmlinux`), so it describes Ubuntu's 7.0.0-38 kernel rather
+  than vanilla v7.0; rerun the upstream build after a kernel update.
+- sched_ext API used by the scx_simple code on 7.0: `scx_bpf_select_cpu_dfl`,
+  `scx_bpf_dsq_insert` (to `SCX_DSQ_LOCAL`), `scx_bpf_dsq_insert_vtime`,
+  `scx_bpf_dsq_move_to_local`, `scx_bpf_create_dsq`, `BPF_STRUCT_OPS`,
+  `SCX_OPS_DEFINE`. `scx_bpf_dsq_insert_vtime` and `scx_bpf_dsq_move_to_local`
+  are wrappers in `include/scx/compat.bpf.h` that pick whichever kfunc the
+  running kernel has (`bpf_core_type_exists` / `bpf_ksym_exists`, resolved by
+  libbpf at load). This kernel's BTF has `struct scx_bpf_dsq_insert_vtime_args`,
+  so the args-struct kfunc `__scx_bpf_dsq_insert_vtime` is the one used.
+  `SCX_SLICE_DFL` = 20 ms on this kernel.
+- `bpf_printk` with ≤ 3 arguments compiles to helper 6 (`bpf_trace_printk`). In
+  7.0 it formats into a per-CPU buffer and writes to the trace ring buffer (no
+  global lock; read in `kernel/trace/bpf_trace.c`, `kernel/bpf/helpers.c`). Its
+  cost is still paid on every enqueue, so remove or gate it before measuring.
+- Slice mechanics (read in `kernel/sched/ext.c`, v7.0): the kernel subtracts
+  run time from `p->scx.slice` (`update_curr_scx`) and reschedules at the tick
+  once it reaches 0 (`task_tick_scx`). A still-runnable task whose slice ran out
+  goes through `stopping(p, true)` and then `ops.enqueue` with enq_flags 0. If
+  dispatch finds nothing else to run, the kernel keeps running prev and refills
+  its slice to the default *without* calling `stopping`, so scx_simple's
+  `SCX_SLICE_DFL - p->scx.slice` charge misses that earlier slice. For our
+  runtime and budget accounting (Feature B), use timestamps (`running` →
+  `stopping`) instead. Task weight is cgroup-style: nice 0 = 100.
+- Idle CPU search (`scx_select_cpu_dfl`, `kernel/sched/ext_idle.c`): the kernel
+  keeps a bitmask of idle CPUs, updated when a CPU enters or leaves idle; the
+  search reads that mask and claims a CPU with an atomic test-and-clear. It
+  never inspects the CPUs themselves. On this VM (no SMT, one LLC = CPUs 0–3,
+  one NUMA node) the SMT/LLC/NUMA steps are disabled, so it is: sync-wakeup
+  check, test prev_cpu's bit, search one 4-bit mask. When every CPU is busy the
+  mask is empty and the search fails after a few bit operations. If we don't
+  implement `ops.select_cpu`, the kernel runs this same search itself
+  (`select_task_rq_scx`). Already-idle CPUs don't look at our shared queue
+  until woken, so skipping the search would need `scx_bpf_kick_cpu` from
+  enqueue (same search + IPI) or would leave CPUs idle. Cost not measured yet;
+  for E7, `sysctl kernel.bpf_stats_enabled=1` + `bpftool prog show` should give
+  run_time_ns / run_cnt per callback (unverified for struct_ops programs).
+- `enq_flags` seen in `ops.enqueue` on 7.0 (core `ENQUEUE_*` bits in
+  `kernel/sched/sched.h` plus SCX bits): `0x100009` = WAKEUP | NOCLOCK |
+  RQ_SELECTED (= SCX_ENQ_CPU_SELECTED: select_cpu ran, found no idle CPU);
+  `0x9` = wakeup of a task pinned to one CPU (kernel skips select_cpu, e.g.
+  per-CPU kworkers); `0x80008` = INITIAL | NOCLOCK (newly forked task); `0x0` =
+  still-runnable task re-enqueued after using up its slice.
+- Stopping the scheduler from scripts: send SIGINT to the loader itself
+  (`sudo pkill -INT -x scx_kairos`); that exits 0 and prints
+  `EXIT: unregistered from user space`. Don't wrap it in `sudo timeout -s INT`:
+  the scheduler still unregisters cleanly, but the loader is then killed by
+  SIGKILL (exit 137) before printing its exit reason. `sudo` here is sudo-rs
+  0.2.13.
 
 ---
 
@@ -339,6 +396,11 @@ Expected explanations to test, not yet confirmed:
 - Can wakers be identified reliably, including interrupt-driven wakeups?
 - Does ramping slices during a switch reduce transition spikes vs a hard switch?
 - Does ML beat persistence for any pattern besides periodic?
+- (Check once the scheduler is implemented, E7.) How long does the idle-CPU
+  search in `select_cpu` take per call (`kernel.bpf_stats_enabled=1`,
+  `bpftool prog show`: run_time_ns / run_cnt)? Does skipping it when load is
+  known to be high save anything measurable, or is the shared DSQ's lock the
+  bigger cost at high load?
 
 ---
 
@@ -469,3 +531,120 @@ architecture, components, deliverables) so Claude Code sessions have the full
 plan; CLAUDE.md now points to it.
 **Next:** First Claude Code session (phase 2: scx_kairos skeleton with
 bpf_printk, build, screenshot); proposal due Fri Oct 30.
+
+### 2026-10-28 — Phase 2: scx_kairos skeleton builds
+**Did:** Copied `scx_simple.bpf.c` / `scx_simple.c` from `~/linux-src`
+(v7.0) to `scheduler/scx_kairos.bpf.c` / `scheduler/scx_kairos.c`. Renamed
+`simple_*` → `kairos_*`, ops name `"kairos"`, skeleton `scx_kairos`; policy
+unchanged. Added `bpf_printk("kairos enqueue: pid=%d comm=%s enq_flags=0x%llx")`
+at the top of `kairos_enqueue`. Added `scheduler/Makefile` and
+`scheduler/.gitignore` (`build/`, `scx_kairos`). Not committed yet (working
+tree on top of 18a2b7f).
+**Found:** `make -C scheduler` builds with no warnings (clang 21.1.8, gcc
+15.2.0); a second `make` does nothing. `./scheduler/scx_kairos -h` prints the
+help (no load). Disassembly of `kairos_enqueue` shows the printk as `call 6`
+(bpf_trace_printk) with `p->pid` at offset 0x770 and `p->comm` at 0x990.
+The scheduler was **not loaded**, so the verifier has not checked it yet.
+**Interpretation:** Build-only result. The verifier runs at load time
+(`SCX_OPS_LOAD`), so verifier problems, if any, will show up on the first
+`sudo ./scheduler/scx_kairos`. Guess: it passes, because scx_qmap passes
+`p->comm` and `p->pid` to bpf_printk the same way.
+**Decisions:** Changes the 2026-10-27 decision to build inside
+`~/linux-src/tools/sched_ext`: we build in the repo with our own Makefile,
+which reuses the upstream build outputs. Reason: the upstream rules compile
+`$(sched).c` from their own directory, so using them directly would mean
+copying our sources into the kernel tree.
+**Problems:** None in the build.
+**Next:** Load scx_kairos, capture `trace_pipe` output (screenshot for the
+progress report), check `/sys/kernel/sched_ext/root/ops` = `kairos`, unload;
+then remove or gate the printk before phase 4 measurements.
+
+### 2026-10-28 — How the scx_simple policy works (code walkthrough)
+**Did:** Walked through the policy in `scheduler/scx_kairos.bpf.c` and checked
+the kernel side in `~/linux-src/kernel/sched/ext.c` (slice accounting, slice
+expiry, keep-running path). No code changes.
+**Found:** (from reading code, not measured) The policy has no wakeup
+preemption: a woken task with no idle CPU waits in the vtime-ordered shared
+queue until some CPU's task blocks or uses up its 20 ms slice. vtime only
+matters when there is a queue. Details in section 4 (slice mechanics).
+**Interpretation:** scx_simple is close to our planned "never preempt" static
+mode with a 20 ms slice. The worst-case wait for a woken latency-critical task
+is about one slice, which is the delay KairOS's LATENCY mode is meant to remove.
+Guess until E1 measures it.
+**Decisions:** Per-task runtime for the Feature B budget will come from
+timestamps, not from the remaining slice.
+**Problems:** VS Code IntelliSense can't find `scx/common.h` (it doesn't know
+the Makefile's include paths); the build itself is fine.
+**Next:** As in the previous entry: load, screenshot trace_pipe, unload.
+
+### 2026-10-28 — Cost of the idle-CPU search in select_cpu
+**Did:** Read `scx_select_cpu_dfl` and `select_task_rq_scx` (v7.0) to answer
+whether the idle-CPU search is wasted work under high load. Removed the course
+reference from the `scx_kairos.bpf.c` header comment.
+**Found:** (from reading code, not measured) The search reads a kernel-kept
+bitmask of idle CPUs; on this VM it is a few bit operations, and it fails
+fastest exactly when all CPUs are busy. See section 4.
+**Interpretation:** Under high load the search is likely a negligible part of
+a wakeup (guess until measured). Removing it would not save work, because idle
+CPUs must be found and woken somehow; it would only move the search into
+enqueue and add an IPI and a trip through the shared queue.
+**Decisions:** Keep the idle fast path. Measure per-callback cost in E7.
+**Next:** Unchanged: load, screenshot trace_pipe, unload.
+
+### 2026-10-28 — scx_kairos loads; enqueue printk visible
+**Did:** Recorded the idle-search checks as an open question (section 9, for
+E7). Loaded scx_kairos four times for a few seconds each (smoke tests; logs
+kept only in the session scratchpad, nothing under `results/`). Code still
+uncommitted (on top of 18a2b7f).
+**Found:**
+- The verifier accepted the program: `/sys/kernel/sched_ext/state` = enabled,
+  `/sys/kernel/sched_ext/root/ops` = `kairos`; dmesg: `BPF scheduler "kairos"
+  enabled` / `disabled (unregistered from user space)`.
+- `trace_pipe` shows our printk, e.g.
+  `systemd-udevd-499 [002] dN.31 47809.532992: bpf_trace_printk: kairos
+  enqueue: pid=499 comm=systemd-udevd enq_flags=0x0`. Flag values decoded in
+  section 4.
+- Idle VM, loader stats after ~2 s: local=1286 global=78 (run 4); after ~7 s:
+  local=2570 global=351 (run 1, while trace_pipe was being read). First second
+  has more global enqueues (all tasks are enqueued once when the scheduler
+  takes over).
+- Stopping: direct SIGINT → exit 0 + `EXIT: unregistered from user space`.
+  `sudo timeout -s INT` → kernel unregisters cleanly, but the loader dies of
+  SIGKILL (exit 137) within ~1 s, without printing `EXIT:`.
+**Interpretation:** The enqueue flags match the code reading: `0x0` for
+re-enqueue after slice expiry (the trace's `N` = need-resched on the task
+enqueuing itself), and no CPU_SELECTED bit for pinned kworkers. The SIGKILL
+under `timeout` is a sudo-rs/timeout interaction, not a scheduler bug (guess;
+cause not found).
+**Decisions:** Scripts stop the scheduler with `sudo pkill -INT -x scx_kairos`,
+not `sudo timeout`.
+**Problems:** See above (exit 137 under `sudo timeout`).
+**Next:** User takes the phase 2 screenshot (loader + trace_pipe side by
+side); commit; then phase 3 (workloads: gRPC server, open-loop loadgen, zstd,
+harness). Remove or gate the printk before phase 4 measurements.
+
+### 2026-10-28 — Phase 2 complete: manual run, Ctrl-C unload
+**Did:** Ran `sudo ./scheduler/scx_kairos` and
+`sudo cat /sys/kernel/debug/tracing/trace_pipe` in two terminals (callback
+output captured for the progress report) and unloaded with Ctrl-C. Committed
+the phase 2 work (scheduler/ + docs) on branch `phase2-skeleton`, in the same
+commit as this entry.
+**Found:**
+- Ctrl-C → `EXIT: unregistered from user space` (clean unload).
+- Loader stats over ~14 s (cumulative): from local=2715 global=201 to
+  local=10251 global=1730. Global grew ~10–70/s, except two seconds: +199
+  (local +1028) and +1056 (local +638).
+- All sampled trace lines had enq_flags=0x100009 (wakeup, no idle CPU found).
+  The enqueued tasks were mostly the observation path itself: `cat` (the
+  trace reader), `sudo`, `kworker/u16:*`, `sshd-session`, the VS Code server
+  (`code-…`, `tokio-runtime-w`) and `node`.
+**Interpretation:** Matches the scx_simple design: idle-CPU fast path most of
+the time, enqueue only when no CPU was idle. The trace largely shows its own
+observers: reading and displaying trace_pipe wakes `cat`, `sudo`, (likely) the
+kworkers that push pty output, and `sshd-session`; each wakeup is an enqueue
+and another trace line (the kworker role is a guess). The two spike seconds
+mean all CPUs were briefly busy; the cause is not visible in this output.
+**Decisions:** Phase 2 done. The printk stays until phase 4 starts, then is
+removed or gated (it costs time and its readers add load, as seen here).
+**Next:** Phase 3: gRPC server, open-loop load generator, zstd batch job,
+experiment harness.
