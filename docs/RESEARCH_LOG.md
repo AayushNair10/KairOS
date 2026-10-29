@@ -372,6 +372,40 @@ choices. Add as you go.)
   `analysis/episodes.py` (slow episodes vs GC). `meta.sh`'s `git_dirty`
   now ignores `results/`; N2 and N3 say dirty only because of an untracked
   `analysis/__pycache__/` (now in `.gitignore`).
+- Phase 4 scheduler (bd50425), kernel 7.0 API used: `ops.runnable` /
+  `ops.quiescent` (bracket runnable time; skipped for CPU-to-CPU moves, and
+  also called around attribute changes, so the count stays paired),
+  `BPF_MAP_TYPE_TASK_STORAGE` + `bpf_task_storage_get` (created in
+  `ops.init_task`), `scx_bpf_now()` (rq clock; may differ slightly between
+  CPUs, so negative differences are skipped), `bpf_timer_*` on an array map
+  as in scx_central (started in `ops.init`, re-armed in the callback, not
+  pinned), `scx_bpf_nr_cpu_ids`, `scx_bpf_task_cpu`,
+  `bpf_cpumask_test_cpu(cpu, p->cpus_ptr)`, `is_migration_disabled()`
+  (common.bpf.h). `NR_STATS` clashes with an enum in vmlinux.h, hence
+  `KAIROS_NR_STATS`.
+- Preemption mechanism: insert the woken task with
+  `scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, slice, enq_flags |
+  SCX_ENQ_PREEMPT)`. In 7.0 (`local_dsq_post_enq`) this sets the target
+  CPU's current task's slice to 0 and calls `resched_curr` (IPI), and the
+  woken task is put at the head of that CPU's local queue. The preempted
+  task goes through `stopping(p, true)` and, with slice 0,
+  `ops.enqueue(p, 0)` (`put_prev_task_scx`), so it returns to the shared
+  queue with the time it ran charged. Moving a migration-disabled task to
+  another CPU this way makes the kernel stop the scheduler
+  (`task_can_run_on_remote_rq`), so such tasks may only preempt their own
+  CPU. Not tried yet: `scx_bpf_kick_cpu(SCX_KICK_PREEMPT)` and shrinking
+  the victim's slice without an IPI (lavd).
+- Victim rule (LATENCY mode): among the busy CPUs the woken task may use,
+  the one whose current task has the largest vtime counting its run so far
+  (from per-CPU `running_at`/`vtime`/`weight` written in running/stopping,
+  read without locks), and only if larger than the woken task's queue
+  vtime. With CPU-bound batch present, the victims are mostly batch tasks.
+- Verified 2026-10-29 (manual 5 s loads): verifier accepts it; the BPF
+  runnable count equals the kernel's `procs_running` in every one-second
+  sample (idle: 1–3; with 4 zstd: 5–10); LATENCY mode with 4 zstd made
+  583–4807 preemptions/s, BATCH mode none; unloads cleanly.
+- Load signal normalization uses all 4 CPUs, although the workload runs on
+  CPUs 0–2 and CPU 3 mostly holds the load generator.
 
 ---
 
@@ -385,6 +419,8 @@ together with `meta.json` (git commit, kernel, VM config, parameters).
 | N1 | 2026-10-29 | 3d74753 | eevdf | `noise-batch.conf`: 10s@1000, 10s@3000; 100 µs; 4 zstd; server+batch CPUs 0–2, loadgen CPU 3 | 10 | `results/2026-10-29-noise-batch/` | Noise floor. p99 @3000 median 109 ms, range 77–1146 (section 6) |
 | N2 | 2026-10-29 | 3d74753 | eevdf | `noise-nobatch.conf`: same, no batch | 10 | `results/2026-10-29-noise-nobatch/` | p99 @3000 median 12 ms, range 3.5–617 |
 | N3 | 2026-10-29 | ce5a697 | eevdf | `noise-batch.conf` again, server GC logged | 10 | `results/2026-10-29-noise-batch-164528/` | p99 @3000 median 38 ms, range 11–1238; episodes not explained by GC |
+| E1p | 2026-10-29 | bd50425 + uncommitted config | eevdf, never, always | `e1-pilot.conf`: 8 s each at 500/1000/2000/3000/4000 req/s; 500 µs work; 4 zstd | 1 | `results/2026-10-29-e1-pilot/` | Pilot. EEVDF run invalid (memory pressure from the VS Code C/C++ extension: kswapd 35%, kcompactd 20% CPU; calibration 868 instead of ~1000) |
+| E1 | 2026-10-29 | 5ec281d | eevdf, never (20 ms slice), never3 (3 ms slice), always (3 ms) | `e1.conf`: as the pilot | 10 | `results/2026-10-29-e1/` | No latency crossover over 500–3000 req/s: always has the lowest p50 everywhere; p99 always ≈ never3; never (long slices) gives more batch throughput at 2000–3000 req/s (section 6.2) |
 
 ### 5.1 Planned experiments
 | # | Experiment | Pattern | Shows |
@@ -451,6 +487,47 @@ windows overlap a GC cycle. Of the 30 episodes in N3, several overlap no GC
 usual 2–7 ms. Only the largest episode (r8, 3.5 s, latency up to 2 s) has
 long GC cycles (up to 98 ms).
 
+### 6.2 E1: steady-load sweep (2026-10-29)
+`results/2026-10-29-e1/`, commit 5ec281d, all 40 runs clean. 4 zstd jobs and
+the server on CPUs 0–2, load generator on CPU 3; 16 workers, 500 µs work
+per request (calibration 994 iterations/µs); 8 s per rate, rising. Configs:
+EEVDF; never = `--never-preempt` (20 ms slice); never3 = `--never-preempt
+--batch-slice-us=3000`; always = `--force-preempt` (3 ms slice). Medians over
+10 reps [range in `analysis/compare.py` output]; failed requests (5 s
+timeouts) count as infinitely slow ("inf"). Load = scheduler's slow EWMA of
+runnable tasks per CPU (4 CPUs).
+
+| req/s | metric | eevdf | never | never3 | always |
+|---|---|---|---|---|---|
+| 500 | p50 / p99 ms | 2.3 / 55 | 5.1 / 81 | 2.2 / 48 | 1.2 / 23 |
+| | batch MB/s | 483 | 525 | 473 | 458 |
+| | load, preempt/s | – | 2.31, 0 | 2.15, 0 | 1.48, 17.0k |
+| 1000 | p50 / p99 ms | 2.9 / 290 | 6.4 / 297 | 2.1 / 31 | 1.1 / 49 |
+| | batch MB/s | 389 | 422 | 437 | 423 |
+| | load, preempt/s | – | 2.51, 0 | 2.27, 0 | 1.75, 23.9k |
+| 2000 | p50 / p99 ms | 1367 / 3895 | 7.0 / 215 | 2.6 / 97 | 1.2 / 163 |
+| | batch MB/s | 312 | 338 | 283 | 262 |
+| | load, preempt/s | – | 2.41, 0 | 2.33, 0 | 2.10, 26.6k |
+| 3000 | p50 / p99 ms | inf / inf | 12.2 / 2249 | 4.3 / 444 | 1.9 / 226 |
+| | batch MB/s | 268 | 218 | 174 | 196 |
+| | load, preempt/s | – | 2.34, 0 | 2.30, 0 | 2.17, 23.4k |
+| 4000 | p50 / p99 ms | inf / inf | 2766 / inf | 1833 / inf | 1357 / 3924 |
+
+Paired counts (same repetition; configurations interleaved), at 500 /
+1000 / 2000 / 3000 req/s:
+- p50 lower for always than never3: 9, 9, 10, 8 of 10; than never: 9, 10,
+  10, 8; than EEVDF: 9, 9, 10, 10.
+- p99 lower for always than never3: 6, 6, 5, 6 of 10 (no difference); than
+  never: 8, 7, 6, 6.
+- Batch MB/s higher for never than always: 6, 6, 9, 7 of 10; never than
+  never3: 5, 5, 8, 8.
+- EEVDF fails at ≥ 2000 req/s: p50 1.4 s at 2000, every run has failed
+  requests from 3000 on (median 21.6k failed at 3000); the scx_kairos modes
+  sustain 3000.
+Whole run (median): context switches 49.5k/s always, 16.4k never, 18.9k
+never3, 27.4k EEVDF. Other processes used 23–26% of one CPU per run
+(median; up to 94% in one never3 run).
+
 ---
 
 ## 7. Explanations and insights
@@ -479,6 +556,36 @@ Noise floor (N1–N3):
   (p99 @3000 req/s: 109 ms in N1, 38 ms in N3, an hour apart). So compare
   configurations only within one batch, interleaved (run.sh alternates the
   order), never across batches.
+
+E1 (section 6.2):
+- No latency crossover in the tested range (load 1.5–2.6 runnable per CPU,
+  service using 0.25–1.5 of 3 CPUs): always-preempt never had worse latency
+  than never-preempt. The hypothesis predicted that never-preempt would win
+  at high load; here it only wins on batch throughput, and only with its
+  long slice (never vs always at 2000 req/s: 338 vs 262 MB/s, 9/10 reps).
+- The median gain is from preemption itself: always vs never3 have the same
+  slice, and always's p50 is 1.1–1.9 ms vs 2.1–4.3 ms. Guess: without
+  preemption a woken worker waits for a zstd slice to end, up to 3 ms, at
+  each of several wakeups per request (handler, worker, reply).
+- The tail gain over never is mostly from the shorter slice: p99 of always
+  and never3 don't differ (5–6 of 10), while never (20 ms) is worse. Guess:
+  tails are set by the episodes of section 6.1 and by queueing that
+  preemption does not remove.
+- Why no crossover (guess): the victim rule only preempts a task ahead in
+  vtime, which is almost always a zstd job, so latency tasks rarely preempt
+  each other in this range; the costs the hypothesis names (preempting
+  latency work, broken batching of the service) would need the CPUs full of
+  service threads. At 4000 req/s every config is overloaded.
+- The measured load depends on the mode: at the same offered load, always
+  reads lower (1.48 at 500 req/s) than never (2.31), since requests finish
+  sooner and fewer tasks are queued. An adaptive switch on this signal sees
+  load drop when it enters LATENCY mode, which hysteresis has to allow for.
+- EEVDF collapses at 2000 req/s while all scx_kairos modes cope with 3000.
+  Unexplained. Guess: the server has GOMAXPROCS=3 and 16 locked worker
+  threads; a thread descheduled while holding one of Go's 3 Ps blocks Go
+  work until it runs again, and EEVDF's placement of woken threads behind
+  zstd makes that more likely than our 20 ms sleeper credit. Check with
+  E2's EEVDF baseline and `perf sched`/runqlat before claiming it.
 
 ---
 
@@ -513,6 +620,12 @@ Noise floor (N1–N3):
 
 ## 9. Open questions
 - Exact LOW/HIGH crossover on this VM? (E1)
+  → E1 (2026-10-29) found no latency crossover between 500 and 3000 req/s
+  with 4 zstd jobs. Open: does one appear (a) at lower load (0–2 batch
+  jobs), (b) when the CPUs are full of latency-sensitive threads (no batch,
+  more workers or shorter requests), or (c) only as a trade-off, i.e.
+  never-preempt's batch gain while p99 stays under a target?
+- Why does EEVDF collapse at 2000 req/s in E1 while our modes don't?
 - Which preemption mechanism is most reliable?
 - Can wakers be identified reliably, including interrupt-driven wakeups?
 - Does ramping slices during a switch reduce transition spikes vs a hard switch?
@@ -858,3 +971,30 @@ valid evidence at this noise level; N3 is the evidence.
 positive; ignored from cf7d8bc). The root cause of episodes is not found.
 **Next:** Phase 4: gate the printk, timestamps and wait time, runnable count,
 wakeup rate, BPF timer + EWMAs, forced modes, victim preemption; then E1.
+
+### 2026-10-29 — Phase 4: load signal, forced modes, victim preemption; E1
+**Did:** On branch `phase4-load-signal`: scx_kairos with runnable count,
+wakeup count, wait time, 1 ms BPF timer with EWMAs, `--never-preempt` /
+`--force-preempt` with victim preemption (SCX_ENQ_PREEMPT), timestamp-based
+vtime charging, printk gated behind `--trace`, loader stats CSV (bd50425).
+Harness: labeled scheduler entries, `sched_stats.csv`. Analysis:
+`compare.py`, percentiles that count failed requests. Ran the E1 pilot and
+E1 (4 configs × 10 reps, 5ec281d).
+**Found:** Section 4 (mechanism, verification: BPF runnable count = kernel
+`procs_running`), section 6.2 (E1). always-preempt had the lowest p50 at
+every rate (8–10 of 10 reps); p99 always ≈ never3; never (20 ms slices) had
+more batch throughput at 2000 req/s (9/10). EEVDF failed from 2000 req/s.
+**Interpretation:** No latency crossover in this range; the trade-off is
+latency vs batch throughput, and slice length explains most of the tail
+difference. The victim rule probably keeps latency tasks from preempting
+each other (guess). Measured load depends on the mode.
+**Decisions:** Victim = busy CPU with the largest vtime, only if ahead of
+the woken task. LATENCY slice 3 ms, BATCH 20 ms (tunable). Phase 4's
+done-criterion ("E1 shows the crossover") is not met as stated; how to go
+on is open (section 9).
+**Problems:** `NR_STATS` clashed with vmlinux.h. Printf formats for the
+skeleton's u64 (`unsigned long` on arm64). The E1 pilot's EEVDF run hit
+memory pressure from the VS Code C/C++ extension (invalid). Failed requests
+were invisible in loadgen's percentiles (now counted as infinite).
+**Next:** Decide how to look for the crossover (section 9: lower load,
+latency-only contention, or a throughput target), then phase 5.

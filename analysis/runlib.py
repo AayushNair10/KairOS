@@ -128,13 +128,34 @@ def sched_stats(run_dir, start_ns, end_ns):
                                  "global", "no_victim")}
 
 
+def latency_with_failures(run_dir, nphases):
+    """Per phase: (p50, p99, p99.9) in µs from requests.csv, counting failed
+    requests (timeouts, errors) as infinitely slow. loadgen.json's
+    percentiles only cover successful requests, which hides overload."""
+    lat = [[] for _ in range(nphases)]
+    with open(os.path.join(run_dir, "requests.csv")) as f:
+        for r in csv.DictReader(f):
+            v = int(r["latency_ns"]) / 1000 if r["code"] == "0" else float("inf")
+            lat[int(r["phase"])].append(v)
+    out = []
+    for xs in lat:
+        xs.sort()
+        # nearest rank, as in loadgen
+        pick = lambda q: xs[max(0, -(-int(q * 1000) * len(xs) // 1000) - 1)] if xs else float("nan")  # noqa: E731
+        out.append((pick(0.50), pick(0.99), pick(0.999)))
+    return out
+
+
 def phase_rows(run_dir):
-    """One dict per loadgen phase, with that phase's batch throughput and
-    (for scx_kairos runs) mean scheduler stats ("sched") added."""
+    """One dict per loadgen phase, with that phase's batch throughput,
+    percentiles that count failed requests ("all_p50_us", ...) and (for
+    scx_kairos runs) mean scheduler stats ("sched") added."""
     lg = load_summary(run_dir)
+    allp = latency_with_failures(run_dir, len(lg["phases"]))
     rows = []
     for p in lg["phases"]:
         r = dict(p)
+        r["all_p50_us"], r["all_p99_us"], r["all_p999_us"] = allp[p["phase"]]
         r["batch_mb_s"] = batch_mb_per_s(run_dir, p["start_unix_ns"], p["end_unix_ns"])
         r["sched"] = sched_stats(run_dir, p["start_unix_ns"], p["end_unix_ns"])
         rows.append(r)

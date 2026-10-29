@@ -66,12 +66,14 @@ scripts/        helpers (log_entry.sh, meta.sh)
 - Build workloads: `make -C workloads` (`make -C workloads proto` regenerates
   the gRPC code; needs protoc + plugins)
 - Batch input (once): `./workloads/batch/make_input.sh` → `~/kairos-data/zstd-input-64M.tar`
-- Load: `sudo ./scheduler/scx_kairos [--force-preempt|--never-preempt] [--verbose]`
-  (Ctrl-C unloads; the kernel falls back to EEVDF)
+- Load: `sudo ./scheduler/scx_kairos [--force-preempt|--never-preempt] [--stats FILE] [--trace] [--verbose]`
+  (Ctrl-C unloads; the kernel falls back to EEVDF; `--help` lists the tunables)
 - Trace output: `sudo cat /sys/kernel/debug/tracing/trace_pipe`
 - Is it running: `cat /sys/kernel/sched_ext/state` and `cat /sys/kernel/sched_ext/root/ops`
 - Run an experiment: `./experiments/run.sh experiments/configs/<name>.conf`
 - Summarize one run: `./analysis/summarize_run.py results/<date>-<name>/<run>`
+- Compare configurations (per phase, paired counts): `./analysis/compare.py results/<date>-<name>`
+- Spread across reps: `./analysis/aggregate.py results/<date>-<name>`; slow episodes vs GC: `./analysis/episodes.py <run>`
 - New log entry skeleton: `./scripts/log_entry.sh "<title>"`
 
 ## Coding rules
