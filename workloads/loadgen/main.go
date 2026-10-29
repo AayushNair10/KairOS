@@ -180,6 +180,7 @@ func main() {
 	}
 	base := mono.Nano() // start on the CLOCK_MONOTONIC scale, for sleepUntil
 	t0 := time.Now()    // the same instant, for measuring with time.Since
+	cpu0 := cpuTime()
 
 	recs := make([]record, len(offs))
 	var wg sync.WaitGroup
@@ -194,11 +195,14 @@ func main() {
 	}
 	wg.Wait()
 	runtime.UnlockOSThread()
+	cpuS, wallS := cpuTime()-cpu0, time.Since(t0).Seconds()
 
 	if err := writeCSV(*outPath, offs, phaseOf, recs); err != nil {
 		log.Fatal(err)
 	}
 	sum := summarize(phases, offs, phaseOf, recs, t0)
+	sum.Gomaxprocs = runtime.GOMAXPROCS(0)
+	sum.LoadWallS, sum.LoadCPUS = wallS, cpuS
 	printSummary(sum)
 	if *sumPath != "" {
 		b, err := json.MarshalIndent(sum, "", "  ")
@@ -255,6 +259,20 @@ type summary struct {
 	Seed        uint64         `json:"seed"`
 	StartUnixNs int64          `json:"start_unix_ns"`
 	Phases      []phaseSummary `json:"phases"`
+	// The load generator's own CPU use (user + system) while sending and
+	// waiting for replies, to check that it isn't short of CPU.
+	Gomaxprocs int     `json:"gomaxprocs"`
+	LoadWallS  float64 `json:"load_wall_s"`
+	LoadCPUS   float64 `json:"load_cpu_s"`
+}
+
+// cpuTime returns this process's user + system CPU time so far, in seconds.
+func cpuTime() float64 {
+	var ru unix.Rusage
+	if err := unix.Getrusage(unix.RUSAGE_SELF, &ru); err != nil {
+		log.Fatal(err)
+	}
+	return float64(ru.Utime.Nano()+ru.Stime.Nano()) / 1e9
 }
 
 // pct returns the q-quantile (0 < q <= 1) of sorted, by nearest rank.
@@ -316,4 +334,6 @@ func printSummary(sum summary) {
 			p.Phase, p.DurationS, p.TargetRPS, p.OkRPS, p.Errors,
 			p.LatP50Us, p.LatP99Us, p.LatP999Us, p.LatMaxUs, p.SendLagP99Us)
 	}
+	fmt.Fprintf(os.Stderr, "loadgen: %.2f s CPU in %.1f s (%.0f%% of one CPU), GOMAXPROCS=%d\n",
+		sum.LoadCPUS, sum.LoadWallS, 100*sum.LoadCPUS/sum.LoadWallS, sum.Gomaxprocs)
 }

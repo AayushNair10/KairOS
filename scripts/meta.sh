@@ -11,11 +11,12 @@ mkdir -p "$OUT_DIR"
 
 json_escape() { printf '%s' "$1" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))'; }
 
+# git_dirty ignores results/: new raw data there is untracked but changes no code.
 cat > "$OUT_DIR/meta.json" <<EOF
 {
   "timestamp": "$(date -Iseconds)",
   "git_commit": "$(git rev-parse HEAD 2>/dev/null || echo unknown)",
-  "git_dirty": $( [ -n "$(git status --porcelain 2>/dev/null)" ] && echo true || echo false ),
+  "git_dirty": $( [ -n "$(git status --porcelain -- . ':!results' 2>/dev/null)" ] && echo true || echo false ),
   "kernel": "$(uname -r)",
   "nr_cpus": $(nproc),
   "mem_total_kb": $(awk '/MemTotal/ {print $2}' /proc/meminfo),

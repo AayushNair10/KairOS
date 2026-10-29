@@ -15,6 +15,14 @@
 #   server.log           grpcserver output
 #   sched.log            scheduler loader output (sched_ext schedulers only)
 #   proc_stat_before/after  /proc/stat around the load (CPU time, ctx switches)
+#   procs_before/after   every process's /proc/<pid>/stat around the load, to
+#                        see what else used CPU (e.g. the VS Code server)
+#
+# CPU pinning: the server and batch jobs run on SUT_CPUS and the load
+# generator on LOADGEN_CPUS (default 0-2 and 3), so the load generator doesn't
+# compete with the work it measures. It is still scheduled by the scheduler
+# under test, but only against its own threads and stray system tasks. Set
+# either to empty for no pinning.
 #
 # Scheduler names: "eevdf" (no sched_ext scheduler loaded: the kernel's
 # default) or "kairos" / "kairos:<loader options>" (our scheduler).
@@ -41,8 +49,20 @@ BATCH_JOBS=${BATCH_JOBS:-4}
 BATCH_INPUT=${BATCH_INPUT:-$HOME/kairos-data/zstd-input-64M.tar}
 ZSTD_LEVEL=${ZSTD_LEVEL:-3}
 BATCH_WARMUP_S=${BATCH_WARMUP_S:-2}
+SUT_CPUS=${SUT_CPUS-0-2} # no colon: an explicitly empty value means unpinned
+LOADGEN_CPUS=${LOADGEN_CPUS-3}
+# Go would set GOMAXPROCS=1 on one CPU; then the sender thread, asleep in
+# clock_nanosleep, holds the only P and replies wait (send lag p99 38 ms vs
+# 4 ms with 4, EEVDF + 4 zstd, 2026-10-29).
+LOADGEN_GOMAXPROCS=${LOADGEN_GOMAXPROCS:-4}
 
 BIN=$ROOT/workloads/bin
+# Command prefixes for pinning. taskset execs the command, so $! after
+# `"${SUT_PIN[@]}" cmd &` is still cmd's PID.
+SUT_PIN=()
+[ -n "$SUT_CPUS" ] && SUT_PIN=(taskset -c "$SUT_CPUS")
+LOADGEN_PIN=()
+[ -n "$LOADGEN_CPUS" ] && LOADGEN_PIN=(taskset -c "$LOADGEN_CPUS")
 STATE=/sys/kernel/sched_ext/state
 SCHED_PID=
 SERVER_PID=
@@ -119,7 +139,8 @@ stop_sched() {
 # start_batch <run-dir>: BATCH_JOBS copies of the zstd loop, one CSV each.
 start_batch() {
 	for ((i = 0; i < BATCH_JOBS; i++)); do
-		"$ROOT/workloads/batch/zstd_loop.sh" "$BATCH_INPUT" "$1/batch_$i.csv" "$ZSTD_LEVEL" &
+		"${SUT_PIN[@]}" "$ROOT/workloads/batch/zstd_loop.sh" "$BATCH_INPUT" \
+			"$1/batch_$i.csv" "$ZSTD_LEVEL" &
 		BATCH_PIDS+=($!)
 	done
 }
@@ -141,6 +162,13 @@ cleanup() {
 trap cleanup EXIT
 trap 'log "interrupted"; exit 130' INT TERM
 
+# snapshot <run-dir> <before|after>: system-wide and per-process CPU time.
+# (Processes can exit while cat reads /proc, hence the || true.)
+snapshot() {
+	cp /proc/stat "$1/proc_stat_$2"
+	cat /proc/[0-9]*/stat > "$1/procs_$2" 2> /dev/null || true
+}
+
 # run_one <scheduler> <rep>
 run_one() {
 	local sched=$1 rep=$2
@@ -151,17 +179,17 @@ run_one() {
 	start_sched "$sched" "$dir"
 	"$ROOT/scripts/meta.sh" "$dir" "$sched" "$WORKLOAD" > /dev/null
 
-	"$BIN/grpcserver" -addr "$ADDR" -workers "$WORKERS" -work-us "$WORK_US" \
+	"${SUT_PIN[@]}" "$BIN/grpcserver" -addr "$ADDR" -workers "$WORKERS" -work-us "$WORK_US" \
 		-iters-per-us "$ITERS_PER_US" > "$dir/server.log" 2>&1 &
 	SERVER_PID=$!
 	start_batch "$dir"
 	sleep "$BATCH_WARMUP_S" # let the batch jobs reach a steady state
 
-	cp /proc/stat "$dir/proc_stat_before"
-	"$BIN/loadgen" -addr "$ADDR" -phases "$PHASES" -work-us "$WORK_US" \
-		-conns "$CONNS" -seed "$SEED" -out "$dir/requests.csv" \
-		-summary "$dir/loadgen.json" 2> "$dir/loadgen.log"
-	cp /proc/stat "$dir/proc_stat_after"
+	snapshot "$dir" before
+	GOMAXPROCS=$LOADGEN_GOMAXPROCS "${LOADGEN_PIN[@]}" "$BIN/loadgen" -addr "$ADDR" \
+		-phases "$PHASES" -work-us "$WORK_US" -conns "$CONNS" -seed "$SEED" \
+		-out "$dir/requests.csv" -summary "$dir/loadgen.json" 2> "$dir/loadgen.log"
+	snapshot "$dir" after
 
 	stop_batch
 	stop_pid "$SERVER_PID"
@@ -185,12 +213,14 @@ fi
 # Same work per request in every run of this batch: calibrate once, now,
 # while nothing else is running.
 if [ -z "$ITERS_PER_US" ]; then
-	ITERS_PER_US=$("$BIN/grpcserver" -calibrate)
+	ITERS_PER_US=$("${SUT_PIN[@]}" "$BIN/grpcserver" -calibrate)
 fi
 WORKLOAD="workers=$WORKERS work_us=$WORK_US iters_per_us=$ITERS_PER_US phases=$PHASES"
 WORKLOAD+=" conns=$CONNS seed=$SEED batch_jobs=$BATCH_JOBS"
 WORKLOAD+=" batch_input=$(basename "$BATCH_INPUT") zstd_level=$ZSTD_LEVEL"
 WORKLOAD+=" batch_warmup_s=$BATCH_WARMUP_S"
+WORKLOAD+=" sut_cpus=${SUT_CPUS:-all} loadgen_cpus=${LOADGEN_CPUS:-all}"
+WORKLOAD+=" loadgen_gomaxprocs=$LOADGEN_GOMAXPROCS"
 
 OUT=$ROOT/results/$(date +%F)-$NAME
 [ -e "$OUT" ] && OUT=$OUT-$(date +%H%M%S) # never overwrite earlier raw data
