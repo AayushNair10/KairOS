@@ -24,8 +24,13 @@
 # under test, but only against its own threads and stray system tasks. Set
 # either to empty for no pinning.
 #
-# Scheduler names: "eevdf" (no sched_ext scheduler loaded: the kernel's
-# default) or "kairos" / "kairos:<loader options>" (our scheduler).
+# SCHEDULERS is a space-separated list of entries "[label=]scheduler":
+#   eevdf                    no sched_ext scheduler loaded (the kernel's default)
+#   kairos[:opt1,opt2,...]   our scheduler with these loader options
+# e.g. "eevdf never=kairos:--never-preempt always=kairos:--force-preempt".
+# The label names the run directory (<label>-r<rep>); without one, the
+# scheduler string is used with ':' and ',' replaced by '_'. For kairos runs
+# the loader's per-second stats go to sched_stats.csv.
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -113,8 +118,10 @@ start_sched() {
 	kairos | kairos:*)
 		local opts=${1#kairos}
 		opts=${opts#:}
+		opts=${opts//,/ }
 		# $opts is unquoted on purpose: it may hold several options.
-		sudo "$ROOT/scheduler/scx_kairos" $opts > "$2/sched.log" 2>&1 &
+		sudo "$ROOT/scheduler/scx_kairos" $opts --stats "$2/sched_stats.csv" \
+			> "$2/sched.log" 2>&1 &
 		SCHED_PID=$!
 		if ! wait_state enabled || [ "$(cat /sys/kernel/sched_ext/root/ops)" != kairos ]; then
 			log "scx_kairos did not load; see $2/sched.log"
@@ -172,15 +179,23 @@ snapshot() {
 	cat /proc/[0-9]*/stat > "$1/procs_$2" 2> /dev/null || true
 }
 
-# run_one <scheduler> <rep>
+# run_one <[label=]scheduler> <rep>
 run_one() {
-	local sched=$1 rep=$2
-	local dir=$OUT/${sched//:/_}-r$rep
+	local entry=$1 rep=$2 sched=$1 label
+	# "label=..." only if the part before the first '=' has no ':' (so an
+	# option like kairos:--lat-slice-us=1000 is not mistaken for a label).
+	if [[ $entry == *=* && ${entry%%=*} != *:* ]]; then
+		label=${entry%%=*}
+		sched=${entry#*=}
+	else
+		label=${sched//[:,]/_}
+	fi
+	local dir=$OUT/$label-r$rep
 	mkdir -p "$dir"
 	log "run: $sched, rep $rep -> ${dir#"$ROOT"/}"
 
 	start_sched "$sched" "$dir"
-	"$ROOT/scripts/meta.sh" "$dir" "$sched" "$WORKLOAD" > /dev/null
+	"$ROOT/scripts/meta.sh" "$dir" "$entry" "$WORKLOAD" > /dev/null
 
 	GODEBUG=$SERVER_GODEBUG "${SUT_PIN[@]}" "$BIN/grpcserver" -addr "$ADDR" -workers "$WORKERS" -work-us "$WORK_US" \
 		-iters-per-us "$ITERS_PER_US" > "$dir/server.log" 2>&1 &

@@ -52,7 +52,7 @@ $(OUT):
 	mkdir -p $@
 
 # 1. Compile the BPF policy into a BPF ELF object.
-$(OUT)/scx_kairos.bpf.o: scx_kairos.bpf.c $(VMLINUX_H) $(SCX_HDRS) | $(OUT)
+$(OUT)/scx_kairos.bpf.o: scx_kairos.bpf.c scx_kairos.h $(VMLINUX_H) $(SCX_HDRS) | $(OUT)
 	$(CLANG) $(BPF_CFLAGS) -c $< -o $@
 
 # 2. Pass it through libbpf's static linker (upstream links three times and
@@ -64,7 +64,7 @@ $(OUT)/scx_kairos.bpf.skel.h: $(OUT)/scx_kairos.bpf.o $(BPFTOOL)
 	$(BPFTOOL) gen skeleton $(OUT)/scx_kairos.bpf.linked.o name scx_kairos > $@
 
 # 3. Compile the user-space loader and link it with the static libbpf.
-scx_kairos: scx_kairos.c $(OUT)/scx_kairos.bpf.skel.h $(SCX_HDRS) $(LIBBPF)
+scx_kairos: scx_kairos.c scx_kairos.h $(OUT)/scx_kairos.bpf.skel.h $(SCX_HDRS) $(LIBBPF)
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $< $(LIBBPF) $(LDLIBS)
 
 # These come from the upstream build; fail with a hint if they are missing.
