@@ -1,0 +1,25 @@
+// The latency-critical service used in the experiments: each request asks a
+// server worker thread to do a fixed amount of CPU work and then replies.
+// Regenerate the Go code with `make -C workloads proto`.
+syntax = "proto3";
+
+package kairos;
+
+option go_package = "github.com/AayushNair10/KairOS/workloads/kairospb";
+
+service Work {
+  rpc Do(WorkRequest) returns (WorkReply);
+}
+
+message WorkRequest {
+  uint64 id = 1;       // request id chosen by the load generator
+  uint32 work_us = 2;  // CPU work to do, in calibrated microseconds; 0 = server default
+}
+
+// Timings measured inside the server, so client latency can be split into
+// "waiting for a worker to start" and "doing the work".
+message WorkReply {
+  uint64 id = 1;
+  uint64 queue_ns = 2;    // handler received the request -> a worker started it
+  uint64 service_ns = 3;  // worker started -> worker finished (wall clock)
+}

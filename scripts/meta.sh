@@ -20,6 +20,7 @@ cat > "$OUT_DIR/meta.json" <<EOF
   "nr_cpus": $(nproc),
   "mem_total_kb": $(awk '/MemTotal/ {print $2}' /proc/meminfo),
   "sched_ext_state": "$(cat /sys/kernel/sched_ext/state 2>/dev/null || echo unavailable)",
+  "sched_ext_ops": "$(cat /sys/kernel/sched_ext/root/ops 2>/dev/null || echo none)",
   "scheduler_options": $(json_escape "$SCHED_OPTS"),
   "workload": $(json_escape "$WORKLOAD")
 }

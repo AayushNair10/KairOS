@@ -321,6 +321,39 @@ choices. Add as you go.)
   the scheduler still unregisters cleanly, but the loader is then killed by
   SIGKILL (exit 137) before printing its exit reason. `sudo` here is sudo-rs
   0.2.13.
+- Workloads (2026-10-29): Go 1.26.8, grpc-go v1.85.0, protobuf-go v1.36.12;
+  protoc 3.21.12 (apt), protoc-gen-go v1.36.12, protoc-gen-go-grpc v1.6.2.
+  Generated code in `workloads/kairospb/` is committed; `make -C workloads`
+  builds `bin/grpcserver` and `bin/loadgen`, `make -C workloads proto`
+  regenerates.
+- grpcserver: a handler puts each request on a job channel; N worker
+  goroutines, each `LockOSThread`ed, so handing over a request wakes a
+  particular kernel thread (thread-pool server). GOMAXPROCS stays at Go's
+  default (4). With GOMAXPROCS=20, Go's GC ran mark workers on idle Ps, i.e.
+  many more GC threads than CPUs: p99 at 2000 req/s was 76 ms, vs 3.4 ms with
+  GOGC=off and 0.9 ms with GOMAXPROCS=4 (idle VM, no batch, one 6 s trial
+  each; raw output not kept). Work = dependent multiply-add loop, calibrated
+  at ~970–1030 iterations/µs (idle). The reply carries the server's
+  queue_ns (handler → worker start) and service_ns (worker start → end).
+- loadgen: open loop; the arrival schedule is computed up front from a seed
+  (Poisson within each phase, next gap drawn fresh at a phase boundary). The
+  sender runs on a locked OS thread using `clock_nanosleep(TIMER_ABSTIME)`
+  with `PR_SET_TIMERSLACK` = 1 ns. Measured on the idle VM (2000 sleeps
+  each): `time.Sleep(100µs)` p50 1.2 ms late (p99 1.6 ms); clock_nanosleep
+  100 µs p50 60 µs late (p99 74 µs), 2 ms p50 0.5 ms late (guess: waking an
+  idle vCPU is slow on the host). Latency = reply − intended send time; the
+  actual send time is recorded too.
+- Batch: `zstd -q -T1 -3` in a loop over the first 64 MB of `git archive` of
+  `~/linux-src` (028ef9c96, v7.0): ratio 4.5×, ~238 MB/s per job when alone.
+  zstd runs in the background and the loop `wait`s, so a TERM trap can kill
+  it. (Stopping via `setsid` + process-group kill failed: setsid forks when
+  started from a shell with job control, and the loop kept running.)
+- Harness: `experiments/run.sh <conf>`. Per run: start the scheduler
+  ("eevdf" = none), write meta.json, start server and batch jobs, warm up,
+  run loadgen, stop everything, print `analysis/summarize_run.py` (per-phase
+  latency and batch MB/s, each zstd pass prorated by its overlap with the
+  phase). Work per request is calibrated once per batch, before the first
+  run. `scripts/meta.sh` now also records `sched_ext_ops`.
 
 ---
 
@@ -330,7 +363,7 @@ together with `meta.json` (git commit, kernel, VM config, parameters).
 
 | ID | Date | Commit | Config(s) | Workload / pattern | Reps | Data path | Status / one-line result |
 |---|---|---|---|---|---|---|---|
-| | | | | | | | |
+| S1 | 2026-10-29 | 4edc764 + uncommitted phase 3 code | eevdf, kairos (scx_simple policy + enqueue printk) | `smoke.conf`: 5s@500, 10s@3000, 5s@500 req/s; 100 µs work; 4 zstd jobs | 1 | `results/2026-10-29-smoke/` | Harness works (latency + throughput logs). Smoke test, not a measurement |
 
 ### 5.1 Planned experiments
 | # | Experiment | Pattern | Shows |
@@ -387,6 +420,19 @@ Expected explanations to test, not yet confirmed:
 - Synthetic service (gRPC CPU loop) may not reflect real request costs; mitigated
   with Redis runs.
 - Trace replay is time-compressed and rate-scaled.
+- VM noise (measured 2026-10-29; quick checks, raw output not kept): a thread
+  pinned to each vCPU that only reads the clock lost 2–5% of 10 s to gaps
+  > 100 µs (largest gap 6–27 ms). Most of that was waiting in the guest's run
+  queue (other guest tasks such as the VS Code server and Claude Code, ~3% of
+  a CPU); 55–81 ms per 10 s per vCPU is not explained by the guest (likely
+  the host not running the vCPU; the hypervisor reports no steal time).
+- Waking an idle vCPU is slow: on the idle VM, median request latency was
+  ~2× higher at 500 req/s than at 2000 req/s (600–770 µs vs 320–350 µs).
+  Low-load latencies include this host effect.
+- The load generator runs in the same VM, so the scheduler under test also
+  schedules it. In the S1 burst, its send lag p99 was 12 ms (EEVDF) and
+  175 ms (scx_kairos): part of the measured latency is the instrument's own
+  delay.
 
 ---
 
@@ -401,6 +447,17 @@ Expected explanations to test, not yet confirmed:
   `bpftool prog show`: run_time_ns / run_cnt)? Does skipping it when load is
   known to be high save anything measurable, or is the shared DSQ's lock the
   bigger cost at high load?
+- (Decide before E1.) How to keep the load generator out of the scheduler's
+  way: its own CPU (taskset; server and batch on the other 3), real-time
+  priority (chrt; needs root), or run it on the Mac host?
+- What is the noise floor? Repeat EEVDF runs (with and without batch) to see
+  the run-to-run spread before comparing schedulers. In S1, EEVDF's
+  per-second p99 ranged 4–295 ms within one run.
+- S1 (one rep, printk on): scx_kairos (scx_simple policy) had half EEVDF's
+  context switches (20.7k/s vs 40.6k/s) but more system time (24.8% vs
+  18.5%) and lower batch throughput in the burst (231 vs 433 MB/s). Printk
+  cost, the shared DSQ's lock, or tasks moving between CPUs? Recheck without
+  the printk.
 
 ---
 
@@ -648,3 +705,53 @@ mean all CPUs were briefly busy; the cause is not visible in this output.
 removed or gated (it costs time and its readers add load, as seen here).
 **Next:** Phase 3: gRPC server, open-loop load generator, zstd batch job,
 experiment harness.
+
+### 2026-10-29 — Phase 3: workloads and harness; smoke run S1
+**Did:** Installed protoc (apt) and the Go protoc plugins. Wrote
+`workloads/` (proto, generated `kairospb/`, `grpcserver`, `loadgen`,
+Makefile, `batch/make_input.sh`, `batch/zstd_loop.sh`),
+`experiments/run.sh`, `experiments/configs/smoke.conf` and
+`analysis/summarize_run.py`; `scripts/meta.sh` now records `sched_ext_ops`.
+Created `~/kairos-data/zstd-input-64M.tar`. Ran S1. Not committed (working
+tree on top of 4edc764).
+**Found:**
+- Quick checks on the idle VM: Go's `time.Sleep` wakes ~1.2 ms late for
+  sub-ms sleeps; `clock_nanosleep` 60 µs late at 100 µs; vCPU hiccups
+  (section 8).
+- Server with GOMAXPROCS=20: GC stalls, p99 76 ms at 2000 req/s;
+  GOMAXPROCS=4: 0.9 ms (section 4).
+- S1, quiet / burst / quiet phases (one rep, printk on):
+  EEVDF p99 66.5 / 144.5 / 12.2 ms, batch 338 / 433 / 690 MB/s;
+  scx_kairos p99 50.4 / 504.3 / 54.8 ms, batch 349 / 231 / 307 MB/s.
+  Context switches 40.6k/s vs 20.7k/s; system time 18.5% vs 24.8%. Send lag
+  p99 in the burst 12 ms vs 175 ms. EEVDF's per-second p99 ranged 4–295 ms
+  within the run. scx_kairos counters: local=21, global=403774 (all CPUs
+  busy, so almost every wakeup went to the shared queue).
+**Interpretation:** The harness works end to end and stops everything
+cleanly. The numbers can't be compared yet: one rep, printk on, large
+variation within a run, and the load generator is itself delayed by the
+scheduler under test. Guess: scx_kairos's burst tail comes from having no
+wakeup preemption and 20 ms slices next to 4 CPU-bound zstd jobs, so a woken
+worker (or the sender) waits for a slice to end.
+**Decisions:** Server: locked worker threads, GOMAXPROCS left at Go's
+default. Loadgen: latency from the intended send time, actual send time
+recorded. Phase 3 done (one run produces latency and throughput logs).
+**Problems:** Stopping the batch loop via `setsid` failed (fixed with trap +
+background zstd + `wait`). `pkill -f zstd_loop.sh` matched and killed the
+shell that ran it (don't use `pkill -f` with a pattern that matches the
+caller). GOMAXPROCS/GC stalls (fixed by keeping Go's default).
+**Next:** Decide how to isolate the load generator; measure the noise floor
+(repeated EEVDF runs); phase 4: remove or gate the printk, then timestamps,
+runnable count, wakeup rate, wait time, BPF timer + EWMAs, forced modes,
+victim preemption.
+
+### 2026-10-29 — Co-author trailer removed; phase 2 commit rewritten
+**Did:** Turned off Claude Code's commit/PR attribution (`attribution` in
+`~/.claude/settings.json`). Rewrote the phase 2 commit's message without the
+`Co-Authored-By` line: 4edc764 is now 210079b, same tree (82e160a), only the
+message differs. `phase2-skeleton` moved with it.
+**Found:** S1's `meta.json` files and its section 5 row record 4edc764; that
+code is identical to 210079b.
+**Problems:** 4edc764 is on GitHub, so `origin/main` still has the old commit
+until main is force-pushed.
+**Next:** Force-push main (`git push --force-with-lease origin main`).
