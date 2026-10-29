@@ -107,12 +107,35 @@ def other_cpu(run_dir):
     return sorted(by_comm.items(), key=lambda kv: -kv[1])
 
 
+def sched_stats(run_dir, start_ns, end_ns):
+    """Means over [start_ns, end_ns) of the scx_kairos loader's per-second
+    stats (sched_stats.csv), or None for runs without them. Each row covers
+    the second before its timestamp; rows ending inside the window count."""
+    path = os.path.join(run_dir, "sched_stats.csv")
+    if not os.path.exists(path):
+        return None
+    rows = []
+    with open(path) as f:
+        for row in csv.DictReader(f):
+            t = float(row["unix_s"]) * 1e9
+            if start_ns + 1e9 <= t <= end_ns:  # the whole second is inside
+                rows.append(row)
+    if not rows:
+        return None
+    mean = lambda k: sum(float(r[k]) for r in rows) / len(rows)  # noqa: E731
+    return {k: mean(k) for k in ("nr_runnable", "fast_load", "slow_load", "wake_rate",
+                                 "wait_avg_us", "wait_max_us", "preempt", "local",
+                                 "global", "no_victim")}
+
+
 def phase_rows(run_dir):
-    """One dict per loadgen phase, with that phase's batch throughput added."""
+    """One dict per loadgen phase, with that phase's batch throughput and
+    (for scx_kairos runs) mean scheduler stats ("sched") added."""
     lg = load_summary(run_dir)
     rows = []
     for p in lg["phases"]:
         r = dict(p)
         r["batch_mb_s"] = batch_mb_per_s(run_dir, p["start_unix_ns"], p["end_unix_ns"])
+        r["sched"] = sched_stats(run_dir, p["start_unix_ns"], p["end_unix_ns"])
         rows.append(r)
     return rows
