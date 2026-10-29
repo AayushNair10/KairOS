@@ -354,6 +354,24 @@ choices. Add as you go.)
   latency and batch MB/s, each zstd pass prorated by its overlap with the
   phase). Work per request is calibrated once per batch, before the first
   run. `scripts/meta.sh` now also records `sched_ext_ops`.
+- CPU pinning (2026-10-29, from N1 on): `run.sh` runs the server and batch
+  jobs on CPUs 0–2 (`SUT_CPUS`) and the load generator on CPU 3
+  (`LOADGEN_CPUS`), via `taskset` (it execs, so `$!` is still the program's
+  PID). The load generator is still scheduled by the scheduler under test,
+  but only against its own threads and stray system tasks. It needs
+  GOMAXPROCS > 1: Go sets 1 on a one-CPU mask, and then the sender thread,
+  asleep in `clock_nanosleep`, holds the only P so replies wait. Single 10 s
+  trials, EEVDF, 4 zstd, 3000 req/s: send lag p99 17 ms unpinned
+  (GOMAXPROCS 4), 38 ms pinned with GOMAXPROCS 1, 4 ms pinned with 4. The
+  loadgen used 26–38% of CPU 3 at 3000 req/s.
+- Each run now also records every process's CPU time around the load
+  (`procs_before/after`), the load generator's own CPU use (loadgen.json),
+  and the server's GC cycles (`GODEBUG=gctrace=1` in server.log, plus the
+  server's start time so they can be placed in time). Tools:
+  `analysis/aggregate.py` (median/range/CV across reps),
+  `analysis/episodes.py` (slow episodes vs GC). `meta.sh`'s `git_dirty`
+  now ignores `results/`; N2 and N3 say dirty only because of an untracked
+  `analysis/__pycache__/` (now in `.gitignore`).
 
 ---
 
@@ -364,6 +382,9 @@ together with `meta.json` (git commit, kernel, VM config, parameters).
 | ID | Date | Commit | Config(s) | Workload / pattern | Reps | Data path | Status / one-line result |
 |---|---|---|---|---|---|---|---|
 | S1 | 2026-10-29 | 4edc764 + uncommitted phase 3 code | eevdf, kairos (scx_simple policy + enqueue printk) | `smoke.conf`: 5s@500, 10s@3000, 5s@500 req/s; 100 µs work; 4 zstd jobs | 1 | `results/2026-10-29-smoke/` | Harness works (latency + throughput logs). Smoke test, not a measurement |
+| N1 | 2026-10-29 | 3d74753 | eevdf | `noise-batch.conf`: 10s@1000, 10s@3000; 100 µs; 4 zstd; server+batch CPUs 0–2, loadgen CPU 3 | 10 | `results/2026-10-29-noise-batch/` | Noise floor. p99 @3000 median 109 ms, range 77–1146 (section 6) |
+| N2 | 2026-10-29 | 3d74753 | eevdf | `noise-nobatch.conf`: same, no batch | 10 | `results/2026-10-29-noise-nobatch/` | p99 @3000 median 12 ms, range 3.5–617 |
+| N3 | 2026-10-29 | ce5a697 | eevdf | `noise-batch.conf` again, server GC logged | 10 | `results/2026-10-29-noise-batch-164528/` | p99 @3000 median 38 ms, range 11–1238; episodes not explained by GC |
 
 ### 5.1 Planned experiments
 | # | Experiment | Pattern | Shows |
@@ -400,6 +421,36 @@ Mode off; identical VM; report mean and spread; oversubscribe CPUs.
 (For each experiment: the figure/table, the numbers, and the data path.
 Keep interpretation in section 7.)
 
+### 6.1 Noise floor (N1–N3, EEVDF, 2026-10-29)
+Median across 10 reps [min–max] and CV (stdev/mean) of the per-run values
+(`analysis/aggregate.py`).
+
+| Run | Phase | p50 ms | p99 ms | p99.9 ms | send lag p99 ms | batch MB/s |
+|---|---|---|---|---|---|---|
+| N1 (4 zstd) | 1000 req/s | 1.00 [0.86–1.34] 16% | 7.8 [5.0–26.6] 65% | 24.9 [9.3–61] 68% | 2.7 [1.1–10.7] | 755 [574–780] 9% |
+| N1 | 3000 req/s | 1.39 [1.22–18.7] 167% | 109 [77–1146] 131% | 178 [117–1525] 119% | 4.9 [2.4–289] | 659 [463–697] 12% |
+| N3 (4 zstd, repeat) | 1000 req/s | 1.13 [0.96–1.30] 11% | 12.9 [5.9–85.5] 110% | 39.1 [10.4–119] 79% | 3.2 [1.7–18.3] | 704 [600–754] 7% |
+| N3 | 3000 req/s | 1.27 [1.00–3.87] 54% | 37.9 [10.6–1238] 213% | 62.0 [24.0–1916] 214% | 3.8 [2.2–119] | 647 [402–689] 14% |
+| N2 (no batch) | 1000 req/s | 0.53 [0.41–0.55] 8% | 9.1 [3.3–66.8] 106% | 66.7 [6.5–382] 123% | 2.9 [1.4–20.5] | — |
+| N2 | 3000 req/s | 0.31 [0.30–0.43] 12% | 11.7 [3.5–617] 207% | 31.1 [6.3–738] 184% | 3.1 [1.6–192] | — |
+
+Other per-run values (median [min–max]): context switches 56.7k/s
+[49.0–59.9] (N1), 66.9k/s [57.1–68.7] (N2); load generator 29% of one CPU
+(N1), 23% (N2); processes outside the experiment 13% [8.5–27] of one CPU (N1),
+16% [8.4–45] (N2), 26% [10.5–38] (N3), mostly `node` (VS Code server) and
+`claude` (~4–6% each), then kworkers.
+
+Slow requests come in episodes. Per run, requests > 50 ms fall in 0–55 of
+the 200 windows of 100 ms (by intended send time); in N1 runs with 4 zstd,
+send lag during most episodes stays at 1–3 ms (the server side is slow, the
+load generator isn't), while in N2 episodes the send lag rises too. N3,
+server GC vs episodes (`analysis/episodes.py`, threshold 50 ms): ~65 GC
+cycles per run during the load, wall time median 2–4 ms; ~33% of all 100 ms
+windows overlap a GC cycle. Of the 30 episodes in N3, several overlap no GC
+(e.g. r2, r6, 4 in r9), and GC cycles inside episodes mostly take their
+usual 2–7 ms. Only the largest episode (r8, 3.5 s, latency up to 2 s) has
+long GC cycles (up to 98 ms).
+
 ---
 
 ## 7. Explanations and insights
@@ -411,6 +462,23 @@ Expected explanations to test, not yet confirmed:
 - Adaptivity helps only when bursts last longer than the scheduler's reaction time.
 - Persistence is a strong burst predictor because bursts persist; ML should help
   mainly for periodic bursts.
+
+Noise floor (N1–N3):
+- Per-run p99 and p99.9 are decided by a few slow episodes (hundreds of ms
+  to seconds), so they vary 3–50× between reps of the same config, while p50
+  and batch throughput vary ~10%. The server's GC is not the main trigger:
+  episodes occur without GC, at about the rate GC overlaps any window, and
+  GC is only long inside the worst episode (guess: GC slowed by the episode,
+  not causing it). Cause still unknown. Candidates: the host not running
+  vCPUs 0–2 (section 8: 55–81 ms per 10 s per vCPU unexplained), bursts of
+  other guest processes (VS Code server, Claude Code), or a backlog that
+  builds after a short stall and drains slowly when 4 zstd jobs share the
+  CPUs. Without batch (N2) the load generator stalls in the same episodes,
+  which points at the whole VM (guess).
+- The medians of 10 reps also moved between batches of the same config
+  (p99 @3000 req/s: 109 ms in N1, 38 ms in N3, an hour apart). So compare
+  configurations only within one batch, interleaved (run.sh alternates the
+  order), never across batches.
 
 ---
 
@@ -432,7 +500,14 @@ Expected explanations to test, not yet confirmed:
 - The load generator runs in the same VM, so the scheduler under test also
   schedules it. In the S1 burst, its send lag p99 was 12 ms (EEVDF) and
   175 ms (scx_kairos): part of the measured latency is the instrument's own
-  delay.
+  delay. From N1 on, the load generator has its own CPU (section 4); its send
+  lag p99 is then 2–5 ms (median over reps) under EEVDF, still not zero.
+- Run-to-run noise (section 6.1): tail percentiles of single runs can't be
+  compared; p99 CV across reps is 65–210%. Comparisons need ≥ 10 reps
+  interleaved in one batch, with medians and ranges reported.
+- Processes outside the experiment used 8–45% of one CPU per run (VS Code
+  server, Claude Code, kworkers). Final runs should be made with the IDE
+  disconnected and Claude Code idle.
 
 ---
 
@@ -450,9 +525,13 @@ Expected explanations to test, not yet confirmed:
 - (Decide before E1.) How to keep the load generator out of the scheduler's
   way: its own CPU (taskset; server and batch on the other 3), real-time
   priority (chrt; needs root), or run it on the Mac host?
+  → Decided 2026-10-29: its own CPU (section 4, section 10).
 - What is the noise floor? Repeat EEVDF runs (with and without batch) to see
   the run-to-run spread before comparing schedulers. In S1, EEVDF's
   per-second p99 ranged 4–295 ms within one run.
+  → Measured (N1–N3, section 6.1): large. Open: what causes the slow
+  episodes? Next checks: a per-vCPU hiccup monitor during a run (host
+  stalls), and whether episodes coincide with bursts of `node`/`claude`.
 - S1 (one rep, printk on): scx_kairos (scx_simple policy) had half EEVDF's
   context switches (20.7k/s vs 40.6k/s) but more system time (24.8% vs
   18.5%) and lower batch throughput in the burst (231 vs 433 MB/s). Printk
@@ -755,3 +834,27 @@ code is identical to 210079b.
 **Problems:** 4edc764 is on GitHub, so `origin/main` still has the old commit
 until main is force-pushed.
 **Next:** Force-push main (`git push --force-with-lease origin main`).
+
+### 2026-10-29 — Load generator isolation; noise floor (N1–N3)
+**Did:** Committed phase 3 (180b6a7, branch `phase3-workloads`). Pinned the
+server and batch to CPUs 0–2 and the load generator to CPU 3 (3d74753);
+recorded other processes' CPU, loadgen CPU and server GC per run (3d74753,
+ce5a697); added `aggregate.py` and `episodes.py`. Ran N1, N2 (10 reps each)
+and N3 (repeat of N1 with GC logging).
+**Found:** Section 6.1. p50 and batch MB/s vary ~10% across reps; p99 and
+p99.9 vary 3–50× (CV 65–210%), driven by slow episodes. Median p99 at
+3000 req/s with 4 zstd: 109 ms (N1) vs 38 ms (N3). Episodes don't line up
+with server GC beyond chance. Pinned loadgen: send lag p99 2–5 ms median.
+**Interpretation:** Single-run tail numbers are meaningless here; only
+within-batch, interleaved, many-rep comparisons are. The episode cause is
+unknown (host stalls, other guest processes, or slow backlog drain; all
+guesses).
+**Decisions:** Load generator on its own CPU with GOMAXPROCS=4 (no root
+needed; chrt would need sudo on every run and preempts the measured work;
+the Mac host adds network latency). ≥ 10 reps for E1, report medians and
+ranges. Earlier "GC isn't the cause" from one GOGC=100 vs 400 pair was not
+valid evidence at this noise level; N3 is the evidence.
+**Problems:** `analysis/__pycache__` made N2/N3's `git_dirty` true (false
+positive; ignored from cf7d8bc). The root cause of episodes is not found.
+**Next:** Phase 4: gate the printk, timestamps and wait time, runnable count,
+wakeup rate, BPF timer + EWMAs, forced modes, victim preemption; then E1.
