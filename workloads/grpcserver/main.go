@@ -132,6 +132,10 @@ func (s *server) Do(ctx context.Context, req *pb.WorkRequest) (*pb.WorkReply, er
 }
 
 func main() {
+	// Wall-clock start, so GODEBUG=gctrace=1 lines ("@<seconds since
+	// start>") can be placed on the load generator's time axis (to within
+	// the few ms between runtime start and main).
+	startNs := time.Now().UnixNano()
 	flag.Parse()
 	if *calibrate {
 		fmt.Printf("%.1f\n", measureItersPerUs())
@@ -172,8 +176,8 @@ func main() {
 		g.GracefulStop()
 	}()
 
-	log.Printf("listening on %s: workers=%d work_us=%d iters_per_us=%.1f gomaxprocs=%d",
-		*addr, *workers, *workUs, ipu, procs)
+	log.Printf("listening on %s: workers=%d work_us=%d iters_per_us=%.1f gomaxprocs=%d start_unix_ns=%d",
+		*addr, *workers, *workUs, ipu, procs, startNs)
 	if err := g.Serve(lis); err != nil {
 		log.Fatal(err)
 	}

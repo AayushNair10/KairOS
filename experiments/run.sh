@@ -55,6 +55,9 @@ LOADGEN_CPUS=${LOADGEN_CPUS-3}
 # clock_nanosleep, holds the only P and replies wait (send lag p99 38 ms vs
 # 4 ms with 4, EEVDF + 4 zstd, 2026-10-29).
 LOADGEN_GOMAXPROCS=${LOADGEN_GOMAXPROCS:-4}
+# The server's Go runtime logs one line per GC to server.log, so latency
+# episodes can be checked against GC (analysis/episodes.py).
+SERVER_GODEBUG=${SERVER_GODEBUG-gctrace=1}
 
 BIN=$ROOT/workloads/bin
 # Command prefixes for pinning. taskset execs the command, so $! after
@@ -179,7 +182,7 @@ run_one() {
 	start_sched "$sched" "$dir"
 	"$ROOT/scripts/meta.sh" "$dir" "$sched" "$WORKLOAD" > /dev/null
 
-	"${SUT_PIN[@]}" "$BIN/grpcserver" -addr "$ADDR" -workers "$WORKERS" -work-us "$WORK_US" \
+	GODEBUG=$SERVER_GODEBUG "${SUT_PIN[@]}" "$BIN/grpcserver" -addr "$ADDR" -workers "$WORKERS" -work-us "$WORK_US" \
 		-iters-per-us "$ITERS_PER_US" > "$dir/server.log" 2>&1 &
 	SERVER_PID=$!
 	start_batch "$dir"
@@ -220,7 +223,7 @@ WORKLOAD+=" conns=$CONNS seed=$SEED batch_jobs=$BATCH_JOBS"
 WORKLOAD+=" batch_input=$(basename "$BATCH_INPUT") zstd_level=$ZSTD_LEVEL"
 WORKLOAD+=" batch_warmup_s=$BATCH_WARMUP_S"
 WORKLOAD+=" sut_cpus=${SUT_CPUS:-all} loadgen_cpus=${LOADGEN_CPUS:-all}"
-WORKLOAD+=" loadgen_gomaxprocs=$LOADGEN_GOMAXPROCS"
+WORKLOAD+=" loadgen_gomaxprocs=$LOADGEN_GOMAXPROCS server_godebug=$SERVER_GODEBUG"
 
 OUT=$ROOT/results/$(date +%F)-$NAME
 [ -e "$OUT" ] && OUT=$OUT-$(date +%H%M%S) # never overwrite earlier raw data
