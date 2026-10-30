@@ -569,9 +569,9 @@ together with `meta.json` (git commit, kernel, VM config, parameters).
 | E2p | 2026-10-30 | a025a0d, a7fd0f6, 6206245 | never, batchvic, adaptive (`--adaptive --victim batch --signal-cpus 0-2`) | `e2-pilot.conf` (2 zstd) and `e2-pilot-z1.conf` (1 zstd): 5 s phases alternating 500 and 3500 req/s, GOMAXPROCS 16 | 1 | `results/2026-10-30-e2-pilot*/` | Functional pilots, IDE in use (other processes 20–100% of a CPU). With 2 zstd, BATCH always misses a 1 ms target. With 1 zstd and the fixed signal, adaptive is mostly BATCH when quiet and LATENCY when busy (section 6.8) |
 | E2pt | 2026-10-30 | 652be42 | a5, a10 (`--adaptive --victim batch --signal-cpus 0-2`, `--lat-target-us` 5000 / 10000) | `e2-pilot-target.conf`: as `e2-pilot.conf` (2 zstd) | 1 | `results/2026-10-30-e2-pilot-target/` | Picks E2's 2-job targets. a10 stayed in BATCH all run (late ≤ 2%/s); a5 mostly LATENCY, BATCH tries ended within 1–2 s (section 6.9) |
 | E2 | 2026-10-30 | 7eb796e | eevdf, never, never3, batchvic, adaptive (1 ms target); with 2 zstd a5, a10 (5 / 10 ms) instead of adaptive | `e2-z1.conf` (1 zstd), `e2-z2.conf` (2 zstd): 5 s phases alternating 500 / 3500 req/s, three times; GOMAXPROCS 16; IDE idle | 10 | `results/2026-10-30-e2-z1/`, `results/2026-10-30-e2-z2/` | No failed requests. 1 zstd: adaptive ≈ batchvic, quiet-phase batch +0–2.5%. 2 zstd: a10 never left BATCH (= never); a5 in between, busy p99 worse than batchvic and never3 (section 6.9) |
-| ED | 2026-10-30 | e557e62 | as E2 (2 zstd): eevdf, never, never3, batchvic, a5, a10, with `--diag` | `e2-diag.conf`: E2's 2-job workload, groups grpcworker, grpcserver, zstd, loadgen, ksoftirqd | 3 | `results/2026-10-30-e2-diag/` | Server threads' waits are ≥ 96% wakeups; worker wakeup waits in BATCH mostly 2–5 ms. Tails 2–8x E2's for all configs incl. eevdf (section 6.10) |
+| ED | 2026-10-30 | e557e62 | as E2 (2 zstd): eevdf, never, never3, batchvic, a5, a10, with `--diag` | `e2-diag.conf`: E2's 2-job workload, groups grpcworker, grpcserver, zstd, loadgen, ksoftirqd | 3 | `results/2026-10-30-e2-diag/` | Server threads' waits are ≥ 95% wakeups; worker wakeup waits in BATCH mostly 2–5 ms. Tails 2–8x E2's for all configs incl. eevdf (section 6.10) |
 | ES | 2026-10-30 | dbfae96 | as ED | `e2-split.conf`: as ED, server reports handler receive time and wake delay | 2 | `results/2026-10-30-e2-split/` | The slowest 1% are 81–97% "in" + "out" (gRPC/network path and client) in every config (section 6.10) |
-| EC | 2026-10-30 | b0c… see git | eevdf, never, batchvic, diagnostics off | `e2-control.conf`: as E2 (2 zstd) | 2 | `results/2026-10-30-e2-control/` | Tails as high as ED/ES without the diagnostics: the evening runs were noisier, not perturbed by the counters (section 6.10) |
+| EC | 2026-10-30 | 52fe9bb | eevdf, never, batchvic, diagnostics off | `e2-control.conf`: as E2 (2 zstd) | 2 | `results/2026-10-30-e2-control/` | Tails as high as ED/ES without the diagnostics: the evening runs were noisier, not perturbed by the counters (section 6.10) |
 
 ### 5.1 Planned experiments
 | # | Experiment | Pattern | Shows |
@@ -916,8 +916,9 @@ pooled over reps. Wait time per completed request, by group and kind:
 (requeue = preempted + slice ran out; Go waits = share of sampled
 goroutine waits; mean latency in ms, inflated by tail episodes.)
 
-- Requeue waits are ≤ 4% of the server threads' waiting time in every
-  config: the server's threads sleep before their slice ends.
+- Requeue waits are ≤ 4.2% of the server threads' waits and ≤ 3.7% of
+  their waiting time in every config: the server's threads sleep before
+  their slice ends.
 - Worker wakeup waits (busy): never 2–5 ms 59%, 5–10 ms 6.1%, ≥ 10 ms
   1.2%; a10 55.6 / 5.5 / 0.3%; a5 27.9 / 1.9 / 0.4%; never3 21.4 / 0.4 /
   0%; batchvic 7.9 / 0.3 / 0.1%. Other server threads' wakeups ≥ 5 ms:
@@ -946,9 +947,10 @@ of p50; then the parts' mean over each rep's slowest 1%:
 - Tails in ED, ES and EC were 2–8x E2's for every config, Linux's
   included. EC (`results/2026-10-30-e2-control/`, diagnostics off) busy
   p99: batchvic 30–189, eevdf 60–323, never 79–1476 ms (E2: 25–34,
-  61–68, 131–154). Slow requests were spread evenly over the second
-  after each `schedlat` read, and GC counts and durations matched E2.
-  So the counters didn't cause it; these evening runs were noisier
+  61–68, 131–154). Slow requests were spread over the whole second
+  after each `schedlat` read (in ES the first 100 ms had 1.4x the
+  average, in ED no excess), and GC counts and durations were close to
+  E2's. So the counters didn't cause it; these evening runs were noisier
   (cause not identified; the host is the guess). Medians are close to
   E2's; tail numbers from ED/ES/EC are not comparable with E2.
 
@@ -1190,9 +1192,11 @@ E2 diagnostics (section 6.10):
 - The signal measures the right events but at the wrong scale. Under
   BATCH mode with 2 zstd jobs a woken worker waits 2–5 ms (until some
   zstd thread's 20 ms slice ends or it sleeps), rarely 10 ms. That
-  explains the three targets exactly: with 1 ms most wakeups are late
-  (always LATENCY), with 5 ms ~7% are, just above the 5% threshold (a5
-  flaps in and out of BATCH), with 10 ms < 1% (a10 never leaves BATCH).
+  explains the three targets: with 1 ms, 81% of worker wakeups are late
+  (15–16% of all wakeups in E2's never runs), so adaptive stays in
+  LATENCY; with 5 ms, 7% of worker wakeups and fewer of the others, so
+  the share sits near the 5% threshold and a5 flaps in and out of BATCH;
+  with 10 ms, 1.2% of worker wakeups, so a10 never leaves BATCH.
 - Requests are far slower than any single wait. Per request the server's
   threads wait 1.3–2.8 ms in total, but the median request takes 2–10 ms
   and the tail hundreds. Measured contributors: queueing for a worker
@@ -1850,7 +1854,7 @@ named the server's worker threads, logged Go's goroutine waits, and had
 the server report handler receive time and wake delay. Ran ED (3 reps),
 ES (2 reps) and a control without diagnostics (EC). Read the slice rules
 of EEVDF, CFS, bpfland, lavd and related papers (section 2.9).
-**Found:** Section 6.10. Server-thread waits are ≥ 96% wakeups. Workers
+**Found:** Section 6.10. Server-thread waits are ≥ 95% wakeups. Workers
 wait 2–5 ms after wakeups in BATCH mode. Request tails sit in the
 gRPC/network path and the client. Evening runs were 2–8x noisier.
 **Interpretation:** Section 7. The signal sees the right waits but a
