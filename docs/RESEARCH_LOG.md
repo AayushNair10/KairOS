@@ -1324,3 +1324,20 @@ live check (the scheduler itself was fine; unloaded by hand).
 **Next:** Count class transitions to confirm the overload mechanism; make
 the classification robust under backlog; rerun 3500–4500 req/s with more
 reps; then the load switch (phase 5) for the throughput trade-off.
+
+### 2026-10-30 — Proposal draft
+**Did:** Wrote the 2-page proposal in the USENIX template
+(`docs/proposal/proposal.tex`, with `usenix-2020-09.sty` from usenix.org):
+motivation, proposed policy (load signal, two modes with hysteresis,
+class-aware preemption, budget and max wait, prediction as an extension),
+evaluation plan (workloads, metrics, baselines, E1–E8), expected outcomes
+and challenges. No implementation status, as asked.
+**Found:** —
+**Interpretation:** The E1b/E1c lesson (preempt batch, not request threads)
+is in the design as class-aware preemption, stated as a design argument,
+not a result.
+**Decisions:** Dropped ghOSt and Etsion et al. from the references to fit
+two pages; NAPI kept as a one-line analogy.
+**Problems:** No TeX in the VM, so the page count is estimated
+(~1,100 words + 11 references), not checked.
+**Next:** Compile (Overleaf or a local TeX install) and check it fits.
