@@ -406,6 +406,22 @@ choices. Add as you go.)
   583–4807 preemptions/s, BATCH mode none; unloads cleanly.
 - Load signal normalization uses all 4 CPUs, although the workload runs on
   CPUs 0–2 and CPU 3 mostly holds the load generator.
+- Batch classification (ed5d9ff, first piece of Feature A): per task, an
+  EWMA (weight 1/8 per stop, `--class-shift 3`) of voluntary stops per
+  stop, x1024, updated in `ops.stopping`. The kernel calls
+  `stopping(p, false)` from `dequeue_task_scx` when the running task is
+  dequeued (blocked or slept) and `stopping(p, true)` from
+  `put_prev_task_scx` when it is put back still queued (slice expired or
+  preempted) (`kernel/sched/ext.c`, v7.0). Batch while the EWMA < 512
+  (`--batch-vol-max`); it starts at 1024 in `init_task`, so a task needs
+  ~6 involuntary stops in a row to become batch. `running` copies the
+  class into `cpu_ctx`; with `--victim batch`, `pick_victim` skips CPUs
+  whose task is not batch (no victim: the woken task queues, as in BATCH
+  mode). Stat `preempt_batch` counts preemptions of batch victims in
+  either setting. Checked with 2 zstd + a 1 ms sleeper (2026-10-29):
+  `--victim any` 84–98% of preemptions hit batch victims, `--victim
+  batch` 100%. Each zstd pass is a new process and cannot be preempted
+  until classified (~6 slices).
 
 ---
 
@@ -423,6 +439,7 @@ together with `meta.json` (git commit, kernel, VM config, parameters).
 | E1 | 2026-10-29 | 5ec281d | eevdf, never (20 ms slice), never3 (3 ms slice), always (3 ms) | `e1.conf`: as the pilot | 10 | `results/2026-10-29-e1/` | No latency crossover over 500–3000 req/s: always has the lowest p50 everywhere; p99 always ≈ never3; never (long slices) gives more batch throughput at 2000–3000 req/s (section 6.2) |
 | E1bp | 2026-10-29 | 2d885f7 | eevdf, never, always | `e1b-pilot.conf` (no batch, GOMAXPROCS 3), `e1b-pilot-gmp16.conf` (no batch, GOMAXPROCS 16), `e1b-pilot-z2.conf` (2 zstd, GOMAXPROCS 3); 500 µs; 8 s steps 1000–6000 req/s | 1 | `results/2026-10-29-e1b-pilot{,-gmp16,-z2}/` | Pilot. Load generator keeps up to 6000 req/s; with GOMAXPROCS 3 the kernel sees ≤ ~1 runnable per CPU without batch; with 16 up to 4.7 (section 6.3). EEVDF-gmp16 and always-z2 runs disturbed (memory pressure; VS Code `node` 32%) |
 | E1b | 2026-10-29 | 3a9b17e | eevdf, never, never3, always | `e1b.conf`: no batch, server GOMAXPROCS 16, 500 µs, 8 s steps 1000/2000/3000/3500/4000/4500/5000 req/s | 10 | `results/2026-10-29-e1b/` | No crossover: never3 ≥ always at every rate. always has the higher p50 in 10/10 reps at every rate (0.8 vs 0.7 ms at 1000, 4.1 vs 1.1 at 4000) because workers are preempted mid-request (section 6.4) |
+| E1c | 2026-10-29 | 0b25c6b | eevdf, never, never3, always, batchvic (`--force-preempt --victim batch`) | `e1c.conf`: 2 zstd, server GOMAXPROCS 16, 500 µs, 8 s steps 1000/2000/3000/3500/4000/4500 req/s | 10 | `results/2026-10-29-e1c/` | batchvic has the lowest p50 at every rate (8–10/10 paired up to 4000) with workers' service time unchanged; more batch than always, less than never3. Plain always crosses never3 at ~4000 req/s. 2 batchvic reps collapsed at 4000–4500 (section 6.5) |
 
 ### 5.1 Planned experiments
 | # | Experiment | Pattern | Shows |
@@ -597,6 +614,45 @@ is 0.64–0.68 ms for never, never3 and always, while end-to-end p50 is
 24–60 ms for never, 6–32 ms for never3 and 6–8 ms for always at
 500–3000 req/s.
 
+### 6.5 E1c: batch and request threads mixed; batch-only victims (2026-10-29)
+`results/2026-10-29-e1c/`, commit 0b25c6b, all 50 runs clean (other
+processes 9–11% of a CPU, median). 2 zstd jobs and the server on CPUs
+0–2, server GOMAXPROCS 16, 16 workers, 500 µs, load generator on CPU 3.
+batchvic = `--force-preempt --victim batch` (3 ms slice). Medians over
+10 reps.
+
+| req/s | p50 ms: eevdf / never / never3 / always / batchvic | p99 ms: same order | batch MB/s: never3 / always / batchvic | preempt/s: always / batchvic |
+|---|---|---|---|---|
+| 1000 | 1.2 / 1.3 / 1.2 / 0.9 / 0.8 | 9 / 27 / 8 / 22 / 11 | 618 / 500 / 539 | 23.4k / 7.8k |
+| 2000 | 1.9 / 4.1 / 1.9 / 0.9 / 0.9 | 104 / 41 / 41 / 54 / 68 | 469 / 346 / 383 | 35.0k / 11.9k |
+| 3000 | 4.0 / 6.7 / 3.4 / 1.2 / 0.9 | 163 / 218 / 28 / 50 / 177 | 350 / 222 / 257 | 43.0k / 11.9k |
+| 3500 | 3.5 / 6.4 / 3.5 / 1.8 / 1.0 | 85 / 141 / 72 / 30 / 15 | 285 / 149 / 218 | 46.7k / 10.1k |
+| 4000 | 6.2 / 10.9 / 3.7 / 4.3 / 1.1 | 396 / 191 / 33 / 67 / 29 | 203 / 87 / 149 | 44.7k / 7.6k |
+| 4500 | 8.1 / 42.6 / 8.8 / 11.0 / 4.8 | 318 / 679 / 468 / 271 / 684 | 124 / 90 / 92 | 26.4k / 4.2k |
+
+Paired counts at 1000 / 2000 / 3000 / 3500 / 4000 / 4500 req/s (of 10):
+- p50 lower for batchvic than always: 8, 9, 8, 10, 8, 7; than never3:
+  10, 10, 10, 10, 8, 5; than EEVDF: 10, 10, 10, 10, 8, 8.
+- p50 lower for always than never3: 10, 10, 10, 10, 5, 4.
+- p99 lower for batchvic than never3: 5, 5, 7, 7, 7, 5; than always: 3,
+  4, 4, 7, 6, 2; than EEVDF: 6, 5, 7, 7, 8, 4.
+- Batch MB/s higher for batchvic than always: 8, 9, 9, 9, 8, 6; for
+  never3 than batchvic: 10, 10, 10, 9, 10, 8; for never than never3: 6,
+  7, 7, 7, 9, 10.
+Service time (wall time of the 500 µs spin) p50: never3 and batchvic
+0.50–0.51 ms at every rate; always 0.51, 0.54, 0.64, 1.08, 2.03, 1.57 ms.
+Under always, 70–79% of preemptions hit a batch-classified task.
+Whole run: context switches 88.6k/s always, 53.7k batchvic, 55.8k EEVDF,
+34.7k never3, 30.4k never; system time 15.3%, 12.0%, 8.8%, 7.3%, 7.5%.
+Slow runs (some phase with p50 > 100 ms): eevdf 2, never 1, never3 3,
+always 3, batchvic 2 of 10 each, all at 4000–4500 req/s. Only batchvic's
+two had failed requests: r6 (p50 678 ms at 4000, 3.4 s at 4500, 198
+failed) and r7 (2.9 s at 4000, 28.5k failed at 4500). In both, runnable
+tasks jumped from ~10 to ~28–30 within a second, wakeups/s fell from ~47k
+to ~15k, and up to 91% of wakeups found a batch victim (r7), against
+~22% before. Other processes used 35% and 24% of a CPU in these two runs
+(median for batchvic 11%).
+
 ---
 
 ## 7. Explanations and insights
@@ -723,6 +779,38 @@ E1b (section 6.4):
 - EEVDF does not collapse in E1b; E1's collapse needs GOMAXPROCS 3 and/or
   the zstd jobs (open, section 9).
 
+E1c (section 6.5):
+- Plain always-preempt now shows a load crossover against never3 in p50:
+  better in 10/10 reps up to 3500 req/s, even at 4000 (5/10), worse at
+  4500 (4/10). It appears where workers start being preempted mid-request
+  (service time 0.64 → 2.03 ms from 3000 to 4000 req/s). So the
+  hypothesis's crossover exists when batch and request threads are mixed,
+  with the current victim rule.
+- Preempting only batch-classified tasks removes it: batchvic has the
+  lowest p50 at every rate (8–10 of 10 against every other config up to
+  4000 req/s), workers' service time stays at 0.50–0.51 ms, and it makes
+  3–6× fewer preemptions than always. It keeps more batch throughput than
+  always (8–9 of 10) but 13–27% less than never3 (median, 1000–4000
+  req/s), the price of preempting zstd. p99 differences are mostly within
+  the noise (batchvic below never3 in 7/10 at 3000–4000).
+- So "preempt batch, protect request threads" is the better policy for
+  latency at every load here; what remains is a trade-off between batch
+  throughput and latency, which a load-based switch can manage (e.g.
+  BATCH mode while latency has headroom).
+- Failure under overload (likely, inferred from the stats, not measured
+  per task): when a backlog builds, workers take job after job without
+  sleeping, use whole slices, and the classifier marks them batch after
+  ~6 slices. batchvic then preempts workers like always does, which
+  slows them further; r7's 91% of wakeups finding a batch victim while
+  ~28 tasks were runnable and only 2 were zstd fits this. The trigger is
+  unknown (both runs had more other-process CPU than usual). Needs a
+  class-transition counter to confirm, and a classification that does
+  not flip under backlog (slower EWMA, or Feature A's dependency features:
+  woken by other tasks, wakes others), plus Feature B's max-wait guard.
+- The measured load reads lower under batchvic (1.20–2.57) than under
+  never3 (1.50–3.86) at the same rate, as with always in E1: the signal
+  stays mode- and policy-dependent.
+
 ---
 
 ## 8. Limitations
@@ -778,6 +866,11 @@ E1b (section 6.4):
   with batch and request threads mixed (2 zstd, GOMAXPROCS 16), does
   plain always-preempt show a load crossover, and does preempting only
   batch-class tasks beat both fixed modes at every load?
+  → E1c (section 6.5): yes to both for p50 (always crosses never3 at
+  ~4000 req/s; batchvic is best at every rate), at a batch-throughput
+  cost vs never3. Open: why 2 of 10 batchvic runs collapsed at 4000–4500
+  (classifier flipping workers to batch under backlog?), and a
+  classification that stays correct under overload.
 - Why does EEVDF collapse at 2000 req/s in E1 while our modes don't?
 - Which preemption mechanism is most reliable?
 - Can wakers be identified reliably, including interrupt-driven wakeups?
@@ -1208,3 +1301,26 @@ building the load switch (phase 5).
 own delay (send lag p99 up to 26 ms in E1b, 60 ms in E1).
 **Next:** User decision on reordering: batch-only victim rule + a mixed
 experiment (2 zstd, GOMAXPROCS 16) first, or phase 5 as planned.
+
+### 2026-10-29 — Batch classification; E1c (batch-only victims)
+**Did:** Added per-task batch classification (EWMA of voluntary stops) and
+`--victim batch` (ed5d9ff); checked it live. Ran E1c: 2 zstd + server with
+GOMAXPROCS 16; eevdf, never, never3, always, batchvic; 10 reps (0b25c6b).
+**Found:** Section 6.5. batchvic has the lowest p50 at every rate (8–10/10
+paired up to 4000 req/s), workers are not preempted mid-request (service
+time flat at 0.5 ms), 3–6× fewer preemptions than always, more batch
+throughput than always but 13–27% less than never3. Plain always crosses
+never3 in p50 at ~4000 req/s. 2 batchvic reps collapsed at 4000–4500.
+**Interpretation:** The victim's class is what decides whether preemption
+helps; protecting request threads works at every load. The design is
+viable with class-aware preemption at its core; the load switch then
+manages the batch throughput trade-off. The classifier likely mislabels
+workers that drain a backlog (section 7).
+**Decisions:** Pulled the batch part of Feature A ahead of phase 5 (user
+agreed). Keep `--victim any` as the default until the overload failure is
+understood.
+**Problems:** Test script deadlocked on a stale bash job number during the
+live check (the scheduler itself was fine; unloaded by hand).
+**Next:** Count class transitions to confirm the overload mechanism; make
+the classification robust under backlog; rerun 3500–4500 req/s with more
+reps; then the load switch (phase 5) for the throughput trade-off.

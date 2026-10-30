@@ -119,7 +119,7 @@ initial params, prints and logs stats periodically (CSV).
 | 3. Workloads | Oct 31–Nov 6 | gRPC server, open-loop loadgen (phases), zstd job, harness | **Done** (Oct 29) |
 | 4. Load signal + static modes | Nov 3–8 | Timestamps, runnable count, wakeup rate, wait time, timer + EWMAs, forced modes, victim preemption | E1 shows the crossover. **Implemented** (Oct 29); E1 shows no latency crossover (RESEARCH_LOG 6.2); nor does E1b without batch, where preempting request threads hurts more as load rises (6.4) |
 | 5. Adaptive switching | Nov 8–13 | Mode tree, hysteresis, fast exit, mode logging | Early E2; progress report Fri Nov 13 |
-| 6. Features A and B | Nov 14–21 | Features, classification tree, class-aware preemption, budget, max wait | E5, E6 |
+| 6. Features A and B | Nov 14–21 | Features, classification tree, class-aware preemption, budget, max wait | E5, E6. **Started early** (Oct 29): batch classification + batch-only victims; E1c: best p50 at every load (RESEARCH_LOG 6.5) |
 | 7. Full evaluation | Nov 18–26 | Azure replay, burst-length sweep, transitions, overhead, Redis, all baselines | E2–E7, G |
 | 8. ML | Nov 24–Dec 4 | Stats export, burst predictor vs persistence, classifier if time | E8 (E9) |
 | 9. Wrap-up | Dec 4–11 | Figures, analysis, video, final report | Submitted Fri Dec 11 |
