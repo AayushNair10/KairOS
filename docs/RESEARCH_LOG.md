@@ -527,6 +527,10 @@ Paired counts (same repetition; configurations interleaved), at 500 /
 Whole run (median): context switches 49.5k/s always, 16.4k never, 18.9k
 never3, 27.4k EEVDF. Other processes used 23–26% of one CPU per run
 (median; up to 94% in one never3 run).
+Scheduler signals from 500 to 3000 req/s (median over reps, computed from
+`sched_stats.csv` with runlib): slow load 2.31→2.34 never (max 2.51),
+2.15→2.30 never3, 1.48→2.17 always; wakeups/s (all tasks) 8.8k→16.8k
+never, 12.1k→20.2k never3, 22.8k→38.2k always.
 
 ---
 
@@ -580,6 +584,15 @@ E1 (section 6.2):
   reads lower (1.48 at 500 req/s) than never (2.31), since requests finish
   sooner and fewer tasks are queued. An adaptive switch on this signal sees
   load drop when it enters LATENCY mode, which hysteresis has to allow for.
+- With 4 zstd jobs keeping the CPUs full, the runnable count hardly moves
+  with the request rate under never (2.3–2.5 from 500 to 3000 req/s): the
+  batch jobs dominate it, so a switch on it cannot tell light from heavy
+  service load. The wakeup rate does rise with the request rate in every
+  mode, but is 2–2.6× higher under always at the same rate (guess: Go's
+  threads park and wake more often when they get a CPU at once). The
+  phase 5 switch needs a signal that tracks service demand in both modes;
+  candidates: wakeup rate with per-mode thresholds, or the wait of woken
+  tasks only.
 - EEVDF collapses at 2000 req/s while all scx_kairos modes cope with 3000.
   Unexplained. Guess: the server has GOMAXPROCS=3 and 16 locked worker
   threads; a thread descheduled while holding one of Go's 3 Ps blocks Go
@@ -615,6 +628,16 @@ E1 (section 6.2):
 - Processes outside the experiment used 8–45% of one CPU per run (VS Code
   server, Claude Code, kworkers). Final runs should be made with the IDE
   disconnected and Claude Code idle.
+- Client on CPU 3 stands in for remote clients (as on a real deployment,
+  where clients do not share the server's CPUs). Requests travel over
+  loopback, not a NIC: loopback hands each packet to the sending CPU's
+  receive backlog (`loopback_xmit` → `__netif_rx`, RPS off on `lo`), so
+  the request's receive path, including the wakeup of the server thread,
+  runs on CPU 3, while the reply's runs on the server's CPUs. With a NIC,
+  the request's interrupt and receive work would land on the server's
+  CPUs. Small next to 500 µs of work per request, but not zero.
+- 3 CPUs is far fewer than a production server; with more CPUs an idle
+  one is more often free, so preemption decisions matter less often.
 
 ---
 
@@ -998,3 +1021,22 @@ memory pressure from the VS Code C/C++ extension (invalid). Failed requests
 were invisible in loadgen's percentiles (now counted as infinite).
 **Next:** Decide how to look for the crossover (section 9: lower load,
 latency-only contention, or a throughput target), then phase 5.
+
+### 2026-10-29 — Realism of the CPU split; what the load signal sees
+**Did:** Answered questions on the CPU split, GC and the state of the
+project. Checked the loopback receive path in `~/linux-src` and computed
+per-phase load and wakeup rates from the E1 stats.
+**Found:** Loopback receive work runs on the sending CPU (section 8). Under
+never-preempt, runnable per CPU stays at 2.3–2.5 from 500 to 3000 req/s;
+wakeups/s rise with the request rate but differ 2–2.6× between modes
+(section 6.2).
+**Interpretation:** The split mirrors remote clients and keeps the
+instrument out of the scheduler's way; its remaining gaps are loopback vs
+NIC and the small CPU count. The runnable count is the wrong switch signal
+while batch jobs fill the CPUs (section 7).
+**Decisions:** Keep the CPU split. Choose the phase 5 switch signal after
+E1b.
+**Problems:** None.
+**Next:** E1b (no batch, more workers or shorter requests; plus 1–2 zstd
+jobs), then decide between the original hypothesis and the trade-off
+framing (section 9).
