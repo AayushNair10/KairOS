@@ -67,12 +67,12 @@ const volatile u64 batch_min_run_ns = 20000000;
 /*
  * Adaptive mode switching (--adaptive). A wakeup is "late" if the woken task
  * waited longer than lat_target_ns for a CPU. late_frac is an EWMA of the
- * late share of wakeups, x1024. Only tasks on signal_cpus count (bit i =
+ * late share of wakeups, x LATE_ONE. Only tasks on signal_cpus count (bit i =
  * CPU i), so e.g. a load generator on its own CPU doesn't drive the mode.
  */
 const volatile bool adaptive;
 const volatile u64 lat_target_ns = 1000000;
-const volatile u64 late_max = 51;		/* x1024, i.e. 5% */
+const volatile u64 late_max = LATE_ONE * 5 / 100;	/* 5% */
 /*
  * late_frac's weight per timer tick is 1/2^late_shift: with 6 and a 1 ms
  * tick it averages over ~64 ms. At 1/8 (~8 ms, 50-100 wakeups) a few
@@ -108,7 +108,7 @@ u64 wait_avg_ns;	/* mean wait per timer period */
 u64 nr_timer_ticks;
 /* Latency signal (atomic adds in running()) and mode state (timer only). */
 u64 lat_wakeups, lat_late;	/* cumulative, signal CPUs only */
-u64 late_frac;			/* EWMA of late share, x1024 */
+u64 late_frac;			/* EWMA of late share, x LATE_ONE */
 u64 nr_mode_switches;
 u64 mode_ns[2];			/* time spent in each mode */
 u64 hold_ns;			/* current LATENCY hold before trying BATCH */
@@ -500,7 +500,7 @@ static int kairos_timerfn(void *map, int *key, struct bpf_timer *timer)
 
 		mode_ns[mode & 1] += dt;
 		if (lw > last_lat_wakeups)
-			late_frac = ewma(late_frac, (ll - last_lat_late) * 1024 /
+			late_frac = ewma(late_frac, (ll - last_lat_late) * LATE_ONE /
 					 (lw - last_lat_wakeups), late_shift);
 		last_lat_wakeups = lw;
 		last_lat_late = ll;

@@ -8,6 +8,13 @@
 
 #define KAIROS_MAX_CPUS 64
 
+/*
+ * Fixed-point 1.0 for the late share. 2^20, not 1024: an integer EWMA with
+ * weight 1/2^k can't decay below 2^k - 1 (avg >> k rounds to 0), which at
+ * x1024 and k = 6 is 6.2%, above the 5% threshold.
+ */
+#define LATE_ONE (1ULL << 20)
+
 /* Wakeup preemption modes (RESEARCH_LOG section 3.2). */
 enum kairos_mode {
 	MODE_BATCH = 0,		/* never preempt on wakeup; long slices */

@@ -233,8 +233,8 @@ restart:
 			skel->rodata->lat_target_ns = parse_num("lat-target-us", optarg) * 1000;
 			break;
 		case OPT_LATE_PCT:
-			/* percent -> x1024, the fixed point late_frac uses */
-			skel->rodata->late_max = parse_num("late-pct", optarg) * 1024 / 100;
+			/* percent -> the fixed point late_frac uses */
+			skel->rodata->late_max = parse_num("late-pct", optarg) * LATE_ONE / 100;
 			break;
 		case OPT_LATE_SHIFT:
 			skel->rodata->late_shift = parse_num("late-shift", optarg);
@@ -303,7 +303,7 @@ restart:
 			"and the timer period > 0\n");
 		return 1;
 	}
-	if (skel->rodata->late_max > 1024 || !skel->rodata->hold_min_ns ||
+	if (skel->rodata->late_max > LATE_ONE || !skel->rodata->hold_min_ns ||
 	    skel->rodata->hold_min_ns > skel->rodata->hold_max_ns) {
 		fprintf(stderr, "--late-pct must be <= 100 and 0 < --hold-ms <= --hold-max-ms\n");
 		return 1;
@@ -323,7 +323,7 @@ restart:
 	}
 	printf("mode=%s lat_slice_us=%llu batch_slice_us=%llu timer_us=%llu "
 	       "fast_shift=%u slow_shift=%u victim=%s batch_min_run_us=%llu "
-	       "lat_target_us=%llu late_max=%llu/1024 hold_ms=%llu-%llu signal_cpus=0x%llx\n",
+	       "lat_target_us=%llu late_max=%.1f%% hold_ms=%llu-%llu signal_cpus=0x%llx\n",
 	       skel->rodata->adaptive ? "adaptive" :
 	       skel->rodata->forced_mode == MODE_LATENCY ? "latency" : "batch",
 	       (unsigned long long)skel->rodata->lat_slice_ns / 1000,
@@ -333,7 +333,7 @@ restart:
 	       skel->rodata->victim_batch_only ? "batch" : "any",
 	       (unsigned long long)skel->rodata->batch_min_run_ns / 1000,
 	       (unsigned long long)skel->rodata->lat_target_ns / 1000,
-	       (unsigned long long)skel->rodata->late_max,
+	       100.0 * skel->rodata->late_max / LATE_ONE,
 	       (unsigned long long)skel->rodata->hold_min_ns / 1000000,
 	       (unsigned long long)skel->rodata->hold_max_ns / 1000000,
 	       (unsigned long long)skel->rodata->signal_cpus);
@@ -362,7 +362,7 @@ restart:
 		fast = skel->bss->fast_load / 1024.0;
 		slow = skel->bss->slow_load / 1024.0;
 		wait_avg_us = skel->bss->wait_avg_ns / 1000.0;
-		late_frac = skel->bss->late_frac / 1024.0;
+		late_frac = (double)skel->bss->late_frac / LATE_ONE;
 		lw = skel->bss->lat_wakeups;
 		ll = skel->bss->lat_late;
 		sw = skel->bss->nr_mode_switches;
