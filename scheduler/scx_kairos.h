@@ -21,6 +21,8 @@ enum kairos_stat {
 	STAT_PREEMPT,		/* woken task preempted a busy CPU */
 	STAT_PREEMPT_BATCH,	/* ... whose current task was classified batch */
 	STAT_NO_VICTIM,		/* LATENCY mode, no idle CPU and nothing to preempt */
+	STAT_TO_BATCH,		/* a task's class changed to batch */
+	STAT_FROM_BATCH,	/* ... and back */
 	KAIROS_NR_STATS,	/* not NR_STATS: vmlinux.h has one */
 };
 

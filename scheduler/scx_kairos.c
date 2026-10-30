@@ -41,6 +41,7 @@ const char help_fmt[] =
 "      --class-shift N     that EWMA's weight 1/2^N per stop (default 3)\n"
 "  -s, --stats FILE        also write the per-second stats to FILE as CSV\n"
 "  -t, --trace             bpf_printk every enqueue (read trace_pipe)\n"
+"      --trace-class       bpf_printk every batch class change\n"
 "  -v, --verbose           print libbpf debug messages\n"
 "  -h, --help              display this help and exit\n";
 
@@ -54,6 +55,7 @@ enum {
 	OPT_VICTIM,
 	OPT_BATCH_VOL_MAX,
 	OPT_CLASS_SHIFT,
+	OPT_TRACE_CLASS,
 };
 
 static const struct option long_opts[] = {
@@ -68,6 +70,7 @@ static const struct option long_opts[] = {
 	{ "victim",          required_argument, NULL, OPT_VICTIM },
 	{ "batch-vol-max",   required_argument, NULL, OPT_BATCH_VOL_MAX },
 	{ "class-shift",     required_argument, NULL, OPT_CLASS_SHIFT },
+	{ "trace-class",     no_argument,       NULL, OPT_TRACE_CLASS },
 	{ "stats",           required_argument, NULL, 's' },
 	{ "trace",           no_argument,       NULL, 't' },
 	{ "verbose",         no_argument,       NULL, 'v' },
@@ -140,7 +143,8 @@ static long procs_running(void)
 }
 
 static const char csv_header[] =
-	"unix_s,local,global,preempt,preempt_batch,no_victim,nr_runnable,procs_running,"
+	"unix_s,local,global,preempt,preempt_batch,no_victim,to_batch,from_batch,"
+	"nr_runnable,procs_running,"
 	"fast_load,slow_load,wake_rate,wait_avg_us,wait_max_us,mode,timer_ticks\n";
 
 int main(int argc, char **argv)
@@ -200,6 +204,9 @@ restart:
 			break;
 		case OPT_CLASS_SHIFT:
 			skel->rodata->class_shift = parse_num("class-shift", optarg);
+			break;
+		case OPT_TRACE_CLASS:
+			skel->rodata->trace_class = true;
 			break;
 		case 's':
 			stats_path = optarg;
@@ -268,19 +275,21 @@ restart:
 		wait_avg_us = skel->bss->wait_avg_ns / 1000.0;
 
 		printf("local=%llu global=%llu preempt=%llu (batch %llu) no_victim=%llu "
-		       "runnable=%lld (kernel %ld) load fast=%.2f slow=%.2f wakeups/s=%llu "
-		       "wait avg=%.0fus max=%.0fus\n",
+		       "class +%llu -%llu runnable=%lld (kernel %ld) load fast=%.2f slow=%.2f "
+		       "wakeups/s=%llu wait avg=%.0fus max=%.0fus\n",
 		       d[STAT_LOCAL], d[STAT_GLOBAL], d[STAT_PREEMPT], d[STAT_PREEMPT_BATCH],
-		       d[STAT_NO_VICTIM],
+		       d[STAT_NO_VICTIM], d[STAT_TO_BATCH], d[STAT_FROM_BATCH],
 		       (long long)skel->bss->nr_runnable, procs_running(), fast, slow,
 		       (unsigned long long)skel->bss->wake_rate, wait_avg_us, wait_max_us);
 		fflush(stdout);
 
 		if (csv) {
 			clock_gettime(CLOCK_REALTIME, &ts);
-			fprintf(csv, "%.3f,%llu,%llu,%llu,%llu,%llu,%lld,%ld,%.3f,%.3f,%llu,%.1f,%.1f,%u,%llu\n",
+			fprintf(csv, "%.3f,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%lld,%ld,%.3f,%.3f,%llu,"
+				"%.1f,%.1f,%u,%llu\n",
 				ts.tv_sec + ts.tv_nsec / 1e9, d[STAT_LOCAL], d[STAT_GLOBAL],
 				d[STAT_PREEMPT], d[STAT_PREEMPT_BATCH], d[STAT_NO_VICTIM],
+				d[STAT_TO_BATCH], d[STAT_FROM_BATCH],
 				(long long)skel->bss->nr_runnable, procs_running(), fast, slow,
 				(unsigned long long)skel->bss->wake_rate, wait_avg_us,
 				wait_max_us, skel->bss->mode,

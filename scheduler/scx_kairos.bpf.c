@@ -39,6 +39,7 @@ char _license[] SEC("license") = "GPL";
  * trace_enqueue is false.
  */
 const volatile bool trace_enqueue;
+const volatile bool trace_class;	/* printk every batch class change */
 const volatile u32 forced_mode = MODE_BATCH;
 const volatile u64 lat_slice_ns = 3000000;	/* slice in LATENCY mode */
 const volatile u64 batch_slice_ns = 20000000;	/* slice in BATCH mode */
@@ -350,6 +351,7 @@ void BPF_STRUCT_OPS(kairos_stopping, struct task_struct *p, bool runnable)
 	u64 now = scx_bpf_now();
 	struct task_ctx *tctx;
 	struct cpu_ctx *cctx;
+	bool was_batch;
 
 	tctx = bpf_task_storage_get(&task_ctxs, p, 0, 0);
 	if (tctx) {
@@ -366,7 +368,14 @@ void BPF_STRUCT_OPS(kairos_stopping, struct task_struct *p, bool runnable)
 		 * sleep) and stopping(p, true) when it is put back while still
 		 * runnable (slice expired or preempted).
 		 */
+		was_batch = is_batch(tctx);
 		tctx->vol = ewma(tctx->vol, runnable ? 0 : 1024, class_shift);
+		if (is_batch(tctx) != was_batch) {
+			stat_inc(was_batch ? STAT_FROM_BATCH : STAT_TO_BATCH);
+			if (trace_class)
+				bpf_printk("kairos class: pid=%d comm=%s batch=%d",
+					   p->pid, p->comm, !was_batch);
+		}
 	}
 
 	cctx = lookup_cpu_ctx(scx_bpf_task_cpu(p));
