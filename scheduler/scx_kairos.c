@@ -48,6 +48,11 @@ const char help_fmt[] =
 "      --batch-min-run-us N  a task is batch once it has run N us of CPU\n"
 "                          since it last slept (default 20000)\n"
 "  -s, --stats FILE        also write the per-second stats to FILE as CSV\n"
+"      --diag FILE         count every wait for a CPU and every run, per task\n"
+"                          group, and write them per second to FILE as CSV\n"
+"      --diag-comm LIST    task groups for --diag: up to 5 comma-separated\n"
+"                          task-name prefixes, e.g. grpcserver,zstd; all\n"
+"                          other tasks form the group \"other\"\n"
 "  -t, --trace             bpf_printk every enqueue (read trace_pipe)\n"
 "      --trace-class       bpf_printk every batch class change\n"
 "  -v, --verbose           print libbpf debug messages\n"
@@ -69,6 +74,8 @@ enum {
 	OPT_HOLD,
 	OPT_HOLD_MAX,
 	OPT_SIGNAL_CPUS,
+	OPT_DIAG,
+	OPT_DIAG_COMM,
 };
 
 static const struct option long_opts[] = {
@@ -91,6 +98,8 @@ static const struct option long_opts[] = {
 	{ "batch-min-run-us", required_argument, NULL, OPT_BATCH_MIN_RUN },
 	{ "trace-class",     no_argument,       NULL, OPT_TRACE_CLASS },
 	{ "stats",           required_argument, NULL, 's' },
+	{ "diag",            required_argument, NULL, OPT_DIAG },
+	{ "diag-comm",       required_argument, NULL, OPT_DIAG_COMM },
 	{ "trace",           no_argument,       NULL, 't' },
 	{ "verbose",         no_argument,       NULL, 'v' },
 	{ "help",            no_argument,       NULL, 'h' },
@@ -196,6 +205,100 @@ static long procs_running(void)
 	return n;
 }
 
+/*
+ * Split a comma-separated list of task-name prefixes into the BPF side's
+ * diag_comm slots and names[] (for the CSV), or exit.
+ */
+static void parse_diag_comm(struct scx_kairos *skel, const char *s,
+			    char names[DIAG_GROUPS][DIAG_COMM_LEN])
+{
+	int g = 0;
+
+	while (*s) {
+		size_t n = strcspn(s, ",");
+
+		if (!n || n >= DIAG_COMM_LEN || g >= DIAG_NAMED) {
+			fprintf(stderr, "--diag-comm takes 1-%d names of 1-%d characters\n",
+				DIAG_NAMED, DIAG_COMM_LEN - 1);
+			exit(1);
+		}
+		memcpy(names[g], s, n);
+		names[g][n] = '\0';
+		/* rodata strings are volatile chars: copy byte by byte */
+		for (size_t i = 0; i <= n; i++)
+			skel->rodata->diag_comm[g][i] = names[g][i];
+		g++;
+		s += n + (s[n] == ',');
+	}
+}
+
+/* Sum the per-CPU diagnostics counters. Every field is a __u64. */
+static void read_diag(struct scx_kairos *skel, struct diag *sum)
+{
+	int nr_cpus = libbpf_num_possible_cpus();
+	struct diag vals[nr_cpus];
+	__u32 zero = 0;
+	size_t n = sizeof(*sum) / sizeof(__u64);
+
+	memset(sum, 0, sizeof(*sum));
+	if (bpf_map_lookup_elem(bpf_map__fd(skel->maps.diag_map), &zero, vals) < 0)
+		return;
+	for (int cpu = 0; cpu < nr_cpus; cpu++)
+		for (size_t i = 0; i < n; i++)
+			((__u64 *)sum)[i] += ((__u64 *)&vals[cpu])[i];
+}
+
+static const char *ready_names[KAIROS_NR_READY] = {
+	[READY_WAKEUP] = "wakeup",
+	[READY_PREEMPTED] = "preempted",
+	[READY_SLICE_END] = "slice_end",
+	[READY_OTHER] = "other",
+};
+
+/*
+ * One row per second per group and kind of wait: the number of waits that
+ * ended in that second, their total in ms and their count per bucket. One
+ * more row per group with kind "run": count = times it started running,
+ * ms = CPU time, buckets 0.
+ */
+static void write_diag_header(FILE *f)
+{
+	static const unsigned bounds[] = { DIAG_BOUNDS_US };
+
+	fputs("unix_s,group,kind,count,ms", f);
+	for (int b = 0; b < DIAG_BUCKETS - 1; b++)
+		fprintf(f, ",lt%uus", bounds[b]);
+	fprintf(f, ",ge%uus\n", bounds[DIAG_BUCKETS - 2]);
+}
+
+static void write_diag(FILE *f, double t, const struct diag *cur, const struct diag *prev,
+		       char names[DIAG_GROUPS][DIAG_COMM_LEN])
+{
+	for (int g = 0; g < DIAG_GROUPS; g++) {
+		const struct diag_group *c = &cur->g[g], *p = &prev->g[g];
+
+		if (!names[g][0])
+			continue;	/* unused slot */
+		for (int k = 0; k < KAIROS_NR_READY; k++) {
+			__u64 cnt = 0;
+
+			for (int b = 0; b < DIAG_BUCKETS; b++)
+				cnt += c->waits[k][b] - p->waits[k][b];
+			fprintf(f, "%.3f,%s,%s,%llu,%.3f", t, names[g], ready_names[k],
+				(unsigned long long)cnt, (c->wait_ns[k] - p->wait_ns[k]) / 1e6);
+			for (int b = 0; b < DIAG_BUCKETS; b++)
+				fprintf(f, ",%llu", (unsigned long long)(c->waits[k][b] - p->waits[k][b]));
+			fputc('\n', f);
+		}
+		fprintf(f, "%.3f,%s,run,%llu,%.3f", t, names[g],
+			(unsigned long long)(c->runs - p->runs), (c->run_ns - p->run_ns) / 1e6);
+		for (int b = 0; b < DIAG_BUCKETS; b++)
+			fputs(",0", f);
+		fputc('\n', f);
+	}
+	fflush(f);
+}
+
 static const char csv_header[] =
 	"unix_s,local,global,preempt,preempt_batch,no_victim,to_batch,from_batch,"
 	"nr_runnable,procs_running,"
@@ -206,8 +309,10 @@ int main(int argc, char **argv)
 {
 	struct scx_kairos *skel;
 	struct bpf_link *link;
-	const char *stats_path = NULL;
-	FILE *csv = NULL;
+	const char *stats_path = NULL, *diag_path = NULL;
+	FILE *csv = NULL, *diag_csv = NULL;
+	/* group names for the diagnostics CSV; the last is everything else */
+	char diag_names[DIAG_GROUPS][DIAG_COMM_LEN] = {};
 	int opt;
 	__u64 ecode;
 
@@ -285,6 +390,13 @@ restart:
 		case 's':
 			stats_path = optarg;
 			break;
+		case OPT_DIAG:
+			skel->rodata->diag = true;
+			diag_path = optarg;
+			break;
+		case OPT_DIAG_COMM:
+			parse_diag_comm(skel, optarg, diag_names);
+			break;
 		case 't':
 			skel->rodata->trace_enqueue = true;
 			break;
@@ -309,6 +421,8 @@ restart:
 		return 1;
 	}
 
+	strcpy(diag_names[DIAG_NAMED], "other");
+
 	SCX_OPS_LOAD(skel, kairos_ops, scx_kairos, uei);
 	link = SCX_OPS_ATTACH(skel, kairos_ops, scx_kairos);
 
@@ -319,6 +433,15 @@ restart:
 			exit_req = 1;
 		} else {
 			fputs(csv_header, csv);
+		}
+	}
+	if (diag_path && !diag_csv) {
+		diag_csv = fopen(diag_path, "w");
+		if (!diag_csv) {
+			perror(diag_path);
+			exit_req = 1;
+		} else {
+			write_diag_header(diag_csv);
 		}
 	}
 	printf("mode=%s lat_slice_us=%llu batch_slice_us=%llu timer_us=%llu "
@@ -339,10 +462,12 @@ restart:
 	       (unsigned long long)skel->rodata->signal_cpus);
 
 	__u64 prev[KAIROS_NR_STATS] = {};
+	struct diag diag_prev, diag_cur;
 	/* previous values of the bss counters, for per-second deltas */
 	__u64 prev_lw = skel->bss->lat_wakeups, prev_ll = skel->bss->lat_late;
 	__u64 prev_sw = skel->bss->nr_mode_switches, prev_lat_ns = skel->bss->mode_ns[MODE_LATENCY];
 	read_stats(skel, prev);
+	read_diag(skel, &diag_prev);
 	while (!exit_req && !UEI_EXITED(skel, uei)) {
 		__u64 stats[KAIROS_NR_STATS], d[KAIROS_NR_STATS];
 		struct timespec ts;
@@ -395,6 +520,13 @@ restart:
 				lw - prev_lw, ll - prev_ll, late_frac, sw - prev_sw, lat_ms);
 			fflush(csv);
 		}
+		if (diag_csv) {
+			clock_gettime(CLOCK_REALTIME, &ts);
+			read_diag(skel, &diag_cur);
+			write_diag(diag_csv, ts.tv_sec + ts.tv_nsec / 1e9, &diag_cur, &diag_prev,
+				   diag_names);
+			diag_prev = diag_cur;
+		}
 		prev_lw = lw;
 		prev_ll = ll;
 		prev_sw = sw;
@@ -409,5 +541,7 @@ restart:
 		goto restart;
 	if (csv)
 		fclose(csv);
+	if (diag_csv)
+		fclose(diag_csv);
 	return 0;
 }

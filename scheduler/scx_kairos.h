@@ -33,4 +33,35 @@ enum kairos_stat {
 	KAIROS_NR_STATS,	/* not NR_STATS: vmlinux.h has one */
 };
 
+/* Why a task was waiting for a CPU. */
+enum kairos_ready {
+	READY_WAKEUP,		/* woken up (SCX_ENQ_WAKEUP) */
+	READY_PREEMPTED,	/* put back before its slice ran out */
+	READY_SLICE_END,	/* put back when its slice ran out */
+	READY_OTHER,		/* runnable some other way (e.g. a new task) */
+	KAIROS_NR_READY,
+};
+
+/*
+ * Diagnostics (--diag): every wait for a CPU and every run, per task group.
+ * Groups are task-name (comm) prefixes from --diag-comm, plus one for all
+ * other tasks. Waits are counted in buckets by length; the bounds are in us.
+ */
+#define DIAG_NAMED	5			/* groups named by --diag-comm */
+#define DIAG_GROUPS	(DIAG_NAMED + 1)	/* + everything else */
+#define DIAG_BOUNDS_US	50, 200, 1000, 2000, 5000, 10000, 20000
+#define DIAG_BUCKETS	8			/* one more than the bounds */
+#define DIAG_COMM_LEN	16			/* the kernel's TASK_COMM_LEN */
+
+struct diag_group {
+	__u64 waits[KAIROS_NR_READY][DIAG_BUCKETS];
+	__u64 wait_ns[KAIROS_NR_READY];
+	__u64 runs;		/* times it started running */
+	__u64 run_ns;		/* CPU time */
+};
+
+struct diag {
+	struct diag_group g[DIAG_GROUPS];
+};
+
 #endif /* __SCX_KAIROS_H */

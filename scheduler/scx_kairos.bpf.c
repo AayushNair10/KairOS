@@ -28,6 +28,9 @@
  *   to sleep is "batch". With --victim batch, LATENCY mode only preempts
  *   CPUs running a batch task, so request threads are not preempted in the
  *   middle of a request (E1b, 6.4).
+ * - Diagnostics (--diag): every wait for a CPU, by why the task was waiting
+ *   (woken, preempted, slice ran out) and by task group (task-name
+ *   prefixes), to see which waits the wakeup-only latency signal misses.
  *
  * The vtime parts are scx_simple's: Copyright (c) 2022 Meta Platforms, Inc.
  * and affiliates; Tejun Heo <tj@kernel.org>; David Vernet <dvernet@meta.com>.
@@ -83,6 +86,10 @@ const volatile u32 late_shift = 6;
 const volatile u64 hold_min_ns = 200000000;	/* LATENCY at least this long */
 const volatile u64 hold_max_ns = 5000000000;
 const volatile u64 signal_cpus = ~0ULL;
+/* Diagnostics: per-group wait and run counters (struct diag). */
+const volatile bool diag;
+/* Group i is the tasks whose name starts with diag_comm[i]; "" = unused. */
+const volatile char diag_comm[DIAG_NAMED][DIAG_COMM_LEN];
 
 UEI_DEFINE(uei);
 
@@ -121,12 +128,21 @@ struct {
 	__uint(max_entries, KAIROS_NR_STATS);
 } stats SEC(".maps");
 
+struct {
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, u32);
+	__type(value, struct diag);
+} diag_map SEC(".maps");
+
 /* Per task: timestamps for wait time and run-time charging; class. */
 struct task_ctx {
 	u64 ready_at;	/* when it last became ready to run; 0: not waiting */
 	u64 running_at;	/* when it last started running; 0: not running */
 	u64 run_since_sleep;	/* CPU time run since it last slept */
-	bool woken;		/* waiting after a wakeup (not a requeue) */
+	u64 slice_at_run;	/* its slice when it last started running */
+	u8 ready_kind;		/* why it is waiting (enum kairos_ready) */
+	u8 group;		/* diagnostics group, set in running() */
 };
 
 struct {
@@ -255,6 +271,55 @@ static s32 pick_victim(struct task_struct *p, u64 vtime, bool *batch)
 	return best;
 }
 
+/*
+ * Diagnostics group of @p: the first --diag-comm prefix its name starts
+ * with, else DIAG_NAMED ("other"). p->comm is copied to the stack first:
+ * the verifier only allows constant offsets into a task_struct, but a
+ * bounded variable index into a stack buffer.
+ */
+static u32 comm_group(const struct task_struct *p)
+{
+	char comm[DIAG_COMM_LEN];
+	u32 g, i;
+
+	__builtin_memcpy(comm, p->comm, sizeof(comm));
+	for (g = 0; g < DIAG_NAMED; g++) {
+		if (!diag_comm[g][0])
+			break;	/* the loader fills the names from slot 0 */
+		for (i = 0; i < DIAG_COMM_LEN; i++) {
+			if (!diag_comm[g][i])
+				return g;	/* the whole prefix matched */
+			if (comm[i] != diag_comm[g][i])
+				break;
+		}
+	}
+	return DIAG_NAMED;
+}
+
+static const u64 diag_bounds_us[DIAG_BUCKETS - 1] = { DIAG_BOUNDS_US };
+
+/* Index of the bucket for a wait of @ns: the first bound it is below. */
+static u32 diag_bucket(u64 ns)
+{
+	u32 i;
+
+	for (i = 0; i < DIAG_BUCKETS - 1; i++)
+		if (ns < diag_bounds_us[i] * 1000)
+			break;
+	return i;
+}
+
+/* This CPU's counters for group @g, or NULL. */
+static struct diag_group *diag_group(u32 g)
+{
+	u32 zero = 0;
+	struct diag *d = bpf_map_lookup_elem(&diag_map, &zero);
+
+	if (!d || g >= DIAG_GROUPS)	/* the check keeps the verifier happy */
+		return NULL;
+	return &d->g[g];
+}
+
 static void record_wait(u64 ns)
 {
 	__sync_fetch_and_add(&wait_sum_ns, ns);
@@ -339,7 +404,7 @@ void BPF_STRUCT_OPS(kairos_runnable, struct task_struct *p, u64 enq_flags)
 	tctx = bpf_task_storage_get(&task_ctxs, p, 0, 0);
 	if (tctx) {
 		tctx->ready_at = scx_bpf_now();
-		tctx->woken = enq_flags & SCX_ENQ_WAKEUP;
+		tctx->ready_kind = enq_flags & SCX_ENQ_WAKEUP ? READY_WAKEUP : READY_OTHER;
 	}
 }
 
@@ -367,20 +432,33 @@ void BPF_STRUCT_OPS(kairos_running, struct task_struct *p)
 
 	tctx = bpf_task_storage_get(&task_ctxs, p, 0, 0);
 	if (tctx) {
+		struct diag_group *dg = NULL;
+
+		if (diag) {
+			tctx->group = comm_group(p);
+			dg = diag_group(tctx->group);
+			if (dg)
+				dg->runs++;
+		}
 		/* scx_bpf_now() may differ slightly between CPUs; skip if negative */
 		if (tctx->ready_at && time_after(now, tctx->ready_at)) {
 			u64 wait = now - tctx->ready_at;
+			u32 kind = tctx->ready_kind;
 
 			record_wait(wait);
-			if (tctx->woken && cpu < 64 && (signal_cpus >> cpu) & 1) {
+			if (kind == READY_WAKEUP && cpu < 64 && (signal_cpus >> cpu) & 1) {
 				__sync_fetch_and_add(&lat_wakeups, 1);
 				if (wait > lat_target_ns)
 					__sync_fetch_and_add(&lat_late, 1);
 			}
+			if (dg && kind < KAIROS_NR_READY) {
+				dg->waits[kind][diag_bucket(wait)]++;
+				dg->wait_ns[kind] += wait;
+			}
 		}
 		tctx->ready_at = 0;
-		tctx->woken = false;
 		tctx->running_at = now;
+		tctx->slice_at_run = p->scx.slice;
 	}
 
 	cctx = lookup_cpu_ctx(cpu);
@@ -407,9 +485,26 @@ void BPF_STRUCT_OPS(kairos_stopping, struct task_struct *p, bool runnable)
 			ran = now - tctx->running_at;
 		p->scx.dsq_vtime += ran * 100 / p->scx.weight;
 		tctx->running_at = 0;
-		/* Still runnable (slice used up or preempted): waiting again. */
-		if (runnable)
+		/*
+		 * Still runnable (slice used up or preempted): waiting again.
+		 * The slice counts down with the time the task runs, so it ran
+		 * out if the task ran at least as long as the slice it started
+		 * with. Shorter means it was preempted: by us (SCX_ENQ_PREEMPT
+		 * sets its slice to 0) or by a higher scheduling class. A
+		 * slice the kernel refilled while the task kept running counts
+		 * as ran out.
+		 */
+		if (runnable) {
 			tctx->ready_at = now;
+			tctx->ready_kind = ran >= tctx->slice_at_run ?
+					   READY_SLICE_END : READY_PREEMPTED;
+		}
+		if (diag) {
+			struct diag_group *dg = diag_group(tctx->group);
+
+			if (dg)
+				dg->run_ns += ran;
+		}
 		/*
 		 * Classification. The kernel calls stopping(p, false) when the
 		 * running task is dequeued (it blocked or went to sleep), which

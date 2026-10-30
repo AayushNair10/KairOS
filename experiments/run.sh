@@ -17,6 +17,10 @@
 #   proc_stat_before/after  /proc/stat around the load (CPU time, ctx switches)
 #   procs_before/after   every process's /proc/<pid>/stat around the load, to
 #                        see what else used CPU (e.g. the VS Code server)
+#   diag.csv             with DIAG_COMM set, kairos runs only: per second,
+#                        every wait for a CPU and every run by task group
+#                        (scx_kairos --diag); the server then also logs Go's
+#                        goroutine scheduling latencies ("schedlat" lines)
 #
 # CPU pinning: the server and batch jobs run on SUT_CPUS and the load
 # generator on LOADGEN_CPUS (default 0-2 and 3), so the load generator doesn't
@@ -68,6 +72,10 @@ SERVER_GODEBUG=${SERVER_GODEBUG-gctrace=1}
 # at once; the others wait inside the Go runtime, asleep, where the kernel
 # scheduler doesn't see them.
 SERVER_GOMAXPROCS=${SERVER_GOMAXPROCS:-0}
+# Diagnostics: task-name prefixes for scx_kairos --diag-comm (up to 5,
+# comma-separated); empty = off. The server names its worker threads
+# "grpcworker"; its other threads keep "grpcserver".
+DIAG_COMM=${DIAG_COMM:-}
 
 BIN=$ROOT/workloads/bin
 # Command prefixes for pinning. taskset execs the command, so $! after
@@ -124,6 +132,7 @@ start_sched() {
 		local opts=${1#kairos}
 		opts=${opts#:}
 		opts=${opts//,/ }
+		[ -n "$DIAG_COMM" ] && opts+=" --diag $2/diag.csv --diag-comm $DIAG_COMM"
 		# $opts is unquoted on purpose: it may hold several options.
 		sudo "$ROOT/scheduler/scx_kairos" $opts --stats "$2/sched_stats.csv" \
 			> "$2/sched.log" 2>&1 &
@@ -203,7 +212,8 @@ run_one() {
 	"$ROOT/scripts/meta.sh" "$dir" "$entry" "$WORKLOAD" > /dev/null
 
 	GODEBUG=$SERVER_GODEBUG "${SUT_PIN[@]}" "$BIN/grpcserver" -addr "$ADDR" -workers "$WORKERS" -work-us "$WORK_US" \
-		-iters-per-us "$ITERS_PER_US" -gomaxprocs "$SERVER_GOMAXPROCS" > "$dir/server.log" 2>&1 &
+		-iters-per-us "$ITERS_PER_US" -gomaxprocs "$SERVER_GOMAXPROCS" \
+		${DIAG_COMM:+-schedlat} > "$dir/server.log" 2>&1 &
 	SERVER_PID=$!
 	start_batch "$dir"
 	sleep "$BATCH_WARMUP_S" # let the batch jobs reach a steady state
@@ -244,7 +254,7 @@ WORKLOAD+=" batch_input=$(basename "$BATCH_INPUT") zstd_level=$ZSTD_LEVEL"
 WORKLOAD+=" batch_warmup_s=$BATCH_WARMUP_S"
 WORKLOAD+=" sut_cpus=${SUT_CPUS:-all} loadgen_cpus=${LOADGEN_CPUS:-all}"
 WORKLOAD+=" loadgen_gomaxprocs=$LOADGEN_GOMAXPROCS server_godebug=$SERVER_GODEBUG"
-WORKLOAD+=" server_gomaxprocs=$SERVER_GOMAXPROCS"
+WORKLOAD+=" server_gomaxprocs=$SERVER_GOMAXPROCS diag_comm=${DIAG_COMM:-off}"
 
 OUT=$ROOT/results/$(date +%F)-$NAME
 [ -e "$OUT" ] && OUT=$OUT-$(date +%H%M%S) # never overwrite earlier raw data

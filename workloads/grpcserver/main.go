@@ -24,10 +24,15 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"runtime/metrics"
+	"sort"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
+	"unsafe"
 
+	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
 
 	pb "github.com/AayushNair10/KairOS/workloads/kairospb"
@@ -40,6 +45,7 @@ var (
 	itersPerUs = flag.Float64("iters-per-us", 0, "work-loop iterations per µs; 0 = calibrate at startup")
 	gomaxprocs = flag.Int("gomaxprocs", 0, "GOMAXPROCS; 0 = Go's default (number of CPUs)")
 	calibrate  = flag.Bool("calibrate", false, "print the measured iterations per µs and exit")
+	schedlat   = flag.Bool("schedlat", false, "log Go's goroutine scheduling latencies every second")
 )
 
 // sink receives the result of every spin() call, so the compiler can't
@@ -92,6 +98,7 @@ func worker(jobs <-chan *job) {
 	// queue is empty the thread sleeps in the kernel (futex), and the
 	// kernel wakes it when a job arrives.
 	runtime.LockOSThread()
+	nameThread("grpcworker")
 	for j := range jobs {
 		start := time.Now()
 		sink.Add(spin(j.iters))
@@ -100,6 +107,59 @@ func worker(jobs <-chan *job) {
 			queueNs:   uint64(start.Sub(j.received)),
 			serviceNs: uint64(end.Sub(start)),
 		}
+	}
+}
+
+// nameThread sets the calling OS thread's name (its comm in the kernel),
+// so a scheduler can tell worker threads from the gRPC and Go runtime
+// threads, which keep the process name. The caller must be locked to its
+// thread. The main thread is left alone: its name is the process's name.
+func nameThread(name string) {
+	if unix.Gettid() == unix.Getpid() {
+		log.Printf("a worker runs on the main thread; not renamed")
+		return
+	}
+	b, err := unix.BytePtrFromString(name)
+	if err == nil {
+		err = unix.Prctl(unix.PR_SET_NAME, uintptr(unsafe.Pointer(b)), 0, 0, 0)
+	}
+	if err != nil {
+		log.Printf("naming worker thread: %v", err)
+	}
+}
+
+// schedLatBoundsUs are the bucket bounds for logSchedLatency, the same as
+// scx_kairos's --diag buckets (DIAG_BOUNDS_US).
+var schedLatBoundsUs = []float64{50, 200, 1000, 2000, 5000, 10000, 20000}
+
+// logSchedLatency logs, every second, how long goroutines waited to run
+// after becoming runnable in that second: Go's /sched/latencies histogram,
+// summed into schedLatBoundsUs buckets ("schedlat unix_ns=<now>
+// counts=<lt50us>,...,<ge20000us>"). This is queueing inside the Go
+// runtime, which the kernel can't see (a goroutine waits for a Go
+// "processor"), plus the kernel wait of the thread that runs it. Go's own
+// buckets are placed by their lower edge; they are much finer than these.
+func logSchedLatency() {
+	s := []metrics.Sample{{Name: "/sched/latencies:seconds"}}
+	var prev []uint64
+	for range time.Tick(time.Second) {
+		metrics.Read(s)
+		h := s[0].Value.Float64Histogram()
+		out := make([]uint64, len(schedLatBoundsUs)+1)
+		for i, c := range h.Counts {
+			if i < len(prev) {
+				c -= prev[i]
+			}
+			lowUs := h.Buckets[i] * 1e6 // -Inf for the first bucket
+			k := sort.Search(len(schedLatBoundsUs), func(j int) bool { return schedLatBoundsUs[j] > lowUs })
+			out[k] += c
+		}
+		prev = append(prev[:0], h.Counts...)
+		parts := make([]string, len(out))
+		for i, c := range out {
+			parts[i] = fmt.Sprint(c)
+		}
+		log.Printf("schedlat unix_ns=%d counts=%s", time.Now().UnixNano(), strings.Join(parts, ","))
 	}
 }
 
@@ -158,6 +218,9 @@ func main() {
 	}
 	for i := 0; i < *workers; i++ {
 		go worker(s.jobs)
+	}
+	if *schedlat {
+		go logSchedLatency()
 	}
 
 	lis, err := net.Listen("tcp", *addr)
