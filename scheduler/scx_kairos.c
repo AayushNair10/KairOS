@@ -31,6 +31,7 @@ const char help_fmt[] =
 "  -a, --adaptive          switch between the modes against a latency target:\n"
 "      --lat-target-us N   a woken task that waits longer is late (default 1000)\n"
 "      --late-pct N        BATCH -> LATENCY above N%% late wakeups (default 5)\n"
+"      --late-shift N      late share EWMA weight 1/2^N per tick (default 6)\n"
 "      --hold-ms N         stay in LATENCY at least N ms before trying BATCH\n"
 "                          again (default 200; doubles after a failed try)\n"
 "      --hold-max-ms N     longest hold (default 5000)\n"
@@ -64,6 +65,7 @@ enum {
 	OPT_TRACE_CLASS,
 	OPT_LAT_TARGET,
 	OPT_LATE_PCT,
+	OPT_LATE_SHIFT,
 	OPT_HOLD,
 	OPT_HOLD_MAX,
 	OPT_SIGNAL_CPUS,
@@ -75,6 +77,7 @@ static const struct option long_opts[] = {
 	{ "adaptive",        no_argument,       NULL, 'a' },
 	{ "lat-target-us",   required_argument, NULL, OPT_LAT_TARGET },
 	{ "late-pct",        required_argument, NULL, OPT_LATE_PCT },
+	{ "late-shift",      required_argument, NULL, OPT_LATE_SHIFT },
 	{ "hold-ms",         required_argument, NULL, OPT_HOLD },
 	{ "hold-max-ms",     required_argument, NULL, OPT_HOLD_MAX },
 	{ "signal-cpus",     required_argument, NULL, OPT_SIGNAL_CPUS },
@@ -233,6 +236,9 @@ restart:
 			/* percent -> x1024, the fixed point late_frac uses */
 			skel->rodata->late_max = parse_num("late-pct", optarg) * 1024 / 100;
 			break;
+		case OPT_LATE_SHIFT:
+			skel->rodata->late_shift = parse_num("late-shift", optarg);
+			break;
 		case OPT_HOLD:
 			skel->rodata->hold_min_ns = parse_num("hold-ms", optarg) * 1000000;
 			break;
@@ -291,8 +297,10 @@ restart:
 		}
 	}
 	if (skel->rodata->fast_shift > 16 || skel->rodata->slow_shift > 16 ||
-	    !skel->rodata->timer_interval_ns) {
-		fprintf(stderr, "shifts must be <= 16 and the timer period > 0\n");
+	    skel->rodata->late_shift > 10 || !skel->rodata->timer_interval_ns) {
+		/* late_shift > 10 would round a 1024 sample's step to 0 */
+		fprintf(stderr, "fast/slow shifts must be <= 16, --late-shift <= 10, "
+			"and the timer period > 0\n");
 		return 1;
 	}
 	if (skel->rodata->late_max > 1024 || !skel->rodata->hold_min_ns ||

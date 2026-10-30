@@ -73,6 +73,13 @@ const volatile u64 batch_min_run_ns = 20000000;
 const volatile bool adaptive;
 const volatile u64 lat_target_ns = 1000000;
 const volatile u64 late_max = 51;		/* x1024, i.e. 5% */
+/*
+ * late_frac's weight per timer tick is 1/2^late_shift: with 6 and a 1 ms
+ * tick it averages over ~64 ms. At 1/8 (~8 ms, 50-100 wakeups) a few
+ * unlucky ticks crossed 5% while whole seconds stayed below 1% (E2 pilot,
+ * RESEARCH_LOG 6.8).
+ */
+const volatile u32 late_shift = 6;
 const volatile u64 hold_min_ns = 200000000;	/* LATENCY at least this long */
 const volatile u64 hold_max_ns = 5000000000;
 const volatile u64 signal_cpus = ~0ULL;
@@ -494,7 +501,7 @@ static int kairos_timerfn(void *map, int *key, struct bpf_timer *timer)
 		mode_ns[mode & 1] += dt;
 		if (lw > last_lat_wakeups)
 			late_frac = ewma(late_frac, (ll - last_lat_late) * 1024 /
-					 (lw - last_lat_wakeups), fast_shift);
+					 (lw - last_lat_wakeups), late_shift);
 		last_lat_wakeups = lw;
 		last_lat_late = ll;
 		if (adaptive)
