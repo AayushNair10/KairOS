@@ -123,12 +123,13 @@ def sched_stats(run_dir, start_ns, end_ns):
     if not rows:
         return None
     mean = lambda k: sum(float(r[k]) for r in rows) / len(rows)  # noqa: E731
-    # Newer columns (preempt_batch, to_batch, from_batch) are missing in
-    # older runs.
+    # Newer columns (preempt_batch, to_batch, from_batch, the latency-target
+    # columns) are missing in older runs.
     return {k: mean(k) for k in ("nr_runnable", "fast_load", "slow_load", "wake_rate",
                                  "wait_avg_us", "wait_max_us", "preempt", "preempt_batch",
                                  "to_batch", "from_batch", "local", "global",
-                                 "no_victim") if k in rows[0]}
+                                 "no_victim", "lat_wakeups", "lat_late", "late_frac",
+                                 "mode_switches", "latency_ms") if k in rows[0]}
 
 
 def latency_with_failures(run_dir, nphases):

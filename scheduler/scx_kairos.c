@@ -20,7 +20,7 @@
 #include "scx_kairos.bpf.skel.h"
 
 const char help_fmt[] =
-"KairOS: load-adaptive wakeup preemption (phase 4: forced modes only).\n"
+"KairOS: load-adaptive wakeup preemption.\n"
 "\n"
 "See the top-level comment in scx_kairos.bpf.c for more details.\n"
 "\n"
@@ -28,6 +28,14 @@ const char help_fmt[] =
 "\n"
 "  -n, --never-preempt     BATCH mode: woken tasks never preempt (default)\n"
 "  -p, --force-preempt     LATENCY mode: woken tasks preempt a busy CPU\n"
+"  -a, --adaptive          switch between the modes against a latency target:\n"
+"      --lat-target-us N   a woken task that waits longer is late (default 1000)\n"
+"      --late-pct N        BATCH -> LATENCY above N%% late wakeups (default 5)\n"
+"      --hold-ms N         stay in LATENCY at least N ms before trying BATCH\n"
+"                          again (default 200; doubles after a failed try)\n"
+"      --hold-max-ms N     longest hold (default 5000)\n"
+"      --signal-cpus LIST  only wakeups on these CPUs count, e.g. 0-2\n"
+"                          (default all)\n"
 "      --lat-slice-us N    slice in LATENCY mode (default 3000)\n"
 "      --batch-slice-us N  slice in BATCH mode (default 20000)\n"
 "      --sleep-credit-us N vtime credit kept by a sleeping task (default 20000)\n"
@@ -54,11 +62,22 @@ enum {
 	OPT_VICTIM,
 	OPT_BATCH_MIN_RUN,
 	OPT_TRACE_CLASS,
+	OPT_LAT_TARGET,
+	OPT_LATE_PCT,
+	OPT_HOLD,
+	OPT_HOLD_MAX,
+	OPT_SIGNAL_CPUS,
 };
 
 static const struct option long_opts[] = {
 	{ "never-preempt",   no_argument,       NULL, 'n' },
 	{ "force-preempt",   no_argument,       NULL, 'p' },
+	{ "adaptive",        no_argument,       NULL, 'a' },
+	{ "lat-target-us",   required_argument, NULL, OPT_LAT_TARGET },
+	{ "late-pct",        required_argument, NULL, OPT_LATE_PCT },
+	{ "hold-ms",         required_argument, NULL, OPT_HOLD },
+	{ "hold-max-ms",     required_argument, NULL, OPT_HOLD_MAX },
+	{ "signal-cpus",     required_argument, NULL, OPT_SIGNAL_CPUS },
 	{ "lat-slice-us",    required_argument, NULL, OPT_LAT_SLICE },
 	{ "batch-slice-us",  required_argument, NULL, OPT_BATCH_SLICE },
 	{ "sleep-credit-us", required_argument, NULL, OPT_SLEEP_CREDIT },
@@ -103,6 +122,41 @@ static unsigned long long parse_num(const char *name, const char *s)
 	return v;
 }
 
+/* Parse a CPU list such as "0-2" or "0,2-3" into a bitmask, or exit. */
+static unsigned long long parse_cpus(const char *s)
+{
+	unsigned long long mask = 0;
+	const char *q = s;
+
+	while (*q) {
+		char *end;
+		unsigned long a = strtoul(q, &end, 10), b = a;
+
+		if (end == q)
+			goto bad;
+		if (*end == '-') {
+			q = end + 1;
+			b = strtoul(q, &end, 10);
+			if (end == q)
+				goto bad;
+		}
+		if (a > b || b >= KAIROS_MAX_CPUS)
+			goto bad;
+		for (; a <= b; a++)
+			mask |= 1ULL << a;
+		if (*end == ',')
+			end++;
+		else if (*end)
+			goto bad;
+		q = end;
+	}
+	if (mask)
+		return mask;
+bad:
+	fprintf(stderr, "invalid CPU list for --signal-cpus: %s\n", s);
+	exit(1);
+}
+
 /* Sum each event counter over the CPUs. */
 static void read_stats(struct scx_kairos *skel, __u64 *stats)
 {
@@ -142,7 +196,8 @@ static long procs_running(void)
 static const char csv_header[] =
 	"unix_s,local,global,preempt,preempt_batch,no_victim,to_batch,from_batch,"
 	"nr_runnable,procs_running,"
-	"fast_load,slow_load,wake_rate,wait_avg_us,wait_max_us,mode,timer_ticks\n";
+	"fast_load,slow_load,wake_rate,wait_avg_us,wait_max_us,mode,timer_ticks,"
+	"lat_wakeups,lat_late,late_frac,mode_switches,latency_ms\n";
 
 int main(int argc, char **argv)
 {
@@ -160,13 +215,32 @@ restart:
 	optind = 1;
 	skel = SCX_OPS_OPEN(kairos_ops, scx_kairos);
 
-	while ((opt = getopt_long(argc, argv, "nps:tvh", long_opts, NULL)) != -1) {
+	while ((opt = getopt_long(argc, argv, "apns:tvh", long_opts, NULL)) != -1) {
 		switch (opt) {
 		case 'n':
 			skel->rodata->forced_mode = MODE_BATCH;
 			break;
 		case 'p':
 			skel->rodata->forced_mode = MODE_LATENCY;
+			break;
+		case 'a':
+			skel->rodata->adaptive = true;
+			break;
+		case OPT_LAT_TARGET:
+			skel->rodata->lat_target_ns = parse_num("lat-target-us", optarg) * 1000;
+			break;
+		case OPT_LATE_PCT:
+			/* percent -> x1024, the fixed point late_frac uses */
+			skel->rodata->late_max = parse_num("late-pct", optarg) * 1024 / 100;
+			break;
+		case OPT_HOLD:
+			skel->rodata->hold_min_ns = parse_num("hold-ms", optarg) * 1000000;
+			break;
+		case OPT_HOLD_MAX:
+			skel->rodata->hold_max_ns = parse_num("hold-max-ms", optarg) * 1000000;
+			break;
+		case OPT_SIGNAL_CPUS:
+			skel->rodata->signal_cpus = parse_cpus(optarg);
 			break;
 		case OPT_LAT_SLICE:
 			skel->rodata->lat_slice_ns = parse_num("lat-slice-us", optarg) * 1000;
@@ -221,6 +295,11 @@ restart:
 		fprintf(stderr, "shifts must be <= 16 and the timer period > 0\n");
 		return 1;
 	}
+	if (skel->rodata->late_max > 1024 || !skel->rodata->hold_min_ns ||
+	    skel->rodata->hold_min_ns > skel->rodata->hold_max_ns) {
+		fprintf(stderr, "--late-pct must be <= 100 and 0 < --hold-ms <= --hold-max-ms\n");
+		return 1;
+	}
 
 	SCX_OPS_LOAD(skel, kairos_ops, scx_kairos, uei);
 	link = SCX_OPS_ATTACH(skel, kairos_ops, scx_kairos);
@@ -235,21 +314,32 @@ restart:
 		}
 	}
 	printf("mode=%s lat_slice_us=%llu batch_slice_us=%llu timer_us=%llu "
-	       "fast_shift=%u slow_shift=%u victim=%s batch_min_run_us=%llu\n",
+	       "fast_shift=%u slow_shift=%u victim=%s batch_min_run_us=%llu "
+	       "lat_target_us=%llu late_max=%llu/1024 hold_ms=%llu-%llu signal_cpus=0x%llx\n",
+	       skel->rodata->adaptive ? "adaptive" :
 	       skel->rodata->forced_mode == MODE_LATENCY ? "latency" : "batch",
 	       (unsigned long long)skel->rodata->lat_slice_ns / 1000,
 	       (unsigned long long)skel->rodata->batch_slice_ns / 1000,
 	       (unsigned long long)skel->rodata->timer_interval_ns / 1000,
 	       skel->rodata->fast_shift, skel->rodata->slow_shift,
 	       skel->rodata->victim_batch_only ? "batch" : "any",
-	       (unsigned long long)skel->rodata->batch_min_run_ns / 1000);
+	       (unsigned long long)skel->rodata->batch_min_run_ns / 1000,
+	       (unsigned long long)skel->rodata->lat_target_ns / 1000,
+	       (unsigned long long)skel->rodata->late_max,
+	       (unsigned long long)skel->rodata->hold_min_ns / 1000000,
+	       (unsigned long long)skel->rodata->hold_max_ns / 1000000,
+	       (unsigned long long)skel->rodata->signal_cpus);
 
 	__u64 prev[KAIROS_NR_STATS] = {};
+	/* previous values of the bss counters, for per-second deltas */
+	__u64 prev_lw = skel->bss->lat_wakeups, prev_ll = skel->bss->lat_late;
+	__u64 prev_sw = skel->bss->nr_mode_switches, prev_lat_ns = skel->bss->mode_ns[MODE_LATENCY];
 	read_stats(skel, prev);
 	while (!exit_req && !UEI_EXITED(skel, uei)) {
 		__u64 stats[KAIROS_NR_STATS], d[KAIROS_NR_STATS];
 		struct timespec ts;
-		double fast, slow, wait_avg_us, wait_max_us;
+		double fast, slow, wait_avg_us, wait_max_us, late_frac, lat_ms;
+		__u64 lw, ll, sw, lat_ns;
 		int i;
 
 		sleep(1);
@@ -264,6 +354,12 @@ restart:
 		fast = skel->bss->fast_load / 1024.0;
 		slow = skel->bss->slow_load / 1024.0;
 		wait_avg_us = skel->bss->wait_avg_ns / 1000.0;
+		late_frac = skel->bss->late_frac / 1024.0;
+		lw = skel->bss->lat_wakeups;
+		ll = skel->bss->lat_late;
+		sw = skel->bss->nr_mode_switches;
+		lat_ns = skel->bss->mode_ns[MODE_LATENCY];
+		lat_ms = (lat_ns - prev_lat_ns) / 1e6;	/* of the last second */
 
 		printf("local=%llu global=%llu preempt=%llu (batch %llu) no_victim=%llu "
 		       "class +%llu -%llu runnable=%lld (kernel %ld) load fast=%.2f slow=%.2f "
@@ -272,21 +368,29 @@ restart:
 		       d[STAT_NO_VICTIM], d[STAT_TO_BATCH], d[STAT_FROM_BATCH],
 		       (long long)skel->bss->nr_runnable, procs_running(), fast, slow,
 		       (unsigned long long)skel->bss->wake_rate, wait_avg_us, wait_max_us);
+		printf("  mode=%s late %llu/%llu (ewma %.1f%%) switches=%llu latency_ms=%.0f\n",
+		       skel->bss->mode == MODE_LATENCY ? "latency" : "batch",
+		       ll - prev_ll, lw - prev_lw, 100 * late_frac, sw - prev_sw, lat_ms);
 		fflush(stdout);
 
 		if (csv) {
 			clock_gettime(CLOCK_REALTIME, &ts);
 			fprintf(csv, "%.3f,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%lld,%ld,%.3f,%.3f,%llu,"
-				"%.1f,%.1f,%u,%llu\n",
+				"%.1f,%.1f,%u,%llu,%llu,%llu,%.4f,%llu,%.1f\n",
 				ts.tv_sec + ts.tv_nsec / 1e9, d[STAT_LOCAL], d[STAT_GLOBAL],
 				d[STAT_PREEMPT], d[STAT_PREEMPT_BATCH], d[STAT_NO_VICTIM],
 				d[STAT_TO_BATCH], d[STAT_FROM_BATCH],
 				(long long)skel->bss->nr_runnable, procs_running(), fast, slow,
 				(unsigned long long)skel->bss->wake_rate, wait_avg_us,
 				wait_max_us, skel->bss->mode,
-				(unsigned long long)skel->bss->nr_timer_ticks);
+				(unsigned long long)skel->bss->nr_timer_ticks,
+				lw - prev_lw, ll - prev_ll, late_frac, sw - prev_sw, lat_ms);
 			fflush(csv);
 		}
+		prev_lw = lw;
+		prev_ll = ll;
+		prev_sw = sw;
+		prev_lat_ns = lat_ns;
 	}
 
 	bpf_link__destroy(link);

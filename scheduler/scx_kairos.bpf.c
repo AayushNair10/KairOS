@@ -2,20 +2,24 @@
 /*
  * scx_kairos (KairOS): load-adaptive wakeup preemption.
  *
- * Phase 4. Built on scx_simple's policy (Linux v7.0 tools/sched_ext): one
- * shared queue ordered by weighted vtime, and a woken task that finds an idle
- * CPU goes straight to it. Added so far:
+ * Built on scx_simple's policy (Linux v7.0 tools/sched_ext): one shared
+ * queue ordered by weighted vtime, and a woken task that finds an idle CPU
+ * goes straight to it. Added so far:
  *
  * - A load signal. The number of runnable tasks, the wakeup count and the
  *   time tasks wait between becoming ready and running are counted in the
  *   callbacks; a periodic BPF timer turns them into EWMAs (fast and slow
  *   load, wakeup rate, mean wait). User space only reads them.
- * - Two modes from the same code (RESEARCH_LOG section 3.2), fixed for now by
- *   the loader's --never-preempt / --force-preempt:
+ * - Two modes from the same code (RESEARCH_LOG section 3.2):
  *     BATCH:   a woken task that finds no idle CPU waits in the shared queue
  *              (scx_simple's behaviour); long slices.
  *     LATENCY: it preempts a busy CPU instead (pick_victim()); short slices.
- *   Phase 5 will switch between them from the load signal.
+ *   Fixed by --never-preempt / --force-preempt, or, with --adaptive,
+ *   switched by the timer against a latency target (update_mode()): woken
+ *   tasks that waited longer than lat_target_ns are "late"; too many late
+ *   wakeups in BATCH mode switch to LATENCY at once, and LATENCY mode tries
+ *   BATCH again only after a hold time that doubles each time BATCH fails
+ *   quickly (RESEARCH_LOG section 3.4, revised 2026-10-30).
  * - Run time is charged from timestamps (running -> stopping) instead of the
  *   slice left over, which missed time when the kernel refilled the slice of
  *   a task that kept running (RESEARCH_LOG section 4).
@@ -60,6 +64,18 @@ const volatile bool victim_batch_only;
  * busy request threads batch under overload: RESEARCH_LOG 6.5, 6.6.)
  */
 const volatile u64 batch_min_run_ns = 20000000;
+/*
+ * Adaptive mode switching (--adaptive). A wakeup is "late" if the woken task
+ * waited longer than lat_target_ns for a CPU. late_frac is an EWMA of the
+ * late share of wakeups, x1024. Only tasks on signal_cpus count (bit i =
+ * CPU i), so e.g. a load generator on its own CPU doesn't drive the mode.
+ */
+const volatile bool adaptive;
+const volatile u64 lat_target_ns = 1000000;
+const volatile u64 late_max = 51;		/* x1024, i.e. 5% */
+const volatile u64 hold_min_ns = 200000000;	/* LATENCY at least this long */
+const volatile u64 hold_max_ns = 5000000000;
+const volatile u64 signal_cpus = ~0ULL;
 
 UEI_DEFINE(uei);
 
@@ -83,6 +99,13 @@ u64 fast_load, slow_load;
 u64 wake_rate;		/* wakeups per second */
 u64 wait_avg_ns;	/* mean wait per timer period */
 u64 nr_timer_ticks;
+/* Latency signal (atomic adds in running()) and mode state (timer only). */
+u64 lat_wakeups, lat_late;	/* cumulative, signal CPUs only */
+u64 late_frac;			/* EWMA of late share, x1024 */
+u64 nr_mode_switches;
+u64 mode_ns[2];			/* time spent in each mode */
+u64 hold_ns;			/* current LATENCY hold before trying BATCH */
+static u64 mode_since;
 
 struct {
 	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
@@ -96,6 +119,7 @@ struct task_ctx {
 	u64 ready_at;	/* when it last became ready to run; 0: not waiting */
 	u64 running_at;	/* when it last started running; 0: not running */
 	u64 run_since_sleep;	/* CPU time run since it last slept */
+	bool woken;		/* waiting after a wakeup (not a requeue) */
 };
 
 struct {
@@ -306,8 +330,10 @@ void BPF_STRUCT_OPS(kairos_runnable, struct task_struct *p, u64 enq_flags)
 		__sync_fetch_and_add(&nr_wakeups, 1);
 
 	tctx = bpf_task_storage_get(&task_ctxs, p, 0, 0);
-	if (tctx)
+	if (tctx) {
 		tctx->ready_at = scx_bpf_now();
+		tctx->woken = enq_flags & SCX_ENQ_WAKEUP;
+	}
 }
 
 void BPF_STRUCT_OPS(kairos_quiescent, struct task_struct *p, u64 deq_flags)
@@ -317,6 +343,8 @@ void BPF_STRUCT_OPS(kairos_quiescent, struct task_struct *p, u64 deq_flags)
 
 void BPF_STRUCT_OPS(kairos_running, struct task_struct *p)
 {
+	/* running() may be called from another CPU; use the task's CPU */
+	s32 cpu = scx_bpf_task_cpu(p);
 	u64 now = scx_bpf_now();
 	struct task_ctx *tctx;
 	struct cpu_ctx *cctx;
@@ -333,14 +361,22 @@ void BPF_STRUCT_OPS(kairos_running, struct task_struct *p)
 	tctx = bpf_task_storage_get(&task_ctxs, p, 0, 0);
 	if (tctx) {
 		/* scx_bpf_now() may differ slightly between CPUs; skip if negative */
-		if (tctx->ready_at && time_after(now, tctx->ready_at))
-			record_wait(now - tctx->ready_at);
+		if (tctx->ready_at && time_after(now, tctx->ready_at)) {
+			u64 wait = now - tctx->ready_at;
+
+			record_wait(wait);
+			if (tctx->woken && cpu < 64 && (signal_cpus >> cpu) & 1) {
+				__sync_fetch_and_add(&lat_wakeups, 1);
+				if (wait > lat_target_ns)
+					__sync_fetch_and_add(&lat_late, 1);
+			}
+		}
 		tctx->ready_at = 0;
+		tctx->woken = false;
 		tctx->running_at = now;
 	}
 
-	/* running() may be called from another CPU; use the task's CPU */
-	cctx = lookup_cpu_ctx(scx_bpf_task_cpu(p));
+	cctx = lookup_cpu_ctx(cpu);
 	if (cctx) {
 		cctx->vtime = p->scx.dsq_vtime;
 		cctx->weight = p->scx.weight;
@@ -403,6 +439,39 @@ s32 BPF_STRUCT_OPS(kairos_init_task, struct task_struct *p,
 }
 
 static u64 last_tick_at, last_wakeups, last_wait_sum, last_wait_cnt;
+static u64 last_lat_wakeups, last_lat_late;
+
+static void set_mode(u32 m, u64 now)
+{
+	mode = m;
+	mode_since = now;
+	nr_mode_switches++;
+}
+
+/*
+ * Adaptive switching against the latency target. Fast exit: in BATCH mode,
+ * too many late wakeups switch to LATENCY on the next tick. Cautious entry:
+ * LATENCY mode tries BATCH again only after hold_ns, and only if wakeups
+ * are on time. If BATCH then fails within hold_ns, the hold doubles (up to
+ * hold_max_ns), so a steadily loaded system doesn't keep probing; a BATCH
+ * stint that lasts resets it.
+ */
+static void update_mode(u64 now)
+{
+	if (!mode_since)
+		mode_since = now;
+	if (mode == MODE_BATCH) {
+		if (late_frac > late_max) {
+			if (now - mode_since < hold_ns)
+				hold_ns = hold_ns * 2 < hold_max_ns ? hold_ns * 2 : hold_max_ns;
+			else
+				hold_ns = hold_min_ns;
+			set_mode(MODE_LATENCY, now);
+		}
+	} else if (now - mode_since >= hold_ns && late_frac <= late_max / 2) {
+		set_mode(MODE_BATCH, now);
+	}
+}
 
 /*
  * Every timer_interval_ns: sample the counters and update the EWMAs. Runs
@@ -420,6 +489,16 @@ static int kairos_timerfn(void *map, int *key, struct bpf_timer *timer)
 	if (last_tick_at && time_after(now, last_tick_at)) {
 		u64 dt = now - last_tick_at, w = nr_wakeups;
 		u64 sum = wait_sum_ns, cnt = wait_cnt;
+		u64 lw = lat_wakeups, ll = lat_late;
+
+		mode_ns[mode & 1] += dt;
+		if (lw > last_lat_wakeups)
+			late_frac = ewma(late_frac, (ll - last_lat_late) * 1024 /
+					 (lw - last_lat_wakeups), fast_shift);
+		last_lat_wakeups = lw;
+		last_lat_late = ll;
+		if (adaptive)
+			update_mode(now);
 
 		wake_rate = ewma(wake_rate, (w - last_wakeups) * 1000000000 / dt, fast_shift);
 		if (cnt > last_wait_cnt)
@@ -447,7 +526,9 @@ s32 BPF_STRUCT_OPS_SLEEPABLE(kairos_init)
 		scx_bpf_error("%u CPUs, at most %d supported", nr_cpus, KAIROS_MAX_CPUS);
 		return -E2BIG;
 	}
-	mode = forced_mode;
+	/* adaptive starts in LATENCY mode, the safe one for latency */
+	mode = adaptive ? MODE_LATENCY : forced_mode;
+	hold_ns = hold_min_ns;
 
 	ret = scx_bpf_create_dsq(SHARED_DSQ, -1);
 	if (ret) {
