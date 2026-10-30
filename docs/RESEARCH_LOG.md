@@ -421,6 +421,7 @@ together with `meta.json` (git commit, kernel, VM config, parameters).
 | N3 | 2026-10-29 | ce5a697 | eevdf | `noise-batch.conf` again, server GC logged | 10 | `results/2026-10-29-noise-batch-164528/` | p99 @3000 median 38 ms, range 11–1238; episodes not explained by GC |
 | E1p | 2026-10-29 | bd50425 + uncommitted config | eevdf, never, always | `e1-pilot.conf`: 8 s each at 500/1000/2000/3000/4000 req/s; 500 µs work; 4 zstd | 1 | `results/2026-10-29-e1-pilot/` | Pilot. EEVDF run invalid (memory pressure from the VS Code C/C++ extension: kswapd 35%, kcompactd 20% CPU; calibration 868 instead of ~1000) |
 | E1 | 2026-10-29 | 5ec281d | eevdf, never (20 ms slice), never3 (3 ms slice), always (3 ms) | `e1.conf`: as the pilot | 10 | `results/2026-10-29-e1/` | No latency crossover over 500–3000 req/s: always has the lowest p50 everywhere; p99 always ≈ never3; never (long slices) gives more batch throughput at 2000–3000 req/s (section 6.2) |
+| E1bp | 2026-10-29 | 2d885f7 | eevdf, never, always | `e1b-pilot.conf` (no batch, GOMAXPROCS 3), `e1b-pilot-gmp16.conf` (no batch, GOMAXPROCS 16), `e1b-pilot-z2.conf` (2 zstd, GOMAXPROCS 3); 500 µs; 8 s steps 1000–6000 req/s | 1 | `results/2026-10-29-e1b-pilot{,-gmp16,-z2}/` | Pilot. Load generator keeps up to 6000 req/s; with GOMAXPROCS 3 the kernel sees ≤ ~1 runnable per CPU without batch; with 16 up to 4.7 (section 6.3). EEVDF-gmp16 and always-z2 runs disturbed (memory pressure; VS Code `node` 32%) |
 
 ### 5.1 Planned experiments
 | # | Experiment | Pattern | Shows |
@@ -532,6 +533,32 @@ Scheduler signals from 500 to 3000 req/s (median over reps, computed from
 2.15→2.30 never3, 1.48→2.17 always; wakeups/s (all tasks) 8.8k→16.8k
 never, 12.1k→20.2k never3, 22.8k→38.2k always.
 
+### 6.3 E1b pilot: request threads competing (2026-10-29)
+One run per configuration, so tails are anecdotes (section 6.1); only the
+loads, the load generator's capacity and large effects count. 500 µs per
+request, 8 s per rate, server on CPUs 0–2, load generator on CPU 3.
+Load = slow EWMA of runnable tasks per CPU (4 CPUs).
+- Load generator: 26–61% of CPU 3; send lag p99 ≤ 17 ms whenever the
+  server keeps up, up to 6000 req/s. It reaches seconds only once the
+  server is overloaded (guess: HTTP/2 flow control stops sends while the
+  server doesn't read).
+- No batch, GOMAXPROCS 3: load 0.4 → 1.0 (never) / 0.4 → 1.1 (always)
+  from 1000 to 4000 req/s. Every configuration is overloaded at 5000
+  (p50 > 0.7 s). At 4000: never p50/p99 0.8/32 ms, always 29/1159 ms,
+  EEVDF 1307/3461 ms (one run each).
+- No batch, GOMAXPROCS 16: load at 1000/2000/3000/4000/5000 req/s
+  0.5/0.7/1.3/4.3/4.1 (never), 0.4/0.8/2.2/2.7/4.2 (always). never and always sustain 5000 without errors
+  (p50 4.2 / 6.0 ms), all are overloaded at 6000. p99 never vs always:
+  3 vs 5 ms at 2000, 24 vs 564 at 3000, 2048 vs 182 at 4000, 373 vs 99 at
+  5000. GC ran about twice as often (cycle 50 at 11–12 s vs 20–21 s with
+  GOMAXPROCS 3); heap goal 4 MB in both. The EEVDF run is disturbed
+  (kswapd + kcompactd 17%, other processes 49% of a CPU) and failed from
+  4000.
+- 2 zstd, GOMAXPROCS 3: batch 637 (never) vs 309 MB/s (always) at
+  1000 req/s; zstd passes took 0.24 s vs 0.44 s (median). always had the
+  lower p50 at 2000–4000 req/s (1.0 vs 2.3, 1.2 vs 4.4, 3.6 vs 10.4 ms);
+  p99 mixed. VS Code's `node` used 32% of a CPU during the always run.
+
 ---
 
 ## 7. Explanations and insights
@@ -600,6 +627,26 @@ E1 (section 6.2):
   zstd makes that more likely than our 20 ms sleeper credit. Check with
   E2's EEVDF baseline and `perf sched`/runqlat before claiming it.
 
+E1b pilot (section 6.3):
+- The Go runtime is a second scheduler in front of ours. With GOMAXPROCS
+  equal to the CPU count (3), at most 3 workers run Go code; the rest
+  sleep inside the runtime waiting for a P, invisible to the kernel. So
+  without batch the kernel never holds a queue of request threads, the
+  wakeup-preemption choice has little to act on, and overload shows up as
+  Go-level queueing (all configurations fail at 5000 req/s). This also
+  explains part of E1's missing crossover: latency threads could not
+  oversubscribe the CPUs among themselves (guess for E1; measured here).
+- GOMAXPROCS 16 makes the workers' competition visible (load up to 4.7)
+  and raised the sustainable rate from ~4000 to 5000 req/s. It is a
+  realistic setting: Go before 1.25 ignored container CPU limits, and
+  thread-pool servers in other languages expose every thread to the
+  kernel. Whether never or always wins there is not settled by one run
+  each (opposite winners at 3000 and 4000–5000 req/s).
+- With 2 zstd, always-preempt halved zstd's throughput at 1000 req/s
+  (20k preemptions/s against 2 jobs). Guess: with one CPU left for the
+  service, every wakeup that finds the service's CPU busy preempts a zstd
+  job, i.e. every ~100 µs per job.
+
 ---
 
 ## 8. Limitations
@@ -648,6 +695,8 @@ E1 (section 6.2):
   jobs), (b) when the CPUs are full of latency-sensitive threads (no batch,
   more workers or shorter requests), or (c) only as a trade-off, i.e.
   never-preempt's batch gain while p99 stays under a target?
+  → E1b pilot (section 6.3): (b) needs GOMAXPROCS above the CPU count,
+  else Go hides the queue from the kernel. E1b proper still to run.
 - Why does EEVDF collapse at 2000 req/s in E1 while our modes don't?
 - Which preemption mechanism is most reliable?
 - Can wakers be identified reliably, including interrupt-driven wakeups?
@@ -1040,3 +1089,22 @@ E1b.
 **Next:** E1b (no batch, more workers or shorter requests; plus 1–2 zstd
 jobs), then decide between the original hypothesis and the trade-off
 framing (section 9).
+
+### 2026-10-29 — E1b pilot: request threads competing
+**Did:** Added `SERVER_GOMAXPROCS` to `run.sh`. Ran three one-rep pilots
+(eevdf, never, always): no batch with GOMAXPROCS 3 and 16, and 2 zstd with
+GOMAXPROCS 3, rates up to 6000 req/s (2d885f7).
+**Found:** Section 6.3. The load generator keeps up to 6000 req/s. Without
+batch and with GOMAXPROCS 3, load stays ≤ ~1.1 per CPU and the server
+saturates near 4000–5000 req/s; with GOMAXPROCS 16, load reaches 4.7 and
+the server sustains 5000. With 2 zstd, always-preempt halved batch
+throughput at 1000 req/s.
+**Interpretation:** Go's own scheduler hid the request queue from the
+kernel in E1 and in the default no-batch setup (section 7). E1b must use
+GOMAXPROCS above the CPU count to test request-vs-request preemption.
+**Decisions:** Proposed E1b: no batch, GOMAXPROCS 16, eevdf / never /
+never3 / always, 1000–5000 req/s, 10 reps (~50 min). Waiting for the IDE
+to be idle before running it.
+**Problems:** Two pilot runs disturbed (memory pressure in EEVDF-gmp16;
+VS Code `node` at 32% of a CPU in always-z2).
+**Next:** Run E1b; then choose the phase 5 switch signal and framing.
