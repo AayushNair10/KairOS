@@ -34,6 +34,11 @@ const char help_fmt[] =
 "      --timer-us N        load-signal timer period (default 1000)\n"
 "      --fast-shift N      fast EWMA weight 1/2^N per timer tick (default 3)\n"
 "      --slow-shift N      slow EWMA weight 1/2^N per timer tick (default 6)\n"
+"      --victim any|batch  which running tasks LATENCY mode may preempt: any,\n"
+"                          or only those classified batch (default any)\n"
+"      --batch-vol-max N   a task is batch while its EWMA of voluntary stops\n"
+"                          per stop (x1024) is below N (default 512)\n"
+"      --class-shift N     that EWMA's weight 1/2^N per stop (default 3)\n"
 "  -s, --stats FILE        also write the per-second stats to FILE as CSV\n"
 "  -t, --trace             bpf_printk every enqueue (read trace_pipe)\n"
 "  -v, --verbose           print libbpf debug messages\n"
@@ -46,6 +51,9 @@ enum {
 	OPT_TIMER,
 	OPT_FAST_SHIFT,
 	OPT_SLOW_SHIFT,
+	OPT_VICTIM,
+	OPT_BATCH_VOL_MAX,
+	OPT_CLASS_SHIFT,
 };
 
 static const struct option long_opts[] = {
@@ -57,6 +65,9 @@ static const struct option long_opts[] = {
 	{ "timer-us",        required_argument, NULL, OPT_TIMER },
 	{ "fast-shift",      required_argument, NULL, OPT_FAST_SHIFT },
 	{ "slow-shift",      required_argument, NULL, OPT_SLOW_SHIFT },
+	{ "victim",          required_argument, NULL, OPT_VICTIM },
+	{ "batch-vol-max",   required_argument, NULL, OPT_BATCH_VOL_MAX },
+	{ "class-shift",     required_argument, NULL, OPT_CLASS_SHIFT },
 	{ "stats",           required_argument, NULL, 's' },
 	{ "trace",           no_argument,       NULL, 't' },
 	{ "verbose",         no_argument,       NULL, 'v' },
@@ -129,7 +140,7 @@ static long procs_running(void)
 }
 
 static const char csv_header[] =
-	"unix_s,local,global,preempt,no_victim,nr_runnable,procs_running,"
+	"unix_s,local,global,preempt,preempt_batch,no_victim,nr_runnable,procs_running,"
 	"fast_load,slow_load,wake_rate,wait_avg_us,wait_max_us,mode,timer_ticks\n";
 
 int main(int argc, char **argv)
@@ -174,6 +185,22 @@ restart:
 		case OPT_SLOW_SHIFT:
 			skel->rodata->slow_shift = parse_num("slow-shift", optarg);
 			break;
+		case OPT_VICTIM:
+			if (!strcmp(optarg, "any")) {
+				skel->rodata->victim_batch_only = false;
+			} else if (!strcmp(optarg, "batch")) {
+				skel->rodata->victim_batch_only = true;
+			} else {
+				fprintf(stderr, "--victim must be 'any' or 'batch'\n");
+				return 1;
+			}
+			break;
+		case OPT_BATCH_VOL_MAX:
+			skel->rodata->batch_vol_max = parse_num("batch-vol-max", optarg);
+			break;
+		case OPT_CLASS_SHIFT:
+			skel->rodata->class_shift = parse_num("class-shift", optarg);
+			break;
 		case 's':
 			stats_path = optarg;
 			break;
@@ -189,8 +216,11 @@ restart:
 		}
 	}
 	if (skel->rodata->fast_shift > 16 || skel->rodata->slow_shift > 16 ||
+	    skel->rodata->class_shift > 10 || skel->rodata->batch_vol_max > 1024 ||
 	    !skel->rodata->timer_interval_ns) {
-		fprintf(stderr, "shifts must be <= 16 and the timer period > 0\n");
+		/* class_shift > 10 would make the 1024 sample's step 0 */
+		fprintf(stderr, "fast/slow shifts must be <= 16, the class shift <= 10, "
+			"batch-vol-max <= 1024 and the timer period > 0\n");
 		return 1;
 	}
 
@@ -207,12 +237,14 @@ restart:
 		}
 	}
 	printf("mode=%s lat_slice_us=%llu batch_slice_us=%llu timer_us=%llu "
-	       "fast_shift=%u slow_shift=%u\n",
+	       "fast_shift=%u slow_shift=%u victim=%s batch_vol_max=%u class_shift=%u\n",
 	       skel->rodata->forced_mode == MODE_LATENCY ? "latency" : "batch",
 	       (unsigned long long)skel->rodata->lat_slice_ns / 1000,
 	       (unsigned long long)skel->rodata->batch_slice_ns / 1000,
 	       (unsigned long long)skel->rodata->timer_interval_ns / 1000,
-	       skel->rodata->fast_shift, skel->rodata->slow_shift);
+	       skel->rodata->fast_shift, skel->rodata->slow_shift,
+	       skel->rodata->victim_batch_only ? "batch" : "any",
+	       skel->rodata->batch_vol_max, skel->rodata->class_shift);
 
 	__u64 prev[KAIROS_NR_STATS] = {};
 	read_stats(skel, prev);
@@ -235,19 +267,20 @@ restart:
 		slow = skel->bss->slow_load / 1024.0;
 		wait_avg_us = skel->bss->wait_avg_ns / 1000.0;
 
-		printf("local=%llu global=%llu preempt=%llu no_victim=%llu runnable=%lld "
-		       "(kernel %ld) load fast=%.2f slow=%.2f wakeups/s=%llu wait avg=%.0fus "
-		       "max=%.0fus\n",
-		       d[STAT_LOCAL], d[STAT_GLOBAL], d[STAT_PREEMPT], d[STAT_NO_VICTIM],
+		printf("local=%llu global=%llu preempt=%llu (batch %llu) no_victim=%llu "
+		       "runnable=%lld (kernel %ld) load fast=%.2f slow=%.2f wakeups/s=%llu "
+		       "wait avg=%.0fus max=%.0fus\n",
+		       d[STAT_LOCAL], d[STAT_GLOBAL], d[STAT_PREEMPT], d[STAT_PREEMPT_BATCH],
+		       d[STAT_NO_VICTIM],
 		       (long long)skel->bss->nr_runnable, procs_running(), fast, slow,
 		       (unsigned long long)skel->bss->wake_rate, wait_avg_us, wait_max_us);
 		fflush(stdout);
 
 		if (csv) {
 			clock_gettime(CLOCK_REALTIME, &ts);
-			fprintf(csv, "%.3f,%llu,%llu,%llu,%llu,%lld,%ld,%.3f,%.3f,%llu,%.1f,%.1f,%u,%llu\n",
+			fprintf(csv, "%.3f,%llu,%llu,%llu,%llu,%llu,%lld,%ld,%.3f,%.3f,%llu,%.1f,%.1f,%u,%llu\n",
 				ts.tv_sec + ts.tv_nsec / 1e9, d[STAT_LOCAL], d[STAT_GLOBAL],
-				d[STAT_PREEMPT], d[STAT_NO_VICTIM],
+				d[STAT_PREEMPT], d[STAT_PREEMPT_BATCH], d[STAT_NO_VICTIM],
 				(long long)skel->bss->nr_runnable, procs_running(), fast, slow,
 				(unsigned long long)skel->bss->wake_rate, wait_avg_us,
 				wait_max_us, skel->bss->mode,

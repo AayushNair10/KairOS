@@ -19,6 +19,11 @@
  * - Run time is charged from timestamps (running -> stopping) instead of the
  *   slice left over, which missed time when the kernel refilled the slice of
  *   a task that kept running (RESEARCH_LOG section 4).
+ * - A first piece of task classification (Feature A, RESEARCH_LOG 3.5): a
+ *   task that mostly stops because its slice ran out or it was preempted,
+ *   rather than because it went to sleep, is "batch". With --victim batch,
+ *   LATENCY mode only preempts CPUs running a batch task, so request
+ *   threads are not preempted in the middle of a request (E1b, 6.4).
  *
  * The vtime parts are scx_simple's: Copyright (c) 2022 Meta Platforms, Inc.
  * and affiliates; Tejun Heo <tj@kernel.org>; David Vernet <dvernet@meta.com>.
@@ -42,6 +47,17 @@ const volatile u64 sleep_credit_ns = 20000000;
 const volatile u64 timer_interval_ns = 1000000;
 const volatile u32 fast_shift = 3;	/* EWMA weight 1/8 per timer tick */
 const volatile u32 slow_shift = 6;	/* EWMA weight 1/64 per timer tick */
+/* LATENCY mode preempts only CPUs whose current task is classified batch. */
+const volatile bool victim_batch_only;
+/*
+ * Batch classification: per task, an EWMA (weight 1/2^class_shift per stop)
+ * of the fraction of its stops that were voluntary (it slept), x1024. The
+ * task is batch while that is below batch_vol_max. It starts at 1024, so a
+ * new task needs about 6 involuntary stops in a row to become batch (with
+ * shift 3: 1024 * (7/8)^6 = 460 < 512).
+ */
+const volatile u32 class_shift = 3;
+const volatile u32 batch_vol_max = 512;
 
 UEI_DEFINE(uei);
 
@@ -73,10 +89,11 @@ struct {
 	__uint(max_entries, KAIROS_NR_STATS);
 } stats SEC(".maps");
 
-/* Per task: timestamps for wait time and run-time charging. */
+/* Per task: timestamps for wait time and run-time charging; class. */
 struct task_ctx {
 	u64 ready_at;	/* when it last became ready to run; 0: not waiting */
 	u64 running_at;	/* when it last started running; 0: not running */
+	u64 vol;	/* EWMA of voluntary stops per stop, x1024 */
 };
 
 struct {
@@ -95,6 +112,7 @@ struct cpu_ctx {
 	u64 running_at;	/* 0: nothing of ours running */
 	u64 vtime;	/* current task's vtime when it started */
 	u64 weight;	/* current task's weight (nice 0 = 100) */
+	bool batch;	/* current task classified batch when it started */
 };
 
 struct {
@@ -134,6 +152,17 @@ static u64 cur_slice(void)
 	return mode == MODE_LATENCY ? lat_slice_ns : batch_slice_ns;
 }
 
+/* Integer EWMA: avg += (sample - avg) / 2^shift, without signed math. */
+static u64 ewma(u64 avg, u64 sample, u32 shift)
+{
+	return avg - (avg >> shift) + (sample >> shift);
+}
+
+static bool is_batch(const struct task_ctx *tctx)
+{
+	return tctx->vol < batch_vol_max;
+}
+
 /*
  * The vtime @p is queued with. scx_simple's rule: a task that slept doesn't
  * keep all the vtime it didn't use, only up to sleep_credit_ns of it.
@@ -152,9 +181,11 @@ static u64 queue_vtime(const struct task_struct *p)
  * preempt. Among the busy CPUs @p may run on, take the one whose current
  * task has the largest vtime, counting what it has run since it started,
  * and only if that is larger than @vtime: a woken task never preempts a
- * task that is behind it in its fair share. Returns -1 if there is none.
+ * task that is behind it in its fair share. With victim_batch_only, only
+ * CPUs running a batch task count. Returns -1 if there is none; sets
+ * *@batch to whether the chosen CPU's task is batch.
  */
-static s32 pick_victim(struct task_struct *p, u64 vtime)
+static s32 pick_victim(struct task_struct *p, u64 vtime, bool *batch)
 {
 	u64 now = scx_bpf_now(), best_vtime = vtime;
 	bool pinned_here = is_migration_disabled(p);
@@ -175,12 +206,15 @@ static s32 pick_victim(struct task_struct *p, u64 vtime)
 		cctx = lookup_cpu_ctx(cpu);
 		if (!cctx || !cctx->running_at || !cctx->weight)
 			continue;
+		if (victim_batch_only && !cctx->batch)
+			continue;
 		cur = cctx->vtime;
 		if (time_after(now, cctx->running_at))
 			cur += (now - cctx->running_at) * 100 / cctx->weight;
 		if (time_after(cur, best_vtime)) {
 			best_vtime = cur;
 			best = cpu;
+			*batch = cctx->batch;
 		}
 	}
 	return best;
@@ -229,10 +263,13 @@ void BPF_STRUCT_OPS(kairos_enqueue, struct task_struct *p, u64 enq_flags)
 	 * enqueue (with enq_flags 0) into the shared queue.
 	 */
 	if (mode == MODE_LATENCY && (enq_flags & SCX_ENQ_WAKEUP)) {
-		s32 cpu = pick_victim(p, vtime);
+		bool batch = false;
+		s32 cpu = pick_victim(p, vtime, &batch);
 
 		if (cpu >= 0) {
 			stat_inc(STAT_PREEMPT);
+			if (batch)
+				stat_inc(STAT_PREEMPT_BATCH);
 			/* the vtime insert below would apply the clamp; do it here */
 			p->scx.dsq_vtime = vtime;
 			scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, cur_slice(),
@@ -303,6 +340,7 @@ void BPF_STRUCT_OPS(kairos_running, struct task_struct *p)
 	if (cctx) {
 		cctx->vtime = p->scx.dsq_vtime;
 		cctx->weight = p->scx.weight;
+		cctx->batch = tctx && is_batch(tctx);
 		cctx->running_at = now;
 	}
 }
@@ -322,6 +360,13 @@ void BPF_STRUCT_OPS(kairos_stopping, struct task_struct *p, bool runnable)
 		/* Still runnable (slice used up or preempted): waiting again. */
 		if (runnable)
 			tctx->ready_at = now;
+		/*
+		 * Classification sample. The kernel calls stopping(p, false)
+		 * when the running task is dequeued (it blocked or went to
+		 * sleep) and stopping(p, true) when it is put back while still
+		 * runnable (slice expired or preempted).
+		 */
+		tctx->vol = ewma(tctx->vol, runnable ? 0 : 1024, class_shift);
 	}
 
 	cctx = lookup_cpu_ctx(scx_bpf_task_cpu(p));
@@ -337,15 +382,13 @@ void BPF_STRUCT_OPS(kairos_enable, struct task_struct *p)
 s32 BPF_STRUCT_OPS(kairos_init_task, struct task_struct *p,
 		   struct scx_init_task_args *args)
 {
-	if (!bpf_task_storage_get(&task_ctxs, p, 0, BPF_LOCAL_STORAGE_GET_F_CREATE))
-		return -ENOMEM;
-	return 0;
-}
+	struct task_ctx *tctx;
 
-/* Integer EWMA: avg += (sample - avg) / 2^shift, without signed math. */
-static u64 ewma(u64 avg, u64 sample, u32 shift)
-{
-	return avg - (avg >> shift) + (sample >> shift);
+	tctx = bpf_task_storage_get(&task_ctxs, p, 0, BPF_LOCAL_STORAGE_GET_F_CREATE);
+	if (!tctx)
+		return -ENOMEM;
+	tctx->vol = 1024;	/* not batch until it shows it */
+	return 0;
 }
 
 static u64 last_tick_at, last_wakeups, last_wait_sum, last_wait_cnt;

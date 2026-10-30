@@ -19,6 +19,7 @@ enum kairos_stat {
 	STAT_LOCAL,		/* woken task got an idle CPU in select_cpu */
 	STAT_GLOBAL,		/* task inserted into the shared queue */
 	STAT_PREEMPT,		/* woken task preempted a busy CPU */
+	STAT_PREEMPT_BATCH,	/* ... whose current task was classified batch */
 	STAT_NO_VICTIM,		/* LATENCY mode, no idle CPU and nothing to preempt */
 	KAIROS_NR_STATS,	/* not NR_STATS: vmlinux.h has one */
 };
