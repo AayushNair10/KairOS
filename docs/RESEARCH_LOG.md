@@ -422,6 +422,7 @@ together with `meta.json` (git commit, kernel, VM config, parameters).
 | E1p | 2026-10-29 | bd50425 + uncommitted config | eevdf, never, always | `e1-pilot.conf`: 8 s each at 500/1000/2000/3000/4000 req/s; 500 µs work; 4 zstd | 1 | `results/2026-10-29-e1-pilot/` | Pilot. EEVDF run invalid (memory pressure from the VS Code C/C++ extension: kswapd 35%, kcompactd 20% CPU; calibration 868 instead of ~1000) |
 | E1 | 2026-10-29 | 5ec281d | eevdf, never (20 ms slice), never3 (3 ms slice), always (3 ms) | `e1.conf`: as the pilot | 10 | `results/2026-10-29-e1/` | No latency crossover over 500–3000 req/s: always has the lowest p50 everywhere; p99 always ≈ never3; never (long slices) gives more batch throughput at 2000–3000 req/s (section 6.2) |
 | E1bp | 2026-10-29 | 2d885f7 | eevdf, never, always | `e1b-pilot.conf` (no batch, GOMAXPROCS 3), `e1b-pilot-gmp16.conf` (no batch, GOMAXPROCS 16), `e1b-pilot-z2.conf` (2 zstd, GOMAXPROCS 3); 500 µs; 8 s steps 1000–6000 req/s | 1 | `results/2026-10-29-e1b-pilot{,-gmp16,-z2}/` | Pilot. Load generator keeps up to 6000 req/s; with GOMAXPROCS 3 the kernel sees ≤ ~1 runnable per CPU without batch; with 16 up to 4.7 (section 6.3). EEVDF-gmp16 and always-z2 runs disturbed (memory pressure; VS Code `node` 32%) |
+| E1b | 2026-10-29 | 3a9b17e | eevdf, never, never3, always | `e1b.conf`: no batch, server GOMAXPROCS 16, 500 µs, 8 s steps 1000/2000/3000/3500/4000/4500/5000 req/s | 10 | `results/2026-10-29-e1b/` | No crossover: never3 ≥ always at every rate. always has the higher p50 in 10/10 reps at every rate (0.8 vs 0.7 ms at 1000, 4.1 vs 1.1 at 4000) because workers are preempted mid-request (section 6.4) |
 
 ### 5.1 Planned experiments
 | # | Experiment | Pattern | Shows |
@@ -559,6 +560,43 @@ Load = slow EWMA of runnable tasks per CPU (4 CPUs).
   lower p50 at 2000–4000 req/s (1.0 vs 2.3, 1.2 vs 4.4, 3.6 vs 10.4 ms);
   p99 mixed. VS Code's `node` used 32% of a CPU during the always run.
 
+### 6.4 E1b: request threads competing, no batch (2026-10-29)
+`results/2026-10-29-e1b/`, commit 3a9b17e, all 40 runs clean (other
+processes 5–7% of a CPU, median). No batch jobs; server GOMAXPROCS 16,
+16 workers, 500 µs per request, server on CPUs 0–2, load generator on
+CPU 3. Configurations as in E1. Medians over 10 reps; ms.
+
+| req/s | eevdf p50/p99 | never | never3 | always | load never3 / always | always preempt/s |
+|---|---|---|---|---|---|---|
+| 1000 | 0.8 / 3 | 0.7 / 8 | 0.7 / 2 | 0.8 / 5 | 0.40 / 0.44 | 6.7k |
+| 2000 | 0.8 / 22 | 0.7 / 18 | 0.7 / 13 | 0.8 / 6 | 0.73 / 0.80 | 18.0k |
+| 3000 | 1.0 / 31 | 0.8 / 34 | 0.8 / 23 | 1.1 / 47 | 1.23 / 1.71 | 32.8k |
+| 3500 | 1.3 / 14 | 0.9 / 53 | 0.9 / 8 | 2.4 / 81 | 1.49 / 2.52 | 42.7k |
+| 4000 | 1.7 / 33 | 1.1 / 60 | 1.1 / 39 | 4.1 / 58 | 1.97 / 3.44 | 47.1k |
+| 4500 | 2.2 / 19 | 1.7 / 92 | 1.8 / 172 | 5.0 / 32 | 2.65 / 3.85 | 40.5k |
+| 5000 | 4.2 / 129 | 4.1 / 282 | 2.6 / 70 | 12.7 / 257 | 3.16 / 4.20 | 25.0k |
+
+Paired counts at 1000 / 2000 / 3000 / 3500 / 4000 / 4500 / 5000 req/s:
+- p50 lower for always than never3: 0 of 10 at every rate; than never:
+  0 at every rate except 3 at 5000.
+- p99 lower for never3 than always: 5, 5, 6, 9, 7, 5, 7 of 10; never3 than
+  never: 7, 7, 7, 8, 5, 5, 8; never3 than EEVDF: 6, 5, 7, 9, 5, 4, 6.
+- p50 lower for never3 than EEVDF: 10 of 10 up to 4000, then 6 and 8.
+No failed requests in any run. Server-side medians (from the reply's
+queue and service times): queue time equal for never3 and always
+(≤ 0.04 ms up to 4000 req/s); service time (wall time of the 500 µs spin)
+never3 0.52–0.53 ms at every rate, always 0.56, 0.57, 0.75, 1.57, 2.58,
+2.57, 1.76 ms. Load generator send lag p99 (median): ≤ 2.4 ms for eevdf,
+never3 and always except never3 6.4 ms at 4500; never 4–26 ms from 2000.
+Whole run: context switches 93.8k/s always, 57–59k never/never3, 67.8k
+EEVDF; system time 12.6% always, 7.6–7.8% never/never3, 9.2% EEVDF.
+
+E1 rechecked the same way: server-side p50 (queue + service) at 500 req/s
+is 0.64–0.68 ms for never, never3 and always, while end-to-end p50 is
+5.1, 2.2 and 1.2 ms; median send lag ≤ 0.11 ms. Send lag p99 in E1 was
+24–60 ms for never, 6–32 ms for never3 and 6–8 ms for always at
+500–3000 req/s.
+
 ---
 
 ## 7. Explanations and insights
@@ -647,6 +685,44 @@ E1b pilot (section 6.3):
   service, every wakeup that finds the service's CPU busy preempts a zstd
   job, i.e. every ~100 µs per job.
 
+E1b (section 6.4):
+- Preempting request threads hurts, and the harm grows with load. With
+  only the server's threads competing, the woken task's victim (largest
+  vtime) is a worker in the middle of a request: always's service time
+  for 500 µs of work rises from 0.56 to 2.6 ms between 1000 and 4500
+  req/s, while never3's stays 0.53 (measured). Its p50 is higher in every
+  rep at every rate, and its p99 is worse than never3's at 3500, 4000 and
+  5000 req/s. This is the cost half of the hypothesis.
+- Still no crossover: at low load, preemption does not help when the only
+  possible victims are request threads (p99 ties, p50 0.05 ms worse at
+  1000 req/s). The benefit half of the hypothesis appeared only in E1,
+  where the victims were zstd jobs.
+- Together, E1 and E1b say the better fixed policy depends on who gets
+  preempted, not on the load level: preempting batch helps latency (E1),
+  preempting request threads hurts it (E1b). The current victim rule
+  can't tell them apart. Class-aware preemption (Feature A, section 3.5)
+  is therefore the main lever; a load switch alone would have to guess
+  the victim's class from the load.
+- always preempts 7–12 times per request (6.7k/s at 1000 req/s, 42.7k/s at
+  3500). Guess: most wakees are Go runtime threads (netpoller, spinning Ms
+  looking for work with 16 Ps), not request work, so many preemptions buy
+  nothing. A per-victim and per-wakee breakdown would check this.
+- E1 refined: there the server-side time was the same in all modes, so
+  always's lower p50 in E1 came from the request's path outside the
+  worker (gRPC handler and reply threads waiting behind zstd), not from
+  the worker itself.
+- The measured load again depends on the mode, now in the other
+  direction: always reads higher (3.44 vs 1.97 at 4000 req/s), since
+  preempted workers stay runnable longer.
+- Instrument caveat: the load generator is scheduled by the scheduler
+  under test (section 8). Under never (20 ms slices) its send lag p99 is
+  4–26 ms in E1b and 24–60 ms in E1, so never's tails include the
+  instrument's delay. Comparisons between always and never3 (both 3 ms)
+  are not affected this way in E1b, and its p50 result runs against the
+  lag bias (always has the lower lag).
+- EEVDF does not collapse in E1b; E1's collapse needs GOMAXPROCS 3 and/or
+  the zstd jobs (open, section 9).
+
 ---
 
 ## 8. Limitations
@@ -696,7 +772,12 @@ E1b pilot (section 6.3):
   more workers or shorter requests), or (c) only as a trade-off, i.e.
   never-preempt's batch gain while p99 stays under a target?
   → E1b pilot (section 6.3): (b) needs GOMAXPROCS above the CPU count,
-  else Go hides the queue from the kernel. E1b proper still to run.
+  else Go hides the queue from the kernel.
+  → E1b (section 6.4): no crossover either; never3 ≥ always at every
+  rate, and preempting request threads costs more as load rises. Open:
+  with batch and request threads mixed (2 zstd, GOMAXPROCS 16), does
+  plain always-preempt show a load crossover, and does preempting only
+  batch-class tasks beat both fixed modes at every load?
 - Why does EEVDF collapse at 2000 req/s in E1 while our modes don't?
 - Which preemption mechanism is most reliable?
 - Can wakers be identified reliably, including interrupt-driven wakeups?
@@ -1108,3 +1189,22 @@ to be idle before running it.
 **Problems:** Two pilot runs disturbed (memory pressure in EEVDF-gmp16;
 VS Code `node` at 32% of a CPU in always-z2).
 **Next:** Run E1b; then choose the phase 5 switch signal and framing.
+
+### 2026-10-29 — E1b: preempting request threads
+**Did:** Ran E1b (no batch, server GOMAXPROCS 16; eevdf, never, never3,
+always; 10 reps; 3a9b17e). Split latency into send lag, queue and service
+time for E1 and E1b.
+**Found:** Section 6.4. always has the higher p50 in every rep at every
+rate; its p99 is worse than never3's at 3500–5000 req/s. The cause is
+measured: workers are preempted mid-request (service time 0.56 → 2.6 ms).
+In E1 the server-side time was equal across modes; the gain was on the
+gRPC path outside the worker.
+**Interpretation:** The best fixed policy depends on the victim's class
+(batch vs request thread), not on the load level (section 7). This points
+to class-aware preemption (Feature A) as the main mechanism.
+**Decisions:** None yet; proposed to test batch-only victims before
+building the load switch (phase 5).
+**Problems:** None. The never config's tails include the load generator's
+own delay (send lag p99 up to 26 ms in E1b, 60 ms in E1).
+**Next:** User decision on reordering: batch-only victim rule + a mixed
+experiment (2 zstd, GOMAXPROCS 16) first, or phase 5 as planned.

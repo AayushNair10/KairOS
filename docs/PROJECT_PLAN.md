@@ -117,7 +117,7 @@ initial params, prints and logs stats periodically (CSV).
 | 1. Proposal | Oct 28–30 | Write 2-page proposal (USENIX template) | Submitted Fri Oct 30 |
 | 2. Skeleton | Oct 28–Nov 3 | Copy scx_simple → scx_kairos, own build, bpf_printk in a callback | **Done** (Oct 28) |
 | 3. Workloads | Oct 31–Nov 6 | gRPC server, open-loop loadgen (phases), zstd job, harness | **Done** (Oct 29) |
-| 4. Load signal + static modes | Nov 3–8 | Timestamps, runnable count, wakeup rate, wait time, timer + EWMAs, forced modes, victim preemption | E1 shows the crossover. **Implemented** (Oct 29); E1 shows no latency crossover (RESEARCH_LOG 6.2) |
+| 4. Load signal + static modes | Nov 3–8 | Timestamps, runnable count, wakeup rate, wait time, timer + EWMAs, forced modes, victim preemption | E1 shows the crossover. **Implemented** (Oct 29); E1 shows no latency crossover (RESEARCH_LOG 6.2); nor does E1b without batch, where preempting request threads hurts more as load rises (6.4) |
 | 5. Adaptive switching | Nov 8–13 | Mode tree, hysteresis, fast exit, mode logging | Early E2; progress report Fri Nov 13 |
 | 6. Features A and B | Nov 14–21 | Features, classification tree, class-aware preemption, budget, max wait | E5, E6 |
 | 7. Full evaluation | Nov 18–26 | Azure replay, burst-length sweep, transitions, overhead, Redis, all baselines | E2–E7, G |
