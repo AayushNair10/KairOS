@@ -185,6 +185,20 @@ else:                                            -> keep mode (hysteresis)
 Initial guesses: LOW = 1.0, HIGH = 2.0 runnable per CPU (calibrate from E1).
 ML can only switch *into* BATCH early; the quiet check always wins.
 
+**Revised 2026-10-30 (user decision): switch against a latency target,
+not load thresholds.** E1/E1b/E1c showed that BATCH mode at high load
+makes requests slower and only buys batch throughput, and that the
+runnable count doesn't track request load. New rule (timer, every 1 ms):
+```
+late_frac = EWMA over ~64 ms of (woken tasks that waited > TARGET) / (woken tasks)
+BATCH   and late_frac > LATE_MAX                  -> LATENCY  (fast exit)
+LATENCY and in mode >= HOLD and late_frac <= LATE_MAX/2 -> BATCH  (cautious entry)
+if a BATCH stint fails within HOLD: HOLD *= 2 (up to HOLD_MAX); else HOLD = HOLD_MIN
+```
+LATENCY = preempt (batch victims only, with `--victim batch`), 3 ms
+slices; BATCH = no preemption, 20 ms slices. Defaults: TARGET 1 ms,
+LATE_MAX 5%, HOLD 200 ms–5 s. Only wakeups on `--signal-cpus` count.
+
 ### 3.5 Feature A: task classification tree (run at `quiescent`)
 Per-task features (task storage, integers): `nsamples`, `vol_ratio` (/1024),
 `avg_burst_us`, `cpu_share` (/1024), `wakes_others_per_s`, `woken_by_event`
@@ -450,6 +464,23 @@ choices. Add as you go.)
   the run-time rule, zstd counts as batch only for part of each burst. The
   zstd "change back" events of section 6.6 are mostly these sleeps, not
   only exits.
+- Adaptive switching (3bd9dff, a7fd0f6, 6206245): `--adaptive` with
+  `--lat-target-us`, `--late-pct`, `--late-shift`, `--hold-ms`,
+  `--hold-max-ms`, `--signal-cpus` (section 3.4, revised). `runnable`
+  marks a task `woken` on SCX_ENQ_WAKEUP; `running` counts it in
+  `lat_wakeups` (and `lat_late` if it waited longer than the target) when
+  its CPU is in the signal mask; the timer turns the per-tick deltas into
+  `late_frac` and runs `update_mode()`. Time per mode (`mode_ns`), mode
+  switches and the late counts go to the stats CSV. Two fixes found in
+  the pilots: the late share was first smoothed with weight 1/8 per tick
+  (~8 ms, 50–100 wakeups), which crossed 5% in single bad milliseconds;
+  now 1/64 (~64 ms). And an integer EWMA with weight 1/2^k cannot decay
+  below 2^k − 1 (`avg >> k` rounds to 0): at x1024 and k = 6 that floor
+  is 6.2%, above the 5% threshold, so the mode never left LATENCY; the
+  late share now uses 2^20 fixed point (`LATE_ONE`).
+- The latency signal counts all woken tasks on the signal CPUs, including
+  zstd's main and I/O threads (~600 wakeups per pass). Excluding a batch
+  process's light threads would need per-process classification.
 
 ---
 
@@ -471,6 +502,7 @@ together with `meta.json` (git commit, kernel, VM config, parameters).
 | DC1 | 2026-10-30 | e1f2698 | batchvic + `--trace-class` (EWMA classifier) | `diag-class.conf`: 2 zstd, GOMAXPROCS 16, 8 s at 3000/4500/5500 req/s | 2 | `results/2026-10-30-diag-class-012039/` | Overload diagnostic. 45 server threads relabelled batch 488 times (section 6.6). IDE in use |
 | DC2 | 2026-10-30 | 3f3d11e | as DC1, run-time classifier | as DC1 | 2 | `results/2026-10-30-diag-class-012531/` | 28 server threads relabelled 42 times; one rep still slow from 4500 req/s (section 6.6). IDE in use |
 | E1c2 | 2026-10-30 | 661c254 | never3, always, batchvic (run-time classifier) | `e1c2.conf`: as E1c | 10 | `results/2026-10-30-e1c2/` | No failed requests in any run; slow reps 2/3/3 (never3/always/batchvic). batchvic p50 below never3 in 8–10/10 up to 4000 req/s, below always in 7–9/10 at 3500–4500 but only 2–4/10 at 2000–3000; batch MB/s above always 8–10/10 (section 6.7) |
+| E2p | 2026-10-30 | a025a0d, a7fd0f6, 6206245 | never, batchvic, adaptive (`--adaptive --victim batch --signal-cpus 0-2`) | `e2-pilot.conf` (2 zstd) and `e2-pilot-z1.conf` (1 zstd): 5 s phases alternating 500 and 3500 req/s, GOMAXPROCS 16 | 1 | `results/2026-10-30-e2-pilot*/` | Functional pilots, IDE in use (other processes 20–100% of a CPU). With 2 zstd, BATCH always misses a 1 ms target. With 1 zstd and the fixed signal, adaptive is mostly BATCH when quiet and LATENCY when busy (section 6.8) |
 
 ### 5.1 Planned experiments
 | # | Experiment | Pattern | Shows |
@@ -731,6 +763,24 @@ Changes to batch per second (median) 43 at 1000 req/s falling to 7–9 at
 4500 in both always and batchvic runs; under always, 3–20% of
 preemptions hit a batch-classified task (E1c, EWMA classifier: 70–79%).
 
+### 6.8 E2 pilots: adaptive switching (2026-10-30)
+Single runs while the IDE was in use (other processes 20–100% of a CPU),
+so only the mode behaviour counts, not latency differences. 5 s phases,
+500 / 3500 req/s alternating, GOMAXPROCS 16, signal CPUs 0–2.
+- 2 zstd (a025a0d + 3bd9dff): adaptive was in LATENCY ~1000 ms of every
+  second. Each try at BATCH sent the late share to 47–64% and back.
+  Per second in LATENCY, 0.7–2% of wakeups were late at 500 req/s and
+  4–24% at 3500.
+- 1 zstd, late share smoothed over ~8 ms: per-second late share in quiet
+  phases 0.1–0.9%, yet each BATCH try ended within a second.
+- 1 zstd, smoothed over ~64 ms, x1024 fixed point (a7fd0f6): the EWMA sat
+  at 6.2% with 0.1% late per second; never left LATENCY.
+- 1 zstd, 2^20 fixed point (6206245, `results/2026-10-30-e2-pilot-z1-021630/`):
+  LATENCY 45–156 ms per second in the first quiet phase, 960–1000 ms per
+  second in busy phases, back to BATCH in quiet phases but sometimes only
+  after 2–3 s (the hold had doubled during the busy phase). Batch MB/s in
+  quiet phases: adaptive 314–319, batchvic 282–321, never 293–310.
+
 ---
 
 ## 7. Explanations and insights
@@ -917,6 +967,21 @@ E1c2 (section 6.7):
   CPU burst between sleeps, or the current one, is ≥ 20 ms) would keep
   zstd's compression threads batch right after their short sleeps while
   workers (0.5 ms bursts, ≤ ~10 ms under a backlog) stay out.
+
+E2 pilots (section 6.8):
+- The switch works mechanically after two fixed-point/smoothing fixes:
+  BATCH when quiet, LATENCY when busy, with hysteresis.
+- With 2 zstd jobs (4 compression threads on 3 CPUs) BATCH mode always
+  misses a 1 ms target, so adaptive correctly stays in LATENCY: it can
+  only gain where batch work leaves a CPU free at low request load.
+- With 1 zstd job batchvic preempts little when quiet, so BATCH has
+  little batch throughput to win back. In these workloads class-aware
+  preemption seems to capture most of the benefit and the mode switch
+  adds little (guess, from single runs; E2 with reps must check). The
+  room for the switch grows with the cost of preempting batch work and
+  with a looser target.
+- The hold doubling makes the return to BATCH slow after a busy phase;
+  `--hold-max-ms` and the reset rule are knobs to revisit.
 
 ---
 
@@ -1482,3 +1547,22 @@ were inflated by the old classifier.
 average (Feature A) later.
 **Problems:** None.
 **Next:** Decide phase 5's objective (user), then build the switch.
+
+### 2026-10-30 — Phase 5: adaptive switching against a latency target
+**Did:** Revised the mode decision (section 3.4) to a latency target per
+the user's choice. Implemented `--adaptive` (late share of woken tasks,
+fast exit to LATENCY, hold with doubling before BATCH; signal CPUs). Ran
+bursty pilots with 2 and 1 zstd jobs; fixed the smoothing window and the
+fixed-point floor.
+**Found:** Section 6.8. Works mechanically with 1 zstd job; with 2 the
+target is never met in BATCH mode, so it stays in LATENCY.
+**Interpretation:** In these workloads the mode switch has little room on
+top of batch-only preemption (guess until E2 with reps).
+**Decisions:** Defaults TARGET 1 ms, LATE_MAX 5%, ~64 ms smoothing, hold
+200 ms–5 s; 2^20 fixed point for the late share.
+**Problems:** x1024 EWMA floor (6.2%) kept the mode in LATENCY; a `grep`
+on stdout of a stderr-only `--help` stopped one command chain early.
+Pilots ran with the IDE in use.
+**Next:** E2 with reps (never, never3, batchvic, adaptive, EEVDF) on a
+bursty pattern, IDE idle; decide which workload gives the switch room
+(e.g. a looser target or costlier batch preemption).
