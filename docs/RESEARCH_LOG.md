@@ -440,6 +440,16 @@ choices. Add as you go.)
   readies the handler goroutine on the worker's own P without any kernel
   wakeup. Each zstd pass is a new process, so zstd now shows one change
   to batch and one back (at exit) per pass.
+- Correction (2026-10-30): zstd 1.5.7 runs 4 threads even with `-T1`
+  (main, I/O, and two compression threads; `--single-thread` still has
+  3). In one pass, sampled from `/proc/<pid>/task/*/sched` after 0.1 s:
+  compression threads 152.8 ms CPU with 3 voluntary switches and 40.5 ms
+  with 2; main thread 11.7 ms with 115; I/O thread 3.0 ms with 21. A whole
+  pass makes ~600 voluntary switches. So zstd's heavy threads run ~50 ms
+  bursts between short sleeps, and the light ones never reach 20 ms: under
+  the run-time rule, zstd counts as batch only for part of each burst. The
+  zstd "change back" events of section 6.6 are mostly these sleeps, not
+  only exits.
 
 ---
 
@@ -460,6 +470,7 @@ together with `meta.json` (git commit, kernel, VM config, parameters).
 | E1c | 2026-10-29 | 0b25c6b | eevdf, never, never3, always, batchvic (`--force-preempt --victim batch`) | `e1c.conf`: 2 zstd, server GOMAXPROCS 16, 500 µs, 8 s steps 1000/2000/3000/3500/4000/4500 req/s | 10 | `results/2026-10-29-e1c/` | batchvic has the lowest p50 at every rate (8–10/10 paired up to 4000) with workers' service time unchanged; more batch than always, less than never3. Plain always crosses never3 at ~4000 req/s. 2 batchvic reps collapsed at 4000–4500 (section 6.5) |
 | DC1 | 2026-10-30 | e1f2698 | batchvic + `--trace-class` (EWMA classifier) | `diag-class.conf`: 2 zstd, GOMAXPROCS 16, 8 s at 3000/4500/5500 req/s | 2 | `results/2026-10-30-diag-class-012039/` | Overload diagnostic. 45 server threads relabelled batch 488 times (section 6.6). IDE in use |
 | DC2 | 2026-10-30 | 3f3d11e | as DC1, run-time classifier | as DC1 | 2 | `results/2026-10-30-diag-class-012531/` | 28 server threads relabelled 42 times; one rep still slow from 4500 req/s (section 6.6). IDE in use |
+| E1c2 | 2026-10-30 | 661c254 | never3, always, batchvic (run-time classifier) | `e1c2.conf`: as E1c | 10 | `results/2026-10-30-e1c2/` | No failed requests in any run; slow reps 2/3/3 (never3/always/batchvic). batchvic p50 below never3 in 8–10/10 up to 4000 req/s, below always in 7–9/10 at 3500–4500 but only 2–4/10 at 2000–3000; batch MB/s above always 8–10/10 (section 6.7) |
 
 ### 5.1 Planned experiments
 | # | Experiment | Pattern | Shows |
@@ -691,6 +702,35 @@ from `sched_stats.csv`. (The first DC1 attempt captured no trace:
   3.2 ms, p99 190 ms) and collapsed from 4500 (p50 980 ms, 3770 failed
   at 5500); rep 2 p50 1.2 ms / 6.1 ms at 3000 / 4500.
 
+### 6.7 E1c2: E1c with the run-time classifier (2026-10-30)
+`results/2026-10-30-e1c2/`, commit 661c254, all 30 runs clean (other
+processes 12–14% of a CPU, median). Workload and rates as E1c. Medians
+over 10 reps; ms.
+
+| req/s | p50 never3 / always / batchvic | p99 same order | batch MB/s same order | preempt/s always / batchvic |
+|---|---|---|---|---|
+| 1000 | 1.2 / 0.8 / 0.8 | 31 / 4 / 6 | 593 / 507 / 563 | 23.6k / 6.7k |
+| 2000 | 1.9 / 0.9 / 0.9 | 20 / 95 / 75 | 486 / 337 / 410 | 35.4k / 8.3k |
+| 3000 | 3.0 / 1.1 / 1.2 | 202 / 113 / 45 | 335 / 229 / 295 | 43.4k / 7.4k |
+| 3500 | 2.8 / 1.8 / 1.4 | 120 / 146 / 60 | 282 / 147 / 223 | 44.1k / 5.6k |
+| 4000 | 3.2 / 5.2 / 2.1 | 419 / 135 / 344 | 185 / 98 / 162 | 42.8k / 4.3k |
+| 4500 | 4.2 / 37.3 / 12.0 | 487 / 277 / 601 | 124 / 91 / 103 | 20.5k / 2.2k |
+
+Paired counts at 1000 / 2000 / 3000 / 3500 / 4000 / 4500 req/s (of 10):
+- p50 lower for batchvic than never3: 10, 10, 9, 9, 8, 4; than always:
+  7, 2, 4, 7, 9, 7; for always than never3: 10, 10, 9, 9, 5, 3.
+- p99 lower for batchvic than never3: 9, 4, 8, 6, 5, 5; than always: 2,
+  6, 3, 5, 3, 4.
+- Batch MB/s higher for batchvic than always: 9, 8, 9, 9, 9, 10; for
+  never3 than batchvic: 7, 9, 10, 10, 9, 8.
+No failed requests in any run. Slow runs (some phase p50 > 100 ms):
+never3 2 (from 4500 req/s), always 3 (one from 3000), batchvic 3 (one
+from 3500); these runs had 12–31% other-process CPU. Service time p50:
+never3 and batchvic 0.51 ms at every rate; always 0.52 → 1.49 ms at 4000.
+Changes to batch per second (median) 43 at 1000 req/s falling to 7–9 at
+4500 in both always and batchvic runs; under always, 3–20% of
+preemptions hit a batch-classified task (E1c, EWMA classifier: 70–79%).
+
 ---
 
 ## 7. Explanations and insights
@@ -857,6 +897,26 @@ DC1/DC2 (section 6.6):
   relabelling was at most an aggravating factor; 4500 req/s with 2 zstd
   is near capacity, where every config had slow reps in E1c. Whether
   batchvic now fails no more often than the fixed modes needs E1c again.
+
+E1c2 (section 6.7):
+- With the run-time classifier, batchvic had no failed requests and no
+  more slow runs than never3 or always (3 vs 2 and 3), against 2 of 10
+  failing in E1c. One batch each, so this is suggestive, not proof.
+- It still protects request threads (service time 0.51 ms at every rate)
+  and has the lowest p50 from 3500 to 4000 req/s, but it preempts zstd
+  about half as often as E1c's batchvic (5.6k vs 10.1k/s at 3500; cross-
+  batch numbers, so rough), keeps more batch throughput than always at
+  every rate, and loses its p50 edge over always at 2000–3000 req/s.
+  Reason (measured in section 4): zstd's compression threads sleep every
+  ~50 ms, so they are batch only after 20 ms into each burst; its main
+  and I/O threads never are.
+- E1c's "70–79% of always's victims are batch" was inflated: the EWMA
+  counted the preemptions themselves as evidence, so the workers always
+  preempted looked batch. Under the run-time rule, 3–20%.
+- A burst-length average (Feature A's avg_burst_us: batch if the average
+  CPU burst between sleeps, or the current one, is ≥ 20 ms) would keep
+  zstd's compression threads batch right after their short sleeps while
+  workers (0.5 ms bursts, ≤ ~10 ms under a backlog) stay out.
 
 ---
 
@@ -1407,3 +1467,18 @@ others" not used for now (unreliable under Go when all Ps are busy).
 own shell and killed it (exit 144). Use a timed reader instead.
 **Next:** E1c again with the new classifier (never3, always, batchvic;
 10 reps).
+
+### 2026-10-30 — E1c2: run-time classifier
+**Did:** Ran E1c2 (never3, always, batchvic; 10 reps; 661c254). Checked
+zstd's threads and their sleep pattern.
+**Found:** Section 6.7. No failures; slow runs similar across configs.
+batchvic: lowest p50 vs never3 up to 4000 req/s; vs always better at
+3500–4500, tied/worse at 2000–3000; more batch than always everywhere.
+zstd 1.5.7 has 4 threads; compression threads sleep every ~50 ms.
+**Interpretation:** The overload failure is gone in this batch, at the
+price of preempting zstd less (section 7). E1c's always victim shares
+were inflated by the old classifier.
+**Decisions:** Keep the run-time classifier; consider adding a burst
+average (Feature A) later.
+**Problems:** None.
+**Next:** Decide phase 5's objective (user), then build the switch.
