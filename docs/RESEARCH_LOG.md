@@ -152,6 +152,42 @@ PageFlex (ATC 2025), Linux scalability (OSDI 2010), Multikernel (SOSP 2009).
 - k6 ramping-arrival-rate: https://grafana.com/docs/k6/latest/using-k6/scenarios/executors/ramping-arrival-rate/
 - ghz: https://pkg.go.dev/github.com/bojand/ghz@v0.114.0
 
+
+### 2.9 Time-slice length (read 2026-10-30)
+Checked in the sources on this VM where possible:
+- Linux EEVDF: base slice 0.7 ms x (1 + log2(min(CPUs, 8))) = 2.1 ms on
+  4 CPUs (`kernel/sched/fair.c`, `sysctl_sched_base_slice`,
+  `get_update_sysctl_factor`). Since 6.12 a task can request its own
+  slice through `sched_attr.sched_runtime`, clamped to 0.1–100 ms
+  (LWN 969062). CFS before it used a flexible slice: a 6 ms target
+  latency divided among the runnable tasks, with a 0.75 ms minimum (both
+  scaled like the base slice).
+- sched_ext's default slice is 20 ms (`SCX_SLICE_DFL`).
+- scx_bpfland 1.1.4: at most 1 ms, divided by the number of tasks
+  waiting (`task_slice()`); no minimum by default.
+- scx_lavd 1.1.4: 10 ms target latency x active CPUs / queued tasks,
+  clamped to 0.5–5 ms (`sys_stat.bpf.c`); a task whose average run is
+  longer gets a boosted slice when the system isn't loaded.
+- This kernel has HZ = 1000; sched_ext checks slice expiry at the tick,
+  so slices are effectively whole milliseconds.
+- Microsecond-scale RPC systems preempt far more often: Shinjuku
+  (NSDI 2019) every 5 µs; LibPreemptible (HPCA 2024, arXiv 2308.02896)
+  adapts its quantum from windowed statistics and reports ~10% more
+  best-effort throughput at the same p99 target when colocated (their
+  claim, not checked). Our requests do 500 µs of work, so the relevant
+  range is milliseconds.
+- Cost of a switch: direct cost a few µs; the indirect cost of refilling
+  caches ranges up to hundreds of µs once the working sets exceed the
+  cache (Li, Ding, Shen, ExpCS 2007).
+- Ours: never (20 ms) vs never3 (3 ms) in E2 with 2 zstd jobs (6.9):
+  busy-phase p50 9–10 vs 4–6 ms, p99 131–154 vs 35–53 ms, batch
+  throughput 0–12% lower with 3 ms.
+
+Sources: https://lwn.net/Articles/969062,
+https://www.usenix.org/conference/nsdi19/presentation/kaffes,
+https://arxiv.org/abs/2308.02896,
+https://www.cs.rochester.edu/~kshen/papers/expcs2007.pdf
+
 ---
 
 ## 3. Design
@@ -482,6 +518,34 @@ choices. Add as you go.)
   zstd's main and I/O threads (~600 wakeups per pass). Excluding a batch
   process's light threads would need per-process classification.
 
+
+- Diagnostics (`--diag FILE --diag-comm LIST`, e557e62): `running()`
+  counts every wait for a CPU into a per-CPU `struct diag`, by task group
+  and by why the task was waiting (`enum kairos_ready`): woken
+  (`SCX_ENQ_WAKEUP` in `runnable()`), preempted or slice ran out (set in
+  `stopping(p, true)`), other. Ran out vs preempted: the slice counts
+  down with run time, so a task that ran at least the slice it started
+  with (`p->scx.slice` in `running()`) ran out; shorter means it was
+  preempted (our `SCX_ENQ_PREEMPT` sets the slice to 0; a higher class
+  leaves it). Groups are task-name prefixes; `p->comm` is copied to the
+  stack first, because the verifier allows only constant offsets into a
+  `task_struct` but a bounded variable index into a stack buffer. Waits
+  go into 8 buckets (< 50 µs ... ≥ 20 ms). The loader writes per-second
+  deltas (one row per group and kind, plus a "run" row with CPU time).
+  The old `woken` flag became `ready_kind == READY_WAKEUP`.
+- The server names its worker threads `grpcworker` (`prctl(PR_SET_NAME)`
+  after `LockOSThread`); other threads keep `grpcserver`. A worker that
+  lands on the main thread isn't renamed (the main thread's name is the
+  process name); 2 of 30 runs logged one.
+- `grpcserver -schedlat` logs Go's `/sched/latencies:seconds` histogram
+  per second, re-bucketed by each Go bucket's lower edge. Go samples 1 in
+  8 goroutine transitions (`gTrackingPeriod = 8`, `runtime/proc.go`), so
+  counts are 1/8 of the real number; shares are unbiased.
+- The reply carries `recv_unix_ns` (handler got the request, wall clock)
+  and `wake_ns` (worker finished -> handler running again), dbfae96.
+  With the load generator's times they split the rest of the latency into
+  in / wake / out (`analysis/split.py`).
+
 ---
 
 ## 5. Experiment log
@@ -505,6 +569,9 @@ together with `meta.json` (git commit, kernel, VM config, parameters).
 | E2p | 2026-10-30 | a025a0d, a7fd0f6, 6206245 | never, batchvic, adaptive (`--adaptive --victim batch --signal-cpus 0-2`) | `e2-pilot.conf` (2 zstd) and `e2-pilot-z1.conf` (1 zstd): 5 s phases alternating 500 and 3500 req/s, GOMAXPROCS 16 | 1 | `results/2026-10-30-e2-pilot*/` | Functional pilots, IDE in use (other processes 20–100% of a CPU). With 2 zstd, BATCH always misses a 1 ms target. With 1 zstd and the fixed signal, adaptive is mostly BATCH when quiet and LATENCY when busy (section 6.8) |
 | E2pt | 2026-10-30 | 652be42 | a5, a10 (`--adaptive --victim batch --signal-cpus 0-2`, `--lat-target-us` 5000 / 10000) | `e2-pilot-target.conf`: as `e2-pilot.conf` (2 zstd) | 1 | `results/2026-10-30-e2-pilot-target/` | Picks E2's 2-job targets. a10 stayed in BATCH all run (late ≤ 2%/s); a5 mostly LATENCY, BATCH tries ended within 1–2 s (section 6.9) |
 | E2 | 2026-10-30 | 7eb796e | eevdf, never, never3, batchvic, adaptive (1 ms target); with 2 zstd a5, a10 (5 / 10 ms) instead of adaptive | `e2-z1.conf` (1 zstd), `e2-z2.conf` (2 zstd): 5 s phases alternating 500 / 3500 req/s, three times; GOMAXPROCS 16; IDE idle | 10 | `results/2026-10-30-e2-z1/`, `results/2026-10-30-e2-z2/` | No failed requests. 1 zstd: adaptive ≈ batchvic, quiet-phase batch +0–2.5%. 2 zstd: a10 never left BATCH (= never); a5 in between, busy p99 worse than batchvic and never3 (section 6.9) |
+| ED | 2026-10-30 | e557e62 | as E2 (2 zstd): eevdf, never, never3, batchvic, a5, a10, with `--diag` | `e2-diag.conf`: E2's 2-job workload, groups grpcworker, grpcserver, zstd, loadgen, ksoftirqd | 3 | `results/2026-10-30-e2-diag/` | Server threads' waits are ≥ 96% wakeups; worker wakeup waits in BATCH mostly 2–5 ms. Tails 2–8x E2's for all configs incl. eevdf (section 6.10) |
+| ES | 2026-10-30 | dbfae96 | as ED | `e2-split.conf`: as ED, server reports handler receive time and wake delay | 2 | `results/2026-10-30-e2-split/` | The slowest 1% are 81–97% "in" + "out" (gRPC/network path and client) in every config (section 6.10) |
+| EC | 2026-10-30 | b0c… see git | eevdf, never, batchvic, diagnostics off | `e2-control.conf`: as E2 (2 zstd) | 2 | `results/2026-10-30-e2-control/` | Tails as high as ED/ES without the diagnostics: the evening runs were noisier, not perturbed by the counters (section 6.10) |
 
 ### 5.1 Planned experiments
 | # | Experiment | Pattern | Shows |
@@ -832,6 +899,59 @@ a10 stayed in BATCH all run; a5 was mostly in LATENCY, its BATCH tries
 ending within 1–2 s (the per-second samples don't show the late-share
 spike that ended each one).
 
+
+### 6.10 E2 diagnostics: which waits the signal misses (2026-10-30)
+ED (`results/2026-10-30-e2-diag/`, 3 reps), busy phases (3500 req/s),
+pooled over reps. Wait time per completed request, by group and kind:
+
+| config | worker wait ms/req (wakeup / requeue) | other server threads | Go waits ≥ 5 ms / ≥ 20 ms | mean latency |
+|---|---|---|---|---|
+| never | 2.10 / 0.03 | 0.62 / 0.01 | 5.1% / 2.0% | 78.1 |
+| a10 | 1.91 / 0.01 | 0.67 / 0.00 | 2.2% / 0.23% | 20.0 |
+| a5 | 1.08 / 0.01 | 0.71 / 0.01 | 1.4% / 0.35% | 19.2 |
+| never3 | 0.94 / 0.03 | 1.08 / 0.01 | 0.33% / 0.02% | 7.5 |
+| batchvic | 0.47 / 0.01 | 0.79 / 0.03 | 0.27% / 0.08% | 8.2 |
+| eevdf | – | – | 0.42% / 0.11% | 23.0 |
+
+(requeue = preempted + slice ran out; Go waits = share of sampled
+goroutine waits; mean latency in ms, inflated by tail episodes.)
+
+- Requeue waits are ≤ 4% of the server threads' waiting time in every
+  config: the server's threads sleep before their slice ends.
+- Worker wakeup waits (busy): never 2–5 ms 59%, 5–10 ms 6.1%, ≥ 10 ms
+  1.2%; a10 55.6 / 5.5 / 0.3%; a5 27.9 / 1.9 / 0.4%; never3 21.4 / 0.4 /
+  0%; batchvic 7.9 / 0.3 / 0.1%. Other server threads' wakeups ≥ 5 ms:
+  never 1.5%, batchvic 0%.
+- Wakeups per request (busy): workers 0.8–0.9, other server threads
+  1.6–1.9 (never, a10) to 4.6 (batchvic), load generator 3.1–3.9.
+- Server threads' CPU (busy): `grpcserver` threads 14–15% of a CPU under
+  never/a10, 38.5% under batchvic; workers 179–196%.
+- zstd in busy phases: preempted 0.5 (a5) and 1.0 (batchvic) times per
+  request (~1,800 and ~3,600/s); 0 under never and a10.
+
+ES (`results/2026-10-30-e2-split/`, 2 reps), busy, ms, medians over reps
+of p50; then the parts' mean over each rep's slowest 1%:
+
+| config | p50 | in | queue | service | wake | out | slowest 1%: in + out share |
+|---|---|---|---|---|---|---|---|
+| never | 8.2 | 1.32 | 2.30 | 0.52 | 0.01 | 0.21 | 87% of 852 |
+| a10 | 9.9 | 1.68 | 2.29 | 0.52 | 0.01 | 0.22 | 97% of 546 |
+| a5 | 2.2 | 0.35 | 0.43 | 0.52 | 0.01 | 0.11 | 85% of 747 |
+| never3 | 4.4 | 0.74 | 0.72 | 0.52 | 0.03 | 0.13 | 88% of 374 |
+| batchvic | 1.7 | 0.28 | 0.09 | 0.52 | 0.02 | 0.10 | 81% of 722 |
+| eevdf | 6.6 | 1.22 | 1.31 | 0.52 | 0.08 | 0.20 | 85% of 970 |
+
+- Quiet phases, never, slowest 1% (117 ms): lag 32 + in 45 + queue 12 +
+  service 2 + wake 11 + out 15.
+- Tails in ED, ES and EC were 2–8x E2's for every config, Linux's
+  included. EC (`results/2026-10-30-e2-control/`, diagnostics off) busy
+  p99: batchvic 30–189, eevdf 60–323, never 79–1476 ms (E2: 25–34,
+  61–68, 131–154). Slow requests were spread evenly over the second
+  after each `schedlat` read, and GC counts and durations matched E2.
+  So the counters didn't cause it; these evening runs were noisier
+  (cause not identified; the host is the guess). Medians are close to
+  E2's; tail numbers from ED/ES/EC are not comparable with E2.
+
 ---
 
 ## 7. Explanations and insights
@@ -1063,6 +1183,49 @@ E2 (section 6.9):
   latency and throughput, apart from small quiet-phase batch gains.
   Batch-only victims remain the mechanism that moves request latency.
 
+E2 diagnostics (section 6.10):
+- The wakeup-only signal doesn't miss a kind of wait: the server's
+  threads wait almost only after wakeups. The guess that preempted or
+  slice-expired server threads hide their waits (section 7, E2) was wrong.
+- The signal measures the right events but at the wrong scale. Under
+  BATCH mode with 2 zstd jobs a woken worker waits 2–5 ms (until some
+  zstd thread's 20 ms slice ends or it sleeps), rarely 10 ms. That
+  explains the three targets exactly: with 1 ms most wakeups are late
+  (always LATENCY), with 5 ms ~7% are, just above the 5% threshold (a5
+  flaps in and out of BATCH), with 10 ms < 1% (a10 never leaves BATCH).
+- Requests are far slower than any single wait. Per request the server's
+  threads wait 1.3–2.8 ms in total, but the median request takes 2–10 ms
+  and the tail hundreds. Measured contributors: queueing for a worker
+  (2.3 ms at p50 under never/a10, close to the workers' wakeup waits),
+  the way in (1.3–1.7 ms at p50) and, in the tail, the way in and back
+  (81–97% of the slowest 1%, every config). Goroutine waits of ≥ 20 ms
+  inside Go are 25x more common under never than under batchvic.
+  Likely reasons (not measured one by one): a request crosses several
+  threads and goroutines, so waits add up; one late wakeup of a network
+  or runtime thread delays every request queued behind it, which a
+  per-wakeup share counts once; and the load generator is scheduled by
+  the same scheduler (its send lag p99 under never was 27 ms in E2, vs 7
+  under batchvic), so part of "in" and "out" is the instrument itself.
+- So a share of late wakeups with a fixed target can't track request
+  latency: the factor between the two depends on load and on the mode.
+  A signal closer to what requests feel would weight waits by how many
+  requests are behind them, e.g. total waiting time of the service's
+  threads per second (= average number of them waiting), or take
+  latency from the service itself, as colocation controllers such as
+  Heracles do (section 2).
+- The slice length sets the wait: workers' wakeup waits ≥ 2 ms were 66%
+  of waits with 20 ms slices and 22% with 3 ms (both without
+  preemption). A flexible slice (short while latency threads wait, long
+  otherwise) would bound waits without preempting zstd; bpfland, lavd
+  and CFS do this (section 2.9).
+- Where the throughput goes: with preemption zstd is preempted ~3,600
+  times/s in busy phases (batchvic), and the server's non-worker threads
+  use 2.6x more CPU (38.5 vs 14–15% of a CPU), probably Go's threads
+  spinning more when wakeups are fast (guess). Mode switching itself is
+  a variable write; what cost a5 its latency was the BATCH stints during
+  busy phases (seconds with BATCH time: p50 4.5 ms vs 1.6 ms in seconds
+  fully in LATENCY, pooled over E2's reps).
+
 ---
 
 ## 8. Limitations
@@ -1099,6 +1262,10 @@ E2 (section 6.9):
   runs on CPU 3, while the reply's runs on the server's CPUs. With a NIC,
   the request's interrupt and receive work would land on the server's
   CPUs. Small next to 500 µs of work per request, but not zero.
+- Run-to-run noise changes over the day: tails in the evening of
+  2026-10-30 were 2–8x those of the afternoon for the same workload,
+  Linux's scheduler included (section 6.10). Compare tails only within
+  one batch of interleaved runs.
 - 3 CPUs is far fewer than a production server; with more CPUs an idle
   one is more often free, so preemption decisions matter less often.
 
@@ -1676,3 +1843,22 @@ Code server) despite the idle IDE.
 enqueues of server threads) and fix the signal, or go back to a
 load-based switch, or keep batchvic as the main mechanism and move on to
 Feature A, the baselines (bpfland, lavd) and overhead (E7).
+
+### 2026-10-30 — What the latency signal misses; time slices
+**Did:** Added `--diag` (waits per task group and reason) to scx_kairos,
+named the server's worker threads, logged Go's goroutine waits, and had
+the server report handler receive time and wake delay. Ran ED (3 reps),
+ES (2 reps) and a control without diagnostics (EC). Read the slice rules
+of EEVDF, CFS, bpfland, lavd and related papers (section 2.9).
+**Found:** Section 6.10. Server-thread waits are ≥ 96% wakeups. Workers
+wait 2–5 ms after wakeups in BATCH mode. Request tails sit in the
+gRPC/network path and the client. Evening runs were 2–8x noisier.
+**Interpretation:** Section 7. The signal sees the right waits but a
+fixed per-wakeup target can't map them to request latency; slice length
+bounds the waits directly.
+**Decisions:** None yet (user to choose the next step).
+**Problems:** The first test of a server's thread names matched my own
+shell with `pgrep -f` and killed it; used `$!` instead.
+**Next:** Options: a flexible slice in BATCH mode; a signal from total
+waiting time of the service's threads (or the service's own latency);
+keeping the load generator out of the scheduler under test.
