@@ -22,4 +22,9 @@ message WorkReply {
   uint64 id = 1;
   uint64 queue_ns = 2;    // handler received the request -> a worker started it
   uint64 service_ns = 3;  // worker started -> worker finished (wall clock)
+  // With the load generator's own times these split the rest of the
+  // latency into the way in (sent -> handler), the handler waking up after
+  // the worker (wake_ns) and the way back (handler returns -> reply read).
+  uint64 recv_unix_ns = 4;  // handler received the request (ns since the epoch)
+  uint64 wake_ns = 5;       // worker finished -> handler running again
 }

@@ -80,10 +80,15 @@ func (x *WorkRequest) GetWorkUs() uint32 {
 // Timings measured inside the server, so client latency can be split into
 // "waiting for a worker to start" and "doing the work".
 type WorkReply struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            uint64                 `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
-	QueueNs       uint64                 `protobuf:"varint,2,opt,name=queue_ns,json=queueNs,proto3" json:"queue_ns,omitempty"`       // handler received the request -> a worker started it
-	ServiceNs     uint64                 `protobuf:"varint,3,opt,name=service_ns,json=serviceNs,proto3" json:"service_ns,omitempty"` // worker started -> worker finished (wall clock)
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Id        uint64                 `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
+	QueueNs   uint64                 `protobuf:"varint,2,opt,name=queue_ns,json=queueNs,proto3" json:"queue_ns,omitempty"`       // handler received the request -> a worker started it
+	ServiceNs uint64                 `protobuf:"varint,3,opt,name=service_ns,json=serviceNs,proto3" json:"service_ns,omitempty"` // worker started -> worker finished (wall clock)
+	// With the load generator's own times these split the rest of the
+	// latency into the way in (sent -> handler), the handler waking up after
+	// the worker (wake_ns) and the way back (handler returns -> reply read).
+	RecvUnixNs    uint64 `protobuf:"varint,4,opt,name=recv_unix_ns,json=recvUnixNs,proto3" json:"recv_unix_ns,omitempty"` // handler received the request (ns since the epoch)
+	WakeNs        uint64 `protobuf:"varint,5,opt,name=wake_ns,json=wakeNs,proto3" json:"wake_ns,omitempty"`               // worker finished -> handler running again
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -139,6 +144,20 @@ func (x *WorkReply) GetServiceNs() uint64 {
 	return 0
 }
 
+func (x *WorkReply) GetRecvUnixNs() uint64 {
+	if x != nil {
+		return x.RecvUnixNs
+	}
+	return 0
+}
+
+func (x *WorkReply) GetWakeNs() uint64 {
+	if x != nil {
+		return x.WakeNs
+	}
+	return 0
+}
+
 var File_kairos_proto protoreflect.FileDescriptor
 
 const file_kairos_proto_rawDesc = "" +
@@ -146,12 +165,15 @@ const file_kairos_proto_rawDesc = "" +
 	"\fkairos.proto\x12\x06kairos\"6\n" +
 	"\vWorkRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x04R\x02id\x12\x17\n" +
-	"\awork_us\x18\x02 \x01(\rR\x06workUs\"U\n" +
+	"\awork_us\x18\x02 \x01(\rR\x06workUs\"\x90\x01\n" +
 	"\tWorkReply\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x04R\x02id\x12\x19\n" +
 	"\bqueue_ns\x18\x02 \x01(\x04R\aqueueNs\x12\x1d\n" +
 	"\n" +
-	"service_ns\x18\x03 \x01(\x04R\tserviceNs24\n" +
+	"service_ns\x18\x03 \x01(\x04R\tserviceNs\x12 \n" +
+	"\frecv_unix_ns\x18\x04 \x01(\x04R\n" +
+	"recvUnixNs\x12\x17\n" +
+	"\awake_ns\x18\x05 \x01(\x04R\x06wakeNs24\n" +
 	"\x04Work\x12,\n" +
 	"\x02Do\x12\x13.kairos.WorkRequest\x1a\x11.kairos.WorkReplyB3Z1github.com/AayushNair10/KairOS/workloads/kairospbb\x06proto3"
 

@@ -116,6 +116,7 @@ func sleepUntil(target int64) {
 type record struct {
 	sentNs, doneNs     int64
 	queueNs, serviceNs uint64 // measured by the server
+	recvUnixNs, wakeNs uint64 // also measured by the server
 	code               codes.Code
 }
 
@@ -129,6 +130,7 @@ func send(c pb.WorkClient, id int, t0 time.Time, r *record) {
 		return
 	}
 	r.queueNs, r.serviceNs = rep.GetQueueNs(), rep.GetServiceNs()
+	r.recvUnixNs, r.wakeNs = rep.GetRecvUnixNs(), rep.GetWakeNs()
 }
 
 // warmup waits until the server answers and opens every connection, so
@@ -221,10 +223,14 @@ func writeCSV(path string, offs []int64, phaseOf []int, recs []record) error {
 		return err
 	}
 	w := bufio.NewWriter(f)
-	fmt.Fprintln(w, "id,phase,intended_ns,sent_ns,done_ns,latency_ns,queue_ns,service_ns,code")
+	// recv_unix_ns is wall-clock time; the other times are ns after the
+	// start (loadgen.json's start_unix_ns), so recv_unix_ns - start_unix_ns
+	// is on the same axis as sent_ns.
+	fmt.Fprintln(w, "id,phase,intended_ns,sent_ns,done_ns,latency_ns,queue_ns,service_ns,code,recv_unix_ns,wake_ns")
 	for i, r := range recs {
-		fmt.Fprintf(w, "%d,%d,%d,%d,%d,%d,%d,%d,%d\n", i, phaseOf[i], offs[i],
-			r.sentNs, r.doneNs, r.doneNs-offs[i], r.queueNs, r.serviceNs, r.code)
+		fmt.Fprintf(w, "%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n", i, phaseOf[i], offs[i],
+			r.sentNs, r.doneNs, r.doneNs-offs[i], r.queueNs, r.serviceNs, r.code,
+			r.recvUnixNs, r.wakeNs)
 	}
 	if err := w.Flush(); err != nil {
 		f.Close()

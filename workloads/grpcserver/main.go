@@ -90,6 +90,7 @@ type job struct {
 
 type timing struct {
 	queueNs, serviceNs uint64
+	end                time.Time // when the worker finished
 }
 
 // worker runs jobs until the jobs channel is closed.
@@ -106,6 +107,7 @@ func worker(jobs <-chan *job) {
 		j.done <- timing{
 			queueNs:   uint64(start.Sub(j.received)),
 			serviceNs: uint64(end.Sub(start)),
+			end:       end,
 		}
 	}
 }
@@ -188,7 +190,10 @@ func (s *server) Do(ctx context.Context, req *pb.WorkRequest) (*pb.WorkReply, er
 	}
 	s.jobs <- j
 	t := <-j.done
-	return &pb.WorkReply{Id: req.GetId(), QueueNs: t.queueNs, ServiceNs: t.serviceNs}, nil
+	// The worker's send made this goroutine runnable; how long until it ran?
+	wake := time.Since(t.end)
+	return &pb.WorkReply{Id: req.GetId(), QueueNs: t.queueNs, ServiceNs: t.serviceNs,
+		RecvUnixNs: uint64(j.received.UnixNano()), WakeNs: uint64(wake)}, nil
 }
 
 func main() {
