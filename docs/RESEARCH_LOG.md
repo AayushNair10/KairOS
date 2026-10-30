@@ -649,8 +649,8 @@ always 3, batchvic 2 of 10 each, all at 4000–4500 req/s. Only batchvic's
 two had failed requests: r6 (p50 678 ms at 4000, 3.4 s at 4500, 198
 failed) and r7 (2.9 s at 4000, 28.5k failed at 4500). In both, runnable
 tasks jumped from ~10 to ~28–30 within a second, wakeups/s fell from ~47k
-to ~15k, and up to 91% of wakeups found a batch victim (r7), against
-~22% before. Other processes used 35% and 24% of a CPU in these two runs
+to ~15k, and up to 90% of wakeups found a batch victim (r7), against
+20–30% before. Other processes used 35% and 24% of a CPU in these two runs
 (median for batchvic 11%).
 
 ---
@@ -801,7 +801,7 @@ E1c (section 6.5):
   per task): when a backlog builds, workers take job after job without
   sleeping, use whole slices, and the classifier marks them batch after
   ~6 slices. batchvic then preempts workers like always does, which
-  slows them further; r7's 91% of wakeups finding a batch victim while
+  slows them further; r7's 90% of wakeups finding a batch victim while
   ~28 tasks were runnable and only 2 were zstd fits this. The trigger is
   unknown (both runs had more other-process CPU than usual). Needs a
   class-transition counter to confirm, and a classification that does
