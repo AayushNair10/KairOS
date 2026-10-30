@@ -20,10 +20,10 @@
  *   slice left over, which missed time when the kernel refilled the slice of
  *   a task that kept running (RESEARCH_LOG section 4).
  * - A first piece of task classification (Feature A, RESEARCH_LOG 3.5): a
- *   task that mostly stops because its slice ran out or it was preempted,
- *   rather than because it went to sleep, is "batch". With --victim batch,
- *   LATENCY mode only preempts CPUs running a batch task, so request
- *   threads are not preempted in the middle of a request (E1b, 6.4).
+ *   task that has used more than batch_min_run_ns of CPU since it last went
+ *   to sleep is "batch". With --victim batch, LATENCY mode only preempts
+ *   CPUs running a batch task, so request threads are not preempted in the
+ *   middle of a request (E1b, 6.4).
  *
  * The vtime parts are scx_simple's: Copyright (c) 2022 Meta Platforms, Inc.
  * and affiliates; Tejun Heo <tj@kernel.org>; David Vernet <dvernet@meta.com>.
@@ -51,14 +51,15 @@ const volatile u32 slow_shift = 6;	/* EWMA weight 1/64 per timer tick */
 /* LATENCY mode preempts only CPUs whose current task is classified batch. */
 const volatile bool victim_batch_only;
 /*
- * Batch classification: per task, an EWMA (weight 1/2^class_shift per stop)
- * of the fraction of its stops that were voluntary (it slept), x1024. The
- * task is batch while that is below batch_vol_max. It starts at 1024, so a
- * new task needs about 6 involuntary stops in a row to become batch (with
- * shift 3: 1024 * (7/8)^6 = 460 < 512).
+ * Batch classification: a task is batch once it has run for this much CPU
+ * time since it last went to sleep. Time spent waiting for a CPU doesn't
+ * count, so a request thread stuck in a long queue doesn't become batch.
+ * Request threads sleep after each request, and Go parks a worker thread
+ * (a kernel sleep) after ~10 ms of running even under a backlog; zstd
+ * never sleeps. (Replaces a per-stop EWMA of voluntary stops, which marked
+ * busy request threads batch under overload: RESEARCH_LOG 6.5, 6.6.)
  */
-const volatile u32 class_shift = 3;
-const volatile u32 batch_vol_max = 512;
+const volatile u64 batch_min_run_ns = 20000000;
 
 UEI_DEFINE(uei);
 
@@ -94,7 +95,7 @@ struct {
 struct task_ctx {
 	u64 ready_at;	/* when it last became ready to run; 0: not waiting */
 	u64 running_at;	/* when it last started running; 0: not running */
-	u64 vol;	/* EWMA of voluntary stops per stop, x1024 */
+	u64 run_since_sleep;	/* CPU time run since it last slept */
 };
 
 struct {
@@ -113,7 +114,7 @@ struct cpu_ctx {
 	u64 running_at;	/* 0: nothing of ours running */
 	u64 vtime;	/* current task's vtime when it started */
 	u64 weight;	/* current task's weight (nice 0 = 100) */
-	bool batch;	/* current task classified batch when it started */
+	u64 run_since_sleep;	/* current task's, when it started */
 };
 
 struct {
@@ -159,9 +160,9 @@ static u64 ewma(u64 avg, u64 sample, u32 shift)
 	return avg - (avg >> shift) + (sample >> shift);
 }
 
-static bool is_batch(const struct task_ctx *tctx)
+static bool is_batch(u64 run_since_sleep)
 {
-	return tctx->vol < batch_vol_max;
+	return run_since_sleep >= batch_min_run_ns;
 }
 
 /*
@@ -194,7 +195,8 @@ static s32 pick_victim(struct task_struct *p, u64 vtime, bool *batch)
 
 	bpf_for(cpu, 0, nr_cpus) {
 		struct cpu_ctx *cctx;
-		u64 cur;
+		u64 cur, ran;
+		bool b;
 
 		if (!bpf_cpumask_test_cpu(cpu, p->cpus_ptr))
 			continue;
@@ -207,15 +209,16 @@ static s32 pick_victim(struct task_struct *p, u64 vtime, bool *batch)
 		cctx = lookup_cpu_ctx(cpu);
 		if (!cctx || !cctx->running_at || !cctx->weight)
 			continue;
-		if (victim_batch_only && !cctx->batch)
+		/* what it has run since it started on this CPU */
+		ran = time_after(now, cctx->running_at) ? now - cctx->running_at : 0;
+		b = is_batch(cctx->run_since_sleep + ran);
+		if (victim_batch_only && !b)
 			continue;
-		cur = cctx->vtime;
-		if (time_after(now, cctx->running_at))
-			cur += (now - cctx->running_at) * 100 / cctx->weight;
+		cur = cctx->vtime + ran * 100 / cctx->weight;
 		if (time_after(cur, best_vtime)) {
 			best_vtime = cur;
 			best = cpu;
-			*batch = cctx->batch;
+			*batch = b;
 		}
 	}
 	return best;
@@ -341,7 +344,7 @@ void BPF_STRUCT_OPS(kairos_running, struct task_struct *p)
 	if (cctx) {
 		cctx->vtime = p->scx.dsq_vtime;
 		cctx->weight = p->scx.weight;
-		cctx->batch = tctx && is_batch(tctx);
+		cctx->run_since_sleep = tctx ? tctx->run_since_sleep : 0;
 		cctx->running_at = now;
 	}
 }
@@ -352,25 +355,27 @@ void BPF_STRUCT_OPS(kairos_stopping, struct task_struct *p, bool runnable)
 	struct task_ctx *tctx;
 	struct cpu_ctx *cctx;
 	bool was_batch;
+	u64 ran = 0;
 
 	tctx = bpf_task_storage_get(&task_ctxs, p, 0, 0);
 	if (tctx) {
 		/* Charge the time it ran, scaled by the inverse of its weight. */
 		if (tctx->running_at && time_after(now, tctx->running_at))
-			p->scx.dsq_vtime += (now - tctx->running_at) * 100 / p->scx.weight;
+			ran = now - tctx->running_at;
+		p->scx.dsq_vtime += ran * 100 / p->scx.weight;
 		tctx->running_at = 0;
 		/* Still runnable (slice used up or preempted): waiting again. */
 		if (runnable)
 			tctx->ready_at = now;
 		/*
-		 * Classification sample. The kernel calls stopping(p, false)
-		 * when the running task is dequeued (it blocked or went to
-		 * sleep) and stopping(p, true) when it is put back while still
-		 * runnable (slice expired or preempted).
+		 * Classification. The kernel calls stopping(p, false) when the
+		 * running task is dequeued (it blocked or went to sleep), which
+		 * restarts the count, and stopping(p, true) when it is put back
+		 * while still runnable (slice expired or preempted).
 		 */
-		was_batch = is_batch(tctx);
-		tctx->vol = ewma(tctx->vol, runnable ? 0 : 1024, class_shift);
-		if (is_batch(tctx) != was_batch) {
+		was_batch = is_batch(tctx->run_since_sleep);
+		tctx->run_since_sleep = runnable ? tctx->run_since_sleep + ran : 0;
+		if (is_batch(tctx->run_since_sleep) != was_batch) {
 			stat_inc(was_batch ? STAT_FROM_BATCH : STAT_TO_BATCH);
 			if (trace_class)
 				bpf_printk("kairos class: pid=%d comm=%s batch=%d",
@@ -391,12 +396,9 @@ void BPF_STRUCT_OPS(kairos_enable, struct task_struct *p)
 s32 BPF_STRUCT_OPS(kairos_init_task, struct task_struct *p,
 		   struct scx_init_task_args *args)
 {
-	struct task_ctx *tctx;
-
-	tctx = bpf_task_storage_get(&task_ctxs, p, 0, BPF_LOCAL_STORAGE_GET_F_CREATE);
-	if (!tctx)
+	/* zero-filled: not batch until it has run batch_min_run_ns */
+	if (!bpf_task_storage_get(&task_ctxs, p, 0, BPF_LOCAL_STORAGE_GET_F_CREATE))
 		return -ENOMEM;
-	tctx->vol = 1024;	/* not batch until it shows it */
 	return 0;
 }
 

@@ -36,9 +36,8 @@ const char help_fmt[] =
 "      --slow-shift N      slow EWMA weight 1/2^N per timer tick (default 6)\n"
 "      --victim any|batch  which running tasks LATENCY mode may preempt: any,\n"
 "                          or only those classified batch (default any)\n"
-"      --batch-vol-max N   a task is batch while its EWMA of voluntary stops\n"
-"                          per stop (x1024) is below N (default 512)\n"
-"      --class-shift N     that EWMA's weight 1/2^N per stop (default 3)\n"
+"      --batch-min-run-us N  a task is batch once it has run N us of CPU\n"
+"                          since it last slept (default 20000)\n"
 "  -s, --stats FILE        also write the per-second stats to FILE as CSV\n"
 "  -t, --trace             bpf_printk every enqueue (read trace_pipe)\n"
 "      --trace-class       bpf_printk every batch class change\n"
@@ -53,8 +52,7 @@ enum {
 	OPT_FAST_SHIFT,
 	OPT_SLOW_SHIFT,
 	OPT_VICTIM,
-	OPT_BATCH_VOL_MAX,
-	OPT_CLASS_SHIFT,
+	OPT_BATCH_MIN_RUN,
 	OPT_TRACE_CLASS,
 };
 
@@ -68,8 +66,7 @@ static const struct option long_opts[] = {
 	{ "fast-shift",      required_argument, NULL, OPT_FAST_SHIFT },
 	{ "slow-shift",      required_argument, NULL, OPT_SLOW_SHIFT },
 	{ "victim",          required_argument, NULL, OPT_VICTIM },
-	{ "batch-vol-max",   required_argument, NULL, OPT_BATCH_VOL_MAX },
-	{ "class-shift",     required_argument, NULL, OPT_CLASS_SHIFT },
+	{ "batch-min-run-us", required_argument, NULL, OPT_BATCH_MIN_RUN },
 	{ "trace-class",     no_argument,       NULL, OPT_TRACE_CLASS },
 	{ "stats",           required_argument, NULL, 's' },
 	{ "trace",           no_argument,       NULL, 't' },
@@ -199,11 +196,8 @@ restart:
 				return 1;
 			}
 			break;
-		case OPT_BATCH_VOL_MAX:
-			skel->rodata->batch_vol_max = parse_num("batch-vol-max", optarg);
-			break;
-		case OPT_CLASS_SHIFT:
-			skel->rodata->class_shift = parse_num("class-shift", optarg);
+		case OPT_BATCH_MIN_RUN:
+			skel->rodata->batch_min_run_ns = parse_num("batch-min-run-us", optarg) * 1000;
 			break;
 		case OPT_TRACE_CLASS:
 			skel->rodata->trace_class = true;
@@ -223,11 +217,8 @@ restart:
 		}
 	}
 	if (skel->rodata->fast_shift > 16 || skel->rodata->slow_shift > 16 ||
-	    skel->rodata->class_shift > 10 || skel->rodata->batch_vol_max > 1024 ||
 	    !skel->rodata->timer_interval_ns) {
-		/* class_shift > 10 would make the 1024 sample's step 0 */
-		fprintf(stderr, "fast/slow shifts must be <= 16, the class shift <= 10, "
-			"batch-vol-max <= 1024 and the timer period > 0\n");
+		fprintf(stderr, "shifts must be <= 16 and the timer period > 0\n");
 		return 1;
 	}
 
@@ -244,14 +235,14 @@ restart:
 		}
 	}
 	printf("mode=%s lat_slice_us=%llu batch_slice_us=%llu timer_us=%llu "
-	       "fast_shift=%u slow_shift=%u victim=%s batch_vol_max=%u class_shift=%u\n",
+	       "fast_shift=%u slow_shift=%u victim=%s batch_min_run_us=%llu\n",
 	       skel->rodata->forced_mode == MODE_LATENCY ? "latency" : "batch",
 	       (unsigned long long)skel->rodata->lat_slice_ns / 1000,
 	       (unsigned long long)skel->rodata->batch_slice_ns / 1000,
 	       (unsigned long long)skel->rodata->timer_interval_ns / 1000,
 	       skel->rodata->fast_shift, skel->rodata->slow_shift,
 	       skel->rodata->victim_batch_only ? "batch" : "any",
-	       skel->rodata->batch_vol_max, skel->rodata->class_shift);
+	       (unsigned long long)skel->rodata->batch_min_run_ns / 1000);
 
 	__u64 prev[KAIROS_NR_STATS] = {};
 	read_stats(skel, prev);
