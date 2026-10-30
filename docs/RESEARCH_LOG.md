@@ -422,6 +422,24 @@ choices. Add as you go.)
   `--victim any` 84–98% of preemptions hit batch victims, `--victim
   batch` 100%. Each zstd pass is a new process and cannot be preempted
   until classified (~6 slices).
+- Class changes are counted (`to_batch`, `from_batch` in the stats CSV)
+  and, with `--trace-class`, printed with pid and comm (e1f2698).
+- Classifier changed (3f3d11e): batch = has run `--batch-min-run-us`
+  (default 20 ms) of CPU since it last slept, kept per task
+  (`run_since_sleep`, reset by `stopping(p, false)`, grown by the run time
+  on `stopping(p, true)`). `pick_victim` adds the victim's current run.
+  Queue waiting doesn't count. Reason: the voluntary-stop EWMA marked busy
+  server threads batch under overload (section 6.6). Go parks a locked
+  worker thread (futex sleep) when sysmon preempts its goroutine after
+  ~10 ms, so busy workers stay under 20 ms; zstd never sleeps. A worker
+  in another language that never sleeps under a backlog would still turn
+  batch; only a dependency signal would catch that. A "wakes others"
+  signal (waker = `bpf_get_current_task_btf()` in `ops.runnable`, as
+  scx_lavd does, skipping hardirq/softirq context) was considered and
+  not used: when all Go Ps are held by busy workers, a finished request
+  readies the handler goroutine on the worker's own P without any kernel
+  wakeup. Each zstd pass is a new process, so zstd now shows one change
+  to batch and one back (at exit) per pass.
 
 ---
 
@@ -440,6 +458,8 @@ together with `meta.json` (git commit, kernel, VM config, parameters).
 | E1bp | 2026-10-29 | 2d885f7 | eevdf, never, always | `e1b-pilot.conf` (no batch, GOMAXPROCS 3), `e1b-pilot-gmp16.conf` (no batch, GOMAXPROCS 16), `e1b-pilot-z2.conf` (2 zstd, GOMAXPROCS 3); 500 µs; 8 s steps 1000–6000 req/s | 1 | `results/2026-10-29-e1b-pilot{,-gmp16,-z2}/` | Pilot. Load generator keeps up to 6000 req/s; with GOMAXPROCS 3 the kernel sees ≤ ~1 runnable per CPU without batch; with 16 up to 4.7 (section 6.3). EEVDF-gmp16 and always-z2 runs disturbed (memory pressure; VS Code `node` 32%) |
 | E1b | 2026-10-29 | 3a9b17e | eevdf, never, never3, always | `e1b.conf`: no batch, server GOMAXPROCS 16, 500 µs, 8 s steps 1000/2000/3000/3500/4000/4500/5000 req/s | 10 | `results/2026-10-29-e1b/` | No crossover: never3 ≥ always at every rate. always has the higher p50 in 10/10 reps at every rate (0.8 vs 0.7 ms at 1000, 4.1 vs 1.1 at 4000) because workers are preempted mid-request (section 6.4) |
 | E1c | 2026-10-29 | 0b25c6b | eevdf, never, never3, always, batchvic (`--force-preempt --victim batch`) | `e1c.conf`: 2 zstd, server GOMAXPROCS 16, 500 µs, 8 s steps 1000/2000/3000/3500/4000/4500 req/s | 10 | `results/2026-10-29-e1c/` | batchvic has the lowest p50 at every rate (8–10/10 paired up to 4000) with workers' service time unchanged; more batch than always, less than never3. Plain always crosses never3 at ~4000 req/s. 2 batchvic reps collapsed at 4000–4500 (section 6.5) |
+| DC1 | 2026-10-30 | e1f2698 | batchvic + `--trace-class` (EWMA classifier) | `diag-class.conf`: 2 zstd, GOMAXPROCS 16, 8 s at 3000/4500/5500 req/s | 2 | `results/2026-10-30-diag-class-012039/` | Overload diagnostic. 45 server threads relabelled batch 488 times (section 6.6). IDE in use |
+| DC2 | 2026-10-30 | 3f3d11e | as DC1, run-time classifier | as DC1 | 2 | `results/2026-10-30-diag-class-012531/` | 28 server threads relabelled 42 times; one rep still slow from 4500 req/s (section 6.6). IDE in use |
 
 ### 5.1 Planned experiments
 | # | Experiment | Pattern | Shows |
@@ -653,6 +673,24 @@ to ~15k, and up to 90% of wakeups found a batch victim (r7), against
 20–30% before. Other processes used 35% and 24% of a CPU in these two runs
 (median for batchvic 11%).
 
+### 6.6 Class changes under overload (DC1, DC2; 2026-10-30)
+One-off diagnostics, 2 reps each, IDE in use (not for performance).
+batchvic with `--trace-class`, 2 zstd, GOMAXPROCS 16, 8 s each at 3000,
+4500, 5500 req/s. Class changes from `trace_pipe`; per-second counts
+from `sched_stats.csv`. (The first DC1 attempt captured no trace:
+`trace_pipe` reported busy once; rerun.)
+- DC1, voluntary-stop EWMA classifier: 1209 class changes. `grpcserver`
+  488 to batch / 459 back, 45 distinct threads; zstd 134 to batch. At
+  3000 req/s 3–7 changes to batch per second (new zstd processes). In
+  the rep that collapsed at 4500 req/s (p50 359 ms), 23–41/s; in the rep
+  that held (p50 4.8 ms), 1–3/s. At 5500 (both overloaded), 4–44/s.
+- DC2, run-time classifier: `grpcserver` 42 to batch / 42 back, 28
+  distinct threads; zstd 758 / 758 (one change each way per pass, the
+  second at exit); loadgen 85, claude 47, node 34. Changes to batch
+  5–24/s in every phase. Rep 1 was still slow at 3000 req/s (p50
+  3.2 ms, p99 190 ms) and collapsed from 4500 (p50 980 ms, 3770 failed
+  at 5500); rep 2 p50 1.2 ms / 6.1 ms at 3000 / 4500.
+
 ---
 
 ## 7. Explanations and insights
@@ -810,6 +848,15 @@ E1c (section 6.5):
 - The measured load reads lower under batchvic (1.20–2.57) than under
   never3 (1.50–3.86) at the same rate, as with always in E1: the signal
   stays mode- and policy-dependent.
+
+DC1/DC2 (section 6.6):
+- Confirmed: under overload, the EWMA classifier relabelled busy server
+  threads as batch, many times a second, in the rep that collapsed.
+- The run-time classifier removes most of that (42 vs 488 relabellings),
+  but a collapse at 4500 req/s still happened in 1 of 2 reps. So the
+  relabelling was at most an aggravating factor; 4500 req/s with 2 zstd
+  is near capacity, where every config had slow reps in E1c. Whether
+  batchvic now fails no more often than the fixed modes needs E1c again.
 
 ---
 
@@ -1343,3 +1390,20 @@ two pages; NAPI kept as a one-line analogy.
 **Next:** Compile (Overleaf or a local TeX install) and check it fits.
 Update (same day): the user has the proposal; `docs/proposal/` removed
 from the repository at the user's request (recoverable from 16bad51).
+
+### 2026-10-30 — Class-change diagnostics; run-time classifier
+**Did:** Removed the proposal from the repo. Added class-change counters
+and `--trace-class` (e1f2698). Ran the overload diagnostic (DC1) with the
+EWMA classifier, replaced it with "20 ms of CPU since last sleep"
+(3f3d11e), ran it again (DC2).
+**Found:** Section 6.6. EWMA: 45 server threads relabelled 488 times,
+mostly in the rep that collapsed. Run-time rule: 42 relabellings, but one
+rep still collapsed at 4500 req/s.
+**Interpretation:** Mislabelling was real but not the whole cause of the
+collapses; near capacity every policy can collapse (section 7).
+**Decisions:** Run-time classifier replaces the EWMA (section 4); "wakes
+others" not used for now (unreliable under Go when all Ps are busy).
+**Problems:** `trace_pipe` busy once; a `pkill -f` pattern matched its
+own shell and killed it (exit 144). Use a timed reader instead.
+**Next:** E1c again with the new classifier (never3, always, batchvic;
+10 reps).
