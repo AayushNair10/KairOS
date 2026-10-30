@@ -1341,3 +1341,5 @@ two pages; NAPI kept as a one-line analogy.
 **Problems:** No TeX in the VM, so the page count is estimated
 (~1,100 words + 11 references), not checked.
 **Next:** Compile (Overleaf or a local TeX install) and check it fits.
+Update (same day): the user has the proposal; `docs/proposal/` removed
+from the repository at the user's request (recoverable from 16bad51).
