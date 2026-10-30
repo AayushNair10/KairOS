@@ -63,6 +63,11 @@ LOADGEN_GOMAXPROCS=${LOADGEN_GOMAXPROCS:-4}
 # The server's Go runtime logs one line per GC to server.log, so latency
 # episodes can be checked against GC (analysis/episodes.py).
 SERVER_GODEBUG=${SERVER_GODEBUG-gctrace=1}
+# The server's GOMAXPROCS; 0 keeps Go's default, the number of CPUs it may
+# run on (3 with SUT_CPUS=0-2). At most that many worker threads run Go code
+# at once; the others wait inside the Go runtime, asleep, where the kernel
+# scheduler doesn't see them.
+SERVER_GOMAXPROCS=${SERVER_GOMAXPROCS:-0}
 
 BIN=$ROOT/workloads/bin
 # Command prefixes for pinning. taskset execs the command, so $! after
@@ -198,7 +203,7 @@ run_one() {
 	"$ROOT/scripts/meta.sh" "$dir" "$entry" "$WORKLOAD" > /dev/null
 
 	GODEBUG=$SERVER_GODEBUG "${SUT_PIN[@]}" "$BIN/grpcserver" -addr "$ADDR" -workers "$WORKERS" -work-us "$WORK_US" \
-		-iters-per-us "$ITERS_PER_US" > "$dir/server.log" 2>&1 &
+		-iters-per-us "$ITERS_PER_US" -gomaxprocs "$SERVER_GOMAXPROCS" > "$dir/server.log" 2>&1 &
 	SERVER_PID=$!
 	start_batch "$dir"
 	sleep "$BATCH_WARMUP_S" # let the batch jobs reach a steady state
@@ -239,6 +244,7 @@ WORKLOAD+=" batch_input=$(basename "$BATCH_INPUT") zstd_level=$ZSTD_LEVEL"
 WORKLOAD+=" batch_warmup_s=$BATCH_WARMUP_S"
 WORKLOAD+=" sut_cpus=${SUT_CPUS:-all} loadgen_cpus=${LOADGEN_CPUS:-all}"
 WORKLOAD+=" loadgen_gomaxprocs=$LOADGEN_GOMAXPROCS server_godebug=$SERVER_GODEBUG"
+WORKLOAD+=" server_gomaxprocs=$SERVER_GOMAXPROCS"
 
 OUT=$ROOT/results/$(date +%F)-$NAME
 [ -e "$OUT" ] && OUT=$OUT-$(date +%H%M%S) # never overwrite earlier raw data
