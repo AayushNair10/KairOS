@@ -503,6 +503,8 @@ together with `meta.json` (git commit, kernel, VM config, parameters).
 | DC2 | 2026-10-30 | 3f3d11e | as DC1, run-time classifier | as DC1 | 2 | `results/2026-10-30-diag-class-012531/` | 28 server threads relabelled 42 times; one rep still slow from 4500 req/s (section 6.6). IDE in use |
 | E1c2 | 2026-10-30 | 661c254 | never3, always, batchvic (run-time classifier) | `e1c2.conf`: as E1c | 10 | `results/2026-10-30-e1c2/` | No failed requests in any run; slow reps 2/3/3 (never3/always/batchvic). batchvic p50 below never3 in 8–10/10 up to 4000 req/s, below always in 7–9/10 at 3500–4500 but only 2–4/10 at 2000–3000; batch MB/s above always 8–10/10 (section 6.7) |
 | E2p | 2026-10-30 | a025a0d, a7fd0f6, 6206245 | never, batchvic, adaptive (`--adaptive --victim batch --signal-cpus 0-2`) | `e2-pilot.conf` (2 zstd) and `e2-pilot-z1.conf` (1 zstd): 5 s phases alternating 500 and 3500 req/s, GOMAXPROCS 16 | 1 | `results/2026-10-30-e2-pilot*/` | Functional pilots, IDE in use (other processes 20–100% of a CPU). With 2 zstd, BATCH always misses a 1 ms target. With 1 zstd and the fixed signal, adaptive is mostly BATCH when quiet and LATENCY when busy (section 6.8) |
+| E2pt | 2026-10-30 | 652be42 | a5, a10 (`--adaptive --victim batch --signal-cpus 0-2`, `--lat-target-us` 5000 / 10000) | `e2-pilot-target.conf`: as `e2-pilot.conf` (2 zstd) | 1 | `results/2026-10-30-e2-pilot-target/` | Picks E2's 2-job targets. a10 stayed in BATCH all run (late ≤ 2%/s); a5 mostly LATENCY, BATCH tries ended within 1–2 s (section 6.9) |
+| E2 | 2026-10-30 | 7eb796e | eevdf, never, never3, batchvic, adaptive (1 ms target); with 2 zstd a5, a10 (5 / 10 ms) instead of adaptive | `e2-z1.conf` (1 zstd), `e2-z2.conf` (2 zstd): 5 s phases alternating 500 / 3500 req/s, three times; GOMAXPROCS 16; IDE idle | 10 | `results/2026-10-30-e2-z1/`, `results/2026-10-30-e2-z2/` | No failed requests. 1 zstd: adaptive ≈ batchvic, quiet-phase batch +0–2.5%. 2 zstd: a10 never left BATCH (= never); a5 in between, busy p99 worse than batchvic and never3 (section 6.9) |
 
 ### 5.1 Planned experiments
 | # | Experiment | Pattern | Shows |
@@ -781,6 +783,55 @@ so only the mode behaviour counts, not latency differences. 5 s phases,
   after 2–3 s (the hold had doubled during the busy phase). Batch MB/s in
   quiet phases: adaptive 314–319, batchvic 282–321, never 293–310.
 
+### 6.9 E2: bursty load (2026-10-30)
+5 s phases, 500 (quiet) and 3500 (busy) req/s alternating three times;
+GOMAXPROCS 16; 10 interleaved reps; IDE idle. Medians over reps, per
+phase in order (quiet phases 0/2/4, busy phases 1/3/5); ms unless noted.
+No failed requests. "LAT ms/s" = time in LATENCY mode per second.
+
+1 zstd job (`results/2026-10-30-e2-z1/`, adaptive target 1 ms):
+
+| config | quiet p99 | quiet batch MB/s | busy p50 | busy p99 | busy batch MB/s | LAT ms/s quiet; busy |
+|---|---|---|---|---|---|---|
+| eevdf | 10 / 3 / 3 | 314 / 329 / 329 | 3.9 / 3.1 / 2.4 | 44 / 32 / 25 | 164 / 179 / 179 | – |
+| never | 3 / 5 / 3 | 333 / 333 / 333 | 5.7 / 4.6 / 5.0 | 80 / 79 / 82 | 253 / 256 / 243 | – |
+| never3 | 4 / 3 / 4 | 334 / 333 / 329 | 2.9 / 2.7 / 2.7 | 23 / 18 / 22 | 228 / 236 / 223 | – |
+| batchvic | 3 / 3 / 3 | 324 / 322 / 327 | 1.4 / 1.2 / 1.2 | 108 / 12 / 11 | 166 / 180 / 172 | – |
+| adaptive | 4 / 7 / 5 | 332 / 328 / 326 | 1.3 / 1.3 / 1.3 | 14 / 15 / 14 | 174 / 174 / 164 | 0 / 321 / 624; 982 / 992 / 997 |
+
+- Quiet p50 0.8 for every kairos config, 0.9 for eevdf.
+- adaptive's quiet batch MB/s above batchvic in 8/7/5 of 10 reps; busy
+  p99 below batchvic in 9/3/4 of 10.
+- batchvic's phase-1 p99 (108) comes from 1 s windows with p99 170–440 ms
+  in 6/10 reps, at different times in the phase. In batchvic-r5 the
+  window overlapped GC cycles stretched to 20–37 ms wall (`episodes.py`).
+  adaptive's worst 1 s window in phase 1: 87 ms.
+
+2 zstd jobs (`results/2026-10-30-e2-z2/`; a5, a10 = adaptive with 5 / 10
+ms targets):
+
+| config | quiet p99 | quiet batch MB/s | busy p50 | busy p99 | busy batch MB/s | LAT ms/s quiet; busy |
+|---|---|---|---|---|---|---|
+| eevdf | 5 / 5 / 5 | 584 / 590 / 581 | 6.3 / 5.0 / 4.4 | 68 / 61 / 68 | 223 / 230 / 222 | – |
+| never | 7 / 10 / 16 | 641 / 628 / 612 | 10.3 / 9.1 / 9.7 | 131 / 141 / 154 | 299 / 285 / 261 | – |
+| never3 | 6 / 7 / 6 | 627 / 594 / 611 | 5.6 / 4.3 / 3.9 | 53 / 38 / 35 | 265 / 265 / 259 | – |
+| batchvic | 5 / 5 / 7 | 596 / 588 / 549 | 1.9 / 1.8 / 2.2 | 34 / 25 / 32 | 221 / 224 / 191 | – |
+| a5 | 18 / 17 / 13 | 637 / 608 / 600 | 5.2 / 3.9 / 2.0 | 118 / 67 / 58 | 226 / 257 / 222 | 0 / 114 / 477; 752 / 777 / 1000 |
+| a10 | 27 / 12 / 11 | 612 / 623 / 614 | 11.0 / 8.6 / 7.8 | 154 / 184 / 127 | 285 / 278 / 272 | 0 in every phase |
+
+- Quiet p50: batchvic 0.9–1.0, others 1.0–1.2.
+- a10's late share (wakeups on CPUs 0–2 waiting > 10 ms) was ≤ 0.4% in
+  busy phases while request p99 was 127–184 ms.
+- a5's quiet batch MB/s above batchvic in 10/7/9 of 10 reps; busy p99
+  below batchvic in 1/4/5 and below never3 in 3/4/5 of 10.
+- Runs with other processes above 30% of a CPU: z1 eevdf-r2 (45%), z2
+  batchvic-r1 (72%, mostly the VS Code server) and never3-r4 (31%).
+
+E2pt pilot (`results/2026-10-30-e2-pilot-target/`, one run each, 2 zstd):
+a10 stayed in BATCH all run; a5 was mostly in LATENCY, its BATCH tries
+ending within 1–2 s (the per-second samples don't show the late-share
+spike that ended each one).
+
 ---
 
 ## 7. Explanations and insights
@@ -982,6 +1033,35 @@ E2 pilots (section 6.8):
   with a looser target.
 - The hold doubling makes the return to BATCH slow after a busy phase;
   `--hold-max-ms` and the reset rule are knobs to revisit.
+
+E2 (section 6.9):
+- With 1 zstd job the switch does what it was built to do (BATCH when
+  quiet, LATENCY 98–100% of busy phases) and matches batchvic's latency
+  in busy phases. It gains little: when quiet, batchvic already keeps
+  97–98% of never's batch throughput, so BATCH mode wins back at most
+  ~2.5%. The doubled hold keeps it in LATENCY for 0.3–0.6 s of each second
+  in later quiet phases. Its quiet p99 is slightly higher (4–7 vs 3 ms),
+  likely from the 20 ms slices in BATCH mode (guess).
+- With 2 zstd jobs, the late share of wakeups doesn't track request
+  latency: with a 10 ms target almost no wakeup was late while requests
+  took 127–184 ms at p99. Possible reasons, none measured: (1) a server
+  thread that is preempted or runs out of slice is queued again without
+  SCX_ENQ_WAKEUP, so its wait isn't counted; (2) one request crosses
+  several threads (network poller, worker, reply), and waits below the
+  target add up; (3) goroutines also queue inside the Go runtime, where
+  the kernel can't see them. zstd's main and I/O threads also add
+  wakeups that are rarely late, which dilutes the share.
+- So the target acts as a knob between never (10 ms) and batchvic (1 ms)
+  rather than a latency bound. At 5 ms it ends in between, and its busy
+  p99 is worse than both batchvic and the static never3: the BATCH stints
+  in busy phases (20 ms slices) add tail spikes. It does win 3–9% batch
+  MB/s over batchvic in quiet phases, at quiet p99 13–18 vs 5–7 ms.
+- Static never3 (no wakeup preemption, 3 ms slices) is a strong baseline:
+  with 2 zstd its busy p99 is 3–19 ms above batchvic's, with 18–36%
+  more batch throughput.
+- In E2 no adaptive configuration beats the best static one on both
+  latency and throughput, apart from small quiet-phase batch gains.
+  Batch-only victims remain the mechanism that moves request latency.
 
 ---
 
@@ -1578,3 +1658,21 @@ heading, two session entries) before publishing the repo.
 the `results/` paths it cites are the public record.
 **Problems:** Old commits still contain the previous wording.
 **Next:** User pushes; then E2 with reps.
+
+### 2026-10-30 — E2: bursty load, 10 reps
+**Did:** Pilot (E2pt) of 5 and 10 ms targets with 2 zstd jobs, then E2
+with 10 interleaved reps, 1 zstd (eevdf, never, never3, batchvic,
+adaptive 1 ms) and 2 zstd (same, with a5 and a10), IDE idle.
+**Found:** Section 6.9. No failed requests. 1 zstd: adaptive ≈ batchvic,
+quiet batch +0–2.5%. 2 zstd: a10 never leaves BATCH; a5 lands between
+never and batchvic with worse busy p99 than batchvic and never3.
+**Interpretation:** Section 7. The late share of wakeups misses most of
+what makes requests slow, so the target is a knob, not a bound. The
+mode switch adds little on top of batch-only victims here.
+**Decisions:** None yet; next step needs the user's choice.
+**Problems:** Three runs with other processes above 30% of a CPU (VS
+Code server) despite the idle IDE.
+**Next:** Either measure the waits the signal misses (non-wakeup
+enqueues of server threads) and fix the signal, or go back to a
+load-based switch, or keep batchvic as the main mechanism and move on to
+Feature A, the baselines (bpfland, lavd) and overhead (E7).
