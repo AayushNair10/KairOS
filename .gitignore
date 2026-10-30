@@ -1,2 +1,5 @@
 # Python bytecode cache (analysis/ imports runlib.py)
 __pycache__/
+
+# Experiment data (1.8 GB): stays in the VM, not in git.
+results/

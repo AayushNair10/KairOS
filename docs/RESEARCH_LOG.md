@@ -1,6 +1,6 @@
 # Research Log: KairOS — Load-Adaptive Wakeup Preemption with sched_ext
 
-CSE 506 (Fall 2026) individual project. Author: Aayush Nair.
+Individual project. Author: Aayush Nair.
 
 This file is the single running record of the project: decisions, related work,
 design, experiments, results and open questions. It is organized so each section
@@ -124,7 +124,7 @@ the final report.)
 ### 2.7 ML in the kernel path
 - LiteFlow (SIGCOMM 2022): small models in kernel networking path. Our design keeps the model in user space (PageFlex-style), so this is context only.
 
-### 2.8 Course papers to cite
+### 2.8 Papers to cite
 Battle of the Schedulers (ATC 2018), ghOSt (SOSP 2021), FlexSC (OSDI 2010),
 PageFlex (ATC 2025), Linux scalability (OSDI 2010), Multikernel (SOSP 2009).
 
@@ -1085,7 +1085,7 @@ Newest at the bottom. Template:
 ```
 
 ### 2026-10-26 — Design phase complete
-**Did:** Studied course material; surveyed sched_ext schedulers (bpfland, flash,
+**Did:** Studied background papers; surveyed sched_ext schedulers (bpfland, flash,
 lavd), EEVDF preemption features, preemption-cost research, task-criticality
 research, traffic predictability, load generators and traces.
 **Found:** Load-adaptive timeslices already exist in sched_ext schedulers (all
@@ -1246,8 +1246,8 @@ the Makefile's include paths); the build itself is fine.
 
 ### 2026-10-28 — Cost of the idle-CPU search in select_cpu
 **Did:** Read `scx_select_cpu_dfl` and `select_task_rq_scx` (v7.0) to answer
-whether the idle-CPU search is wasted work under high load. Removed the course
-reference from the `scx_kairos.bpf.c` header comment.
+whether the idle-CPU search is wasted work under high load. Trimmed the
+`scx_kairos.bpf.c` header comment.
 **Found:** (from reading code, not measured) The search reads a kernel-kept
 bitmask of idle CPUs; on this VM it is a few bit operations, and it fails
 fastest exactly when all CPUs are busy. See section 4.
@@ -1566,3 +1566,15 @@ Pilots ran with the IDE in use.
 **Next:** E2 with reps (never, never3, batchvic, adaptive, EEVDF) on a
 bursty pattern, IDE idle; decide which workload gives the switch room
 (e.g. a looser target or costlier batch preemption).
+
+### 2026-10-30 — Experiment data kept out of git; neutral wording for publishing
+**Did:** Added `results/` to `.gitignore`. (First committed it without the
+per-request logs, 50 MB; undid that unpushed commit at the user's request.)
+Reworded the course references in CLAUDE.md and this log (header, 2.8
+heading, two session entries) before publishing the repo.
+**Found:** 2,779 untracked files, 1.8 GB; `requests.csv` is 1.7 GB of it.
+**Interpretation:** None.
+**Decisions:** Experiment data stays only in the VM; the log's tables and
+the `results/` paths it cites are the public record.
+**Problems:** Old commits still contain the previous wording.
+**Next:** User pushes; then E2 with reps.

@@ -4,7 +4,7 @@ Instructions for Claude when working in this repository.
 
 ## What this project is
 **KairOS** (repo: https://github.com/AayushNair10/KairOS; scheduler program
-`scx_kairos`). CSE 506 (Fall 2026) individual course project by Aayush Nair: a Linux scheduler
+`scx_kairos`). Individual project by Aayush Nair: a Linux scheduler
 built with **sched_ext** (eBPF) that adapts **wakeup preemption** to current and
 predicted load, for a latency-critical service colocated with batch work.
 Context lives in two files. Read both before starting any non-trivial task:
@@ -14,7 +14,7 @@ Context lives in two files. Read both before starting any non-trivial task:
   design (mode tree, classification tree, features A and B, ML), experiment log,
   results and session history.
 
-AI assistance is allowed by the course, but **I must understand every line of
+AI assistance is welcome, but **I must understand every line of
 code and verify every result**. So:
 - Explain non-obvious code you write (BPF verifier constraints, fixed-point math,
   concurrency, kfunc semantics) in short comments or in your reply.
