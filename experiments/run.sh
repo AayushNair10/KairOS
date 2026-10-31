@@ -33,7 +33,11 @@
 # SCHEDULERS is a space-separated list of entries "[label=]scheduler":
 #   eevdf                    no sched_ext scheduler loaded (the kernel's default)
 #   kairos[:opt1,opt2,...]   our scheduler with these loader options
-# e.g. "eevdf never=kairos:--never-preempt always=kairos:--force-preempt".
+#   scx:NAME[:opt1,...]      a baseline sched_ext scheduler: bpfland or lavd
+#                            (built with cargo in $SCX_RUST_BIN) or simple
+#                            (the kernel's example, in $SCX_C_BIN)
+# e.g. "eevdf never=kairos:--never-preempt always=kairos:--force-preempt
+#       lavdperf=scx:lavd:--performance".
 # The label names the run directory (<label>-r<rep>); without one, the
 # scheduler string is used with ':' and ',' replaced by '_'. For kairos runs
 # the loader's per-second stats go to sched_stats.csv.
@@ -91,6 +95,8 @@ batch) BATCH_CHRT=(chrt --batch 0) ;;
 esac
 
 BIN=$ROOT/workloads/bin
+SCX_RUST_BIN=${SCX_RUST_BIN:-$HOME/scx/target/release}
+SCX_C_BIN=${SCX_C_BIN:-$HOME/linux-src/tools/sched_ext/build/bin}
 # Command prefixes for pinning. taskset execs the command, so $! after
 # `"${SUT_PIN[@]}" cmd &` is still cmd's PID.
 SUT_PIN=()
@@ -99,6 +105,7 @@ LOADGEN_PIN=()
 [ -n "$LOADGEN_CPUS" ] && LOADGEN_PIN=(taskset -c "$LOADGEN_CPUS")
 STATE=/sys/kernel/sched_ext/state
 SCHED_PID=
+SCHED_COMM=	# process name of the running scheduler, for pkill
 SERVER_PID=
 BATCH_PIDS=()
 
@@ -151,8 +158,29 @@ start_sched() {
 		sudo "$ROOT/scheduler/scx_kairos" $opts --stats "$2/sched_stats.csv" \
 			> "$2/sched.log" 2>&1 &
 		SCHED_PID=$!
+		SCHED_COMM=scx_kairos
 		if ! wait_state enabled || [ "$(cat /sys/kernel/sched_ext/root/ops)" != kairos ]; then
 			log "scx_kairos did not load; see $2/sched.log"
+			return 1
+		fi
+		;;
+	scx:*)
+		local rest=${1#scx:} name bin
+		name=${rest%%:*}
+		local opts=${rest#"$name"}
+		opts=${opts#:}
+		opts=${opts//,/ }
+		case $name in
+		bpfland | lavd) bin=$SCX_RUST_BIN/scx_$name ;;
+		simple) bin=$SCX_C_BIN/scx_simple ;;
+		*) log "unknown scx scheduler '$name'"; return 1 ;;
+		esac
+		"$bin" --version > "$2/sched.log" 2>&1 || true
+		sudo "$bin" $opts >> "$2/sched.log" 2>&1 &
+		SCHED_PID=$!
+		SCHED_COMM=scx_$name
+		if ! wait_state enabled; then
+			log "$SCHED_COMM did not load; see $2/sched.log"
 			return 1
 		fi
 		;;
@@ -168,7 +196,7 @@ start_sched() {
 # before it printed its exit reason.)
 stop_sched() {
 	[ -n "$SCHED_PID" ] || return 0
-	sudo pkill -INT -x scx_kairos || true
+	sudo pkill -INT -x "$SCHED_COMM" || true
 	wait "$SCHED_PID" || true
 	SCHED_PID=
 	wait_state disabled || log "warning: sched_ext is still '$(cat "$STATE")'"
