@@ -188,6 +188,75 @@ https://www.usenix.org/conference/nsdi19/presentation/kaffes,
 https://arxiv.org/abs/2308.02896,
 https://www.cs.rochester.edu/~kshen/papers/expcs2007.pdf
 
+### 2.10 How colocation systems get latency and batch throughput together (read 2026-10-30)
+Question: in E2, BATCH-like configurations got the most batch throughput
+and preemption the best latency; how do deployed and research systems
+get both? From papers' abstracts, summaries and the scx sources on this
+VM (details beyond those not checked):
+- They mostly don't time-share a CPU between the two classes; they split
+  CPUs and move the split with load:
+  - Heracles (Google, ISCA 2015): separate cores (cpusets), plus cache,
+    memory-bandwidth and network isolation; a controller reads the
+    service's tail latency and load every 15 s and gives batch work
+    resources only while there is slack to the SLO. ~90% average
+    utilization without SLO violations.
+  - PerfIso (Microsoft Bing, ATC 2018; >90,000 servers): "CPU blind
+    isolation" keeps a buffer of idle cores for the bursty service and
+    lets batch jobs use the rest; utilization 21% -> 66% off-peak
+    without tail impact.
+  - Shenango (NSDI 2019) and Caladan (OSDI 2020): a dedicated core
+    reallocates cores between applications every 5-10 µs; the signal is
+    queueing delay (packets or threads still waiting since the last
+    check), not a per-event threshold. Caladan uses core allocation only
+    (no hardware partitioning) and reports 52 µs vs 580 ms tail latency
+    against PARTIES during load shifts (their claim).
+  - Meta ads (engineering blog, 2026-07-13): a custom sched_ext policy
+    soft-partitions CPUs into a pool for request-path threads and one for
+    the rest, sizes the pools with load heuristics, chooses threads by
+    domain knowledge: -28% p99, then -60% more with later policy
+    updates. scx_layered (Meta) does the same in general form: layers
+    with CPU budgets, unused CPUs lent to other layers.
+  - Why it works: a woken service thread finds an idle CPU (no wait, no
+    preemption) while batch threads run long, uninterrupted slices on
+    their own CPUs (warm caches, few switches). The cost is CPUs kept
+    idle as a buffer, which the controller sizes by load.
+- Their signals are about the service, not single wakeups: tail latency
+  vs SLO (Heracles), queueing delay (Shenango, Caladan), idle-core count
+  (PerfIso), load (Meta).
+- Where they do time-share, they shorten rather than cut: scx_lavd
+  shrinks the running task's remaining slice (`scx_bpf_task_set_slice`)
+  and sends an IPI only if it has already overrun; slices 0.5–5 ms
+  scaled by queued tasks (2.9). scx_bpfland gives at most 1 ms divided
+  by waiting tasks, and interactive tasks (high voluntary switch rate) a
+  separate, higher-priority queue.
+- They identify latency-critical work explicitly or by structure: per
+  job (Heracles, PerfIso), per thread from domain knowledge (Meta), or
+  scx_lavd's latency criticality: high wake and wait frequency, short
+  runs, propagated along waker/wakee chains, which catches threads in
+  the middle of a request path. Linux's SCHED_BATCH/SCHED_IDLE and
+  cgroup `cpu.idle` let users mark batch work; under EEVDF the only
+  difference left for SCHED_BATCH is that it doesn't preempt normal
+  tasks on wakeup (Zijlstra, LKML 2024).
+- Application side: Tales of the Tail (SoCC 2014) found background
+  processes, request re-ordering by the scheduler, interrupt placement
+  and connection-to-thread binding behind tails, and p99 rising 10x
+  from 50% to 95% utilization. IX (OSDI 2014) batches only under
+  congestion and bounds the batch size. Go services set GOMAXPROCS to
+  their CPU allocation (container-aware by default since Go 1.25); our
+  server runs GOMAXPROCS 16 on 3 CPUs on purpose (E1b) so the kernel
+  sees the threads, which also adds Go-level queueing and spinning that
+  a production setup wouldn't have.
+
+Sources: https://research.google/pubs/heracles-improving-resource-efficiency-at-scale/,
+https://www.usenix.org/conference/atc18/presentation/iorgulescu,
+https://www.usenix.org/conference/nsdi19/presentation/ousterhout,
+https://www.usenix.org/conference/osdi20/presentation/fried,
+https://engineering.fb.com/2026/07/13/ml-applications/modernizing-the-meta-ads-service-with-an-open-source-kernel-scheduler/,
+https://lkml.iu.edu/hypermail/linux/kernel/2407.1/02711.html,
+https://syslab.cs.washington.edu/papers/latency-socc14.pdf,
+https://www.usenix.org/conference/osdi14/technical-sessions/presentation/belay,
+https://go.dev/blog/container-aware-gomaxprocs
+
 ---
 
 ## 3. Design
@@ -1866,3 +1935,20 @@ shell with `pgrep -f` and killed it; used `$!` instead.
 **Next:** Options: a flexible slice in BATCH mode; a signal from total
 waiting time of the service's threads (or the service's own latency);
 keeping the load generator out of the scheduler under test.
+
+### 2026-10-30 — Research: how colocation systems get both
+**Did:** Read how Heracles, PerfIso, Shenango, Caladan, Meta's ads
+sched_ext policy, scx_layered, scx_lavd, scx_bpfland, Linux SCHED_BATCH
+and Tales of the Tail handle latency-critical plus batch work (section
+2.10). No code changes.
+**Found:** Most deployed systems split CPUs between the two classes and
+resize the split by load or by the service's latency, rather than
+deciding per wakeup whether to preempt on shared CPUs. Where they share,
+they shrink slices instead of preempting at once.
+**Interpretation:** Our design time-shares 3 CPUs per wakeup, the hardest
+version of the problem; the measured trade-off in E2 (preempt: zstd
+interrupted ~3,600/s; don't: 2–5 ms waits) is what CPU splitting avoids.
+**Decisions:** None; the user chooses the direction.
+**Problems:** Several numbers come from abstracts and summaries only.
+**Next:** Choose among a soft CPU split sized by load or queueing delay,
+a flexible slice, and a service-side or queueing-delay signal.
