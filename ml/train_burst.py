@@ -20,6 +20,10 @@ n = ceil(demand + buffer) clamped to [1, CPUs]: "under" is the share of
 samples where the pool would be smaller than the target needs, "over" the
 mean number of CPUs given to LC beyond it. "max(ewma, tree)" is what the
 BPF side does with a fresh prediction (it can only raise demand).
+A bigger buffer also cuts "under" at the cost of "over", so the reactive
+predictors are also scored with extra buffer, the smallest amount (in 0.05
+CPU steps) that gives LC at least as many extra CPUs as max(ewma, tree):
+the tree only helps if it beats them at the same cost.
 
 The tree is plain Python (no numpy or scikit-learn on this VM) and is
 written in the text format scx_kairos --ml-model reads.
@@ -123,10 +127,18 @@ def evaluate(name, pairs, nodes, k, buffer, cpus):
     }
     preds["max(ewma, tree)"] = [max(a, b) for a, b in zip(preds["ewma"], preds["tree"])]
     print(f"{name}: {len(pairs)} samples")
-    print(f"  {'predictor':16s} {'MAE':>6s} {'under':>7s} {'over':>6s}")
+    print(f"  {'predictor':24s} {'MAE':>6s} {'under':>7s} {'over':>6s}")
     for p, v in preds.items():
         mae, under, over = score(pairs, v, buffer, cpus)
-        print(f"  {p:16s} {mae:6.3f} {100 * under:6.1f}% {over:6.3f}")
+        print(f"  {p:24s} {mae:6.3f} {100 * under:6.1f}% {over:6.3f}")
+    target_over = score(pairs, preds["max(ewma, tree)"], buffer, cpus)[2]
+    for p in ("persistence", "ewma"):
+        for step in range(1, 61):
+            extra = step * 0.05
+            mae, under, over = score(pairs, [v + extra for v in preds[p]], buffer, cpus)
+            if over >= target_over:
+                print(f"  {p + f' +{extra:.2f} buffer':24s} {mae:6.3f} {100 * under:6.1f}% {over:6.3f}")
+                break
 
 
 def describe(nodes, k, i=0, depth=0):
