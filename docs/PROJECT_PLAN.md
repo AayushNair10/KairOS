@@ -121,7 +121,7 @@ initial params, prints and logs stats periodically (CSV).
 | 5. Adaptive switching | Nov 8–13 | Mode tree, hysteresis, fast exit, mode logging | Early E2; progress report Fri Nov 13. **Implemented** (Oct 30) as a latency-target switch (RESEARCH_LOG 3.4 revised, 6.8). E2 (Oct 30): little gain over batch-only victims; the per-wakeup signal doesn't track request latency (6.9, 6.10). Soft CPU split (Oct 30, `--split`): ≈ batch-only preemption on latency, slightly more batch throughput on 3 CPUs (6.12) |
 | 6. Features A and B | Nov 14–21 | Features, classification tree, class-aware preemption, budget, max wait | E5, E6. **Started early** (Oct 29): batch classification + batch-only victims; E1c: best p50 at every load (RESEARCH_LOG 6.5) |
 | 7. Full evaluation | Nov 18–26 | Azure replay, burst-length sweep, transitions, overhead, Redis, all baselines | E2–E7, G |
-| 8. ML | Nov 24–Dec 4 | Stats export, burst predictor vs persistence, classifier if time | E8 (E9) |
+| 8. ML | Nov 24–Dec 4 | Stats export, burst predictor vs persistence, classifier if time | E8 (E9). **Started early** (Oct 30): LC demand predictor for the soft CPU split; equivalent to a bigger buffer on 3 CPUs (RESEARCH_LOG 6.13) |
 | 9. Wrap-up | Dec 4–11 | Figures, analysis, video, final report | Submitted Fri Dec 11 |
 
 ---

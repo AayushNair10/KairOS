@@ -358,6 +358,16 @@ burst doesn't start with relearning).
   tree; output = per-task class overrides with timestamp.
 - Train/test on different patterns and services.
 
+**Revised 2026-10-30 (with the soft CPU split, section 2.10):** the
+predictor estimates the LC demand (CPUs) the pool must cover over the next
+200 ms, from the last 500 ms of 50 ms demand samples and the BPF demand
+EWMA; the BPF side uses a fresh prediction to raise (never lower) the
+demand the pool is sized from, so stale or missing predictions fall back
+to the reactive sizing. Inference runs in the C loader (a tree read from a
+file every 50 ms) instead of a Python daemon: the loader already holds the
+BPF maps, and a 50 ms loop through a second process would add IPC for
+nothing. Training stays in Python (`ml/train_burst.py`).
+
 ---
 
 ## 4. Implementation notes
@@ -641,6 +651,21 @@ choices. Add as you go.)
   SCHED_BATCH wakees from preempting (`wakeup_preempt_fair`, "BATCH and
   IDLE tasks do not preempt others"); weights are unchanged.
 
+
+- ML for `--split` (02cb689, 549bf7c): every `--ml-period-ms` (50) the
+  loader computes one demand sample, LC run time over the period / its
+  length + mean LC tasks queued (from `lc_queued_ticks`, summed by the
+  BPF timer, over `nr_timer_ticks`): the same quantity as the timer's own
+  sample, averaged. Features: the last K = 10 samples newest first + the
+  BPF EWMA; target: the largest sample of the next H = 4. `--ml-trace`
+  writes the samples; `--ml-model` evaluates a tree and writes
+  `ml_demand` then `ml_stamp` (= `nr_timer_ticks`) into the BPF bss; the
+  timer uses the prediction while `nr_timer_ticks - ml_stamp <=
+  ml_ttl_ticks` (100 ms by default). The two-word write is racy; a torn
+  read can only pair a demand with a neighbouring stamp. The tree is a
+  plain-Python CART (no numpy/scikit-learn on this VM), stored as text
+  with children after parents so the loader can reject cycles.
+
 ---
 
 ## 5. Experiment log
@@ -671,6 +696,8 @@ together with `meta.json` (git commit, kernel, VM config, parameters).
 | S2p | 2026-10-30 | be3eb2c (+REPS 2) | as S1p + splitnp (`--no-borrow-preempt --borrow-slice-us 1000`), `--diag` on | `e2s-pilot-gmp16.conf`, `e2s-pilot-gmp3.conf` (server GOMAXPROCS 16 / 3) | 2 | `results/2026-10-30-e2s-pilot-gmp16/`, `-gmp3/` | Other-process CPU 3–137% between runs (VS Code server, the Claude CLI, kswapd): inconclusive. eevdf failed requests in 4/4 runs (section 6.11) |
 | E2s | 2026-10-30 | a2ac442 | eevdf, never3, batchvicp, split | `e2s.conf`: E2 2-job workload, zstd SCHED_BATCH, GOMAXPROCS 16; Mac and IDE idle, start delayed 90 s | 5 | `results/2026-10-30-e2s/` | No failed requests; other processes 9–21%. split ≈ batchvicp on latency, +4% quiet batch MB/s, 63% fewer preemptions when quiet; vs never3 p50 4–5x lower when busy at 30% less batch (section 6.12) |
 | E2s-n | 2026-10-30 | a2ac442 | eevdf | `e2s-eevdf-normal.conf`: as E2s with zstd SCHED_OTHER | 5 | `results/2026-10-30-e2s-eevdf-normal/` | Same as eevdf with zstd SCHED_BATCH in E2s; the S1p/S2p failures were noise (section 6.12) |
+| MLtr | 2026-10-30 | 02cb689 | split (reactive) with `--ml-trace` | `ml-train.conf`, `ML_SEED` 1–3: `ml/patterns.py random` 60 s | 1 each | `results/2026-10-30-ml-train-s{1,2,3}/` | Training data, 1,277–1,291 samples each; other processes 16–20% |
+| MLte | 2026-10-30 | 549bf7c | split, splitml (`--ml-model ml/models/burst-v1.txt`), splitbuf (`--lc-buffer-pct 150`), batchvicp | `ml-test-short.conf` (`ml/patterns.py short 101 40`), `ml-test-periodic.conf` (E2 pattern) | 5 | `results/2026-10-30-ml-test-short/`, `-periodic/` | The model keeps the LC pool at 3 CPUs ~95% of the time, like a 1.5 CPU buffer; ML ≈ bigger buffer offline and online (section 6.13) |
 
 ### 5.1 Planned experiments
 | # | Experiment | Pattern | Shows |
@@ -1116,6 +1143,51 @@ req/s), 1/3/5 busy (3500 req/s).
   SCHED_BATCH. Correction to 6.11: the eevdf failures in S1p/S2p came with
   the noise, not with SCHED_BATCH.
 
+
+### 6.13 ML burst prediction for the split (2026-10-30)
+Offline (`ml/train_burst.py`, tree depth 5, K 10, H 4, buffer 0.5 CPU, 3
+CPUs). Trained on random-pattern traces s1, s2; tested on s3:
+
+| predictor | under-provisioned | extra LC CPUs |
+|---|---|---|
+| persistence | 21.7% | 0.04 |
+| ewma (reactive) | 17.3% | 0.05 |
+| tree | 2.2% | 0.32 |
+| max(ewma, tree) | 1.9% | 0.33 |
+| persistence + 1.1 CPU buffer | 1.0% | 0.33 |
+| ewma + 1.0 CPU buffer | 1.0% | 0.33 |
+
+Depths 3, 4, 6 gave the same picture. Model burst-v1 (trained on s1-s3,
+45 nodes) on the 10 reactive split traces of the test patterns: tree
+under 1.3% [0.6–2.4] / over 0.41; ewma + matched buffer 1.4% [0.6–3.4] /
+0.44; persistence + matched buffer 1.1% [0.6–2.7] / 0.42.
+
+Online (MLte, 5 reps, other processes 12–18% median; `analysis/byrate.py`,
+busy = ≥ 2000 req/s, onset = first 250 ms of a busy phase; medians over
+reps, ms and MB/s):
+
+| pattern | config | quiet p99 | busy p99 | onset p99 | batch quiet / busy | LC CPUs |
+|---|---|---|---|---|---|---|
+| short | split | 13.0 | 179 | 26 | 545 / 298 | 2.43 |
+| short | splitml | 6.4 | 43 | 39 | 558 / 313 | 3.01 |
+| short | splitbuf | 3.6 | 31 | 8.3 | 569 / 309 | 3.00 |
+| short | batchvicp | 3.0 | 45 | 63 | 552 / 306 | – |
+| periodic | split | 39.4 | 10.7 | 7.4 | 587 / 214 | 2.55 |
+| periodic | splitml | 3.3 | 78 | 14.5 | 589 / 209 | 3.01 |
+| periodic | splitbuf | 3.9 | 25 | 6.7 | 595 / 204 | 3.01 |
+| periodic | batchvicp | 9.5 | 15 | 10.1 | 560 / 202 | – |
+
+- Quiet p50 0.77–0.83 and busy p50 0.86–0.95 for every config.
+- The model raised the demand in 94–97% of the ticks its prediction was
+  fresh.
+- Busy p99 per rep swings from 5–10 to 170–2,400 ms within a config
+  (slow episodes in some reps of every config), so busy and onset tails
+  don't rank the configs. Quiet p99 is steadier: the reactive split's
+  small pool gave 36–49 ms in 4/5 periodic reps, splitml and splitbuf
+  3–9 ms.
+- splitbuf vs batchvicp: quiet batch MB/s higher in 5/5 (short) and 4/5
+  (periodic) reps; latency counts mixed (1–5/5).
+
 ---
 
 ## 7. Explanations and insights
@@ -1420,6 +1492,27 @@ E2s (section 6.12):
   spare CPU in busy phases. More CPUs would test that (guess).
 - The SCHED_BATCH "collapse" in the pilots was noise; with a quiet Mac
   Linux behaves the same with zstd as SCHED_BATCH or SCHED_OTHER.
+
+ML for the split (section 6.13):
+- The tree learned to ask for ~2 CPUs whenever there was recent LC
+  activity: on patterns it didn't see it is no better than adding ~1 CPU
+  of buffer to the reactive estimate, and online it behaves like a
+  1.5 CPU buffer (pool at 3 CPUs ~95% of the time). Random burst onsets
+  can't be predicted from the last 500 ms (expected, section 2.6); the
+  model's features can't see E2's 5 s period either.
+- On 3 CPUs a full LC pool costs no batch throughput, because zstd
+  borrows every CPU the service leaves idle, while a small pool hurts the
+  service's quiet-phase tails (LC tasks confined to one LC CPU wait behind
+  each other and borrowers). So pool sizing, reactive or predicted, has
+  nothing to gain here: the best split setting is the largest pool,
+  which is service priority + lending + borrower preemption. That is
+  about batchvicp with a few % more batch throughput when quiet.
+- This matches E2 and E2s: on 3 CPUs the adaptive parts (mode switching,
+  pool sizing, prediction) have little room, because there is no spare
+  capacity to manage and bursts aren't predictable at sub-second scale.
+  Machines with more CPUs than the service needs, or loads with
+  predictable structure (periodic arrivals), are where they could matter
+  (not tested).
 
 ---
 
@@ -2110,3 +2203,23 @@ design and how to continue.
 **Next:** Options: test the split with more CPUs (VM with 6–8 vCPUs);
 cut borrower preemptions (deferred preemption / short borrow slices);
 use ML burst prediction to grow the LC pool ahead of bursts.
+
+### 2026-10-30 — ML burst prediction for the soft CPU split
+**Did:** Added LC demand sampling, `--ml-trace`, `--ml-model` (tree
+evaluated in the loader every 50 ms; prediction can only raise the pool's
+demand, ignored when stale); `ml/patterns.py`; `ml/train_burst.py`
+(plain-Python CART, persistence / mean / EWMA baselines, matched-buffer
+baselines); `analysis/byrate.py`. Collected training data (random
+patterns), trained burst-v1, tested offline and online on short-burst and
+periodic patterns (5 reps) against the reactive split, a 1.5 CPU buffer
+and batchvicp.
+**Found:** Section 6.13. The model is equivalent to a bigger buffer
+offline and online; a full LC pool costs no batch throughput on 3 CPUs.
+**Interpretation:** Section 7. On this testbed, pool sizing and
+prediction have no room; service priority with lending is what helps.
+**Decisions:** ML inference in the C loader (section 3.8 revised).
+**Problems:** Slow episodes in single reps of every config make busy
+tails unrankable.
+**Next:** User to choose: evaluation phase (baselines bpfland/lavd,
+overhead E7, Redis) with the design as it is; a larger-CPU test where
+sizing could matter; a periodicity feature for the predictor.
