@@ -20,12 +20,14 @@ METRICS = [("lat_p50_us", "p50 ms", 1e-3), ("lat_p99_us", "p99 ms", 1e-3),
            ("batch_mb_s", "batch MB/s", 1)]
 
 
-def runs_by_config(out_dir):
+def runs_by_config(out_dir, skip_reps=()):
+    """{config: [run dir, ...]} in rep order, leaving out the reps in
+    skip_reps (whole reps, so paired counts stay paired)."""
     groups = {}
     for name in sorted(os.listdir(out_dir)):
         d = os.path.join(out_dir, name)
         m = re.fullmatch(r"(.+)-r(\d+)", name)
-        if m and os.path.exists(os.path.join(d, "loadgen.json")):
+        if m and int(m.group(2)) not in skip_reps and os.path.exists(os.path.join(d, "loadgen.json")):
             groups.setdefault(m.group(1), []).append((int(m.group(2)), d))
     return {k: [d for _, d in sorted(v)] for k, v in groups.items()}
 

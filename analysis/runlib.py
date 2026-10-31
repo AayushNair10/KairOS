@@ -107,6 +107,28 @@ def other_cpu(run_dir):
     return sorted(by_comm.items(), key=lambda kv: -kv[1])
 
 
+def proc_cpu(run_dir, comm):
+    """CPU seconds used during the load by the processes named comm that
+    ran through both snapshots (all their threads; a process that started
+    or exited in between, like each zstd of the batch loop, is missed)."""
+    a = _read_procs(os.path.join(run_dir, "procs_before"))
+    b = _read_procs(os.path.join(run_dir, "procs_after"))
+    return sum(t - a[pid][1] for pid, (c, t) in b.items()
+               if c == comm and pid in a and a[pid][0] == comm) / USER_HZ
+
+
+def sut_cpus(run_dir):
+    """The server's CPU numbers from meta.json's workload string."""
+    with open(os.path.join(run_dir, "meta.json")) as f:
+        w = json.load(f)["workload"]
+    spec = dict(kv.split("=", 1) for kv in w.split() if "=" in kv)["sut_cpus"]
+    out = []
+    for part in spec.split(","):
+        lo, _, hi = part.partition("-")
+        out += range(int(lo), int(hi or lo) + 1)
+    return out
+
+
 def sched_stats(run_dir, start_ns, end_ns):
     """Means over [start_ns, end_ns) of the scx_kairos loader's per-second
     stats (sched_stats.csv), or None for runs without them. Each row covers
@@ -130,7 +152,7 @@ def sched_stats(run_dir, start_ns, end_ns):
                                  "to_batch", "from_batch", "local", "global",
                                  "no_victim", "lat_wakeups", "lat_late", "late_frac",
                                  "mode_switches", "latency_ms", "lc_cpus", "lc_demand",
-                                 "borrow") if k in rows[0]}
+                                 "borrow", "kick") if k in rows[0]}
 
 
 def latency_with_failures(run_dir, nphases):

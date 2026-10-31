@@ -10,8 +10,9 @@ first had the lower p99: run.sh interleaves configurations within a
 repetition, so same-numbered runs are close in time and this paired count
 is robust to drift between repetitions (a sign test).
 
-Usage: analysis/compare.py results/<date>-<name> [config ...]
-(the optional list picks and orders the configurations)
+Usage: analysis/compare.py results/<date>-<name> [--skip-reps N,...] [config ...]
+(the optional list picks and orders the configurations; --skip-reps leaves
+out whole reps, e.g. ones disturbed by the host)
 """
 import os
 import statistics
@@ -29,9 +30,12 @@ def med_range(xs, fmt="{:.1f}"):
 
 
 def main():
-    out_dir = sys.argv[1]
-    groups = aggregate.runs_by_config(out_dir)
-    names = sys.argv[2:] or sorted(groups)
+    out_dir, args = sys.argv[1], sys.argv[2:]
+    skip = ()
+    if args[:1] == ["--skip-reps"]:
+        skip, args = tuple(int(x) for x in args[1].split(",")), args[2:]
+    groups = aggregate.runs_by_config(out_dir, skip)
+    names = args or sorted(groups)
     data = {n: [runlib.phase_rows(d) for d in groups[n]] for n in names}
     nphases = len(next(iter(data.values()))[0])
 
@@ -63,9 +67,15 @@ def main():
         sts = [runlib.system_stats(d) for d in groups[n]]
         oth = [runlib.other_cpu(d) for d in groups[n]]
         other = [100 * sum(s for _, s in o) / st["elapsed_s"] for o, st in zip(oth, sts)]
+        server = [100 * runlib.proc_cpu(d, "grpcserver") / st["elapsed_s"]
+                  for d, st in zip(groups[n], sts)]
+        # Idle time summed over the server's CPUs, in % of one CPU.
+        idle = [sum(100 * (1 - st["busy"][f"cpu{c}"]) for c in runlib.sut_cpus(d))
+                for d, st in zip(groups[n], sts)]
         print(f"  {n:8} ctx switches k/s {med_range([s['ctxt_per_s'] / 1000 for s in sts])}, "
               f"system time % {med_range([100 * s['system_frac'] for s in sts])}, "
-              f"other processes %CPU {med_range(other)}")
+              f"other processes %CPU {med_range(other)}, "
+              f"server %CPU {med_range(server)}, idle on server CPUs %CPU {med_range(idle)}")
 
 
 if __name__ == "__main__":
