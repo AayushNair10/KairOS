@@ -666,6 +666,19 @@ choices. Add as you go.)
   plain-Python CART (no numpy/scikit-learn on this VM), stored as text
   with children after parents so the loader can reject cycles.
 
+
+- Idle kicks (`kick_idle`, 7f1a122; off with `--no-kick-idle`). Inserting
+  a task into a user DSQ doesn't wake idle CPUs: the kernel doesn't know
+  which CPUs consume that DSQ, so an idle CPU only looks again when
+  something else wakes it (a task placed on its local DSQ, an interrupt).
+  `select_cpu()` covers wakeups, but a task re-queued after a preemption
+  or a slice end goes through `enqueue()` only. After every shared-DSQ
+  insert, `enqueue()` now calls `scx_bpf_pick_idle_cpu(p->cpus_ptr, 0)`
+  (finds an idle allowed CPU and clears its idle bit, so it isn't claimed
+  twice) and `scx_bpf_kick_cpu(cpu, SCX_KICK_IDLE)` (wakes it only if it
+  is still idle; it then runs `dispatch()`), counted as STAT_KICK. The
+  same pattern as `scx_central` and scx_bpfland's enqueue.
+
 ---
 
 ## 5. Experiment log
@@ -698,6 +711,7 @@ together with `meta.json` (git commit, kernel, VM config, parameters).
 | E2s-n | 2026-10-30 | a2ac442 | eevdf | `e2s-eevdf-normal.conf`: as E2s with zstd SCHED_OTHER | 5 | `results/2026-10-30-e2s-eevdf-normal/` | Same as eevdf with zstd SCHED_BATCH in E2s; the S1p/S2p failures were noise (section 6.12) |
 | MLtr | 2026-10-30 | 02cb689 | split (reactive) with `--ml-trace` | `ml-train.conf`, `ML_SEED` 1–3: `ml/patterns.py random` 60 s | 1 each | `results/2026-10-30-ml-train-s{1,2,3}/` | Training data, 1,277–1,291 samples each; other processes 16–20% |
 | MLte | 2026-10-30 | 549bf7c | split, splitml (`--ml-model ml/models/burst-v1.txt`), splitbuf (`--lc-buffer-pct 150`), batchvicp | `ml-test-short.conf` (`ml/patterns.py short 101 40`), `ml-test-periodic.conf` (E2 pattern) | 5 | `results/2026-10-30-ml-test-short/`, `-periodic/` | The model keeps the LC pool at 3 CPUs ~95% of the time, like a 1.5 CPU buffer; ML ≈ bigger buffer offline and online (section 6.13) |
+| E2f | 2026-10-30 | 93d2647 | eevdf, bpfland, lavd (autopilot), lavdperf (`--performance`), never3, always, batchvicp, kairos (`--split --split-cpus 0-2 --class policy --lc-buffer-pct 150`) | `e2f-periodic.conf` (E2 pattern), `e2f-short.conf` (`ml/patterns.py short 101 40`); zstd SCHED_BATCH, GOMAXPROCS 16; start delayed 90 s | 5 | `results/2026-10-30-e2f-periodic/`, `-short/` | No failed requests. Short rep 5 left out (host slowdown in its last three runs, section 6.14). kairos has the lowest busy p50 (0.9–1.0 ms; bpfland 1.4, eevdf 5.2–5.5, lavd 6.7–7.9) and fewest busy requests over 2/5/10 ms; bpfland has 7–9% (quiet) / 13–28% (busy) more batch MB/s (section 6.14) |
 
 ### 5.1 Planned experiments
 | # | Experiment | Pattern | Shows |
@@ -1190,6 +1204,73 @@ reps, ms and MB/s):
 
 ---
 
+### 6.14 E2-final: main comparison against the baselines (2026-10-30)
+`results/2026-10-30-e2f-periodic/` (5 reps) and `-short/` (reps 1–4;
+rep 5 left out, see below). Configs interleaved per rep, zstd
+SCHED_BATCH for all, no failed requests. `analysis/byrate.py` (busy =
+3500 req/s phases / ≥ 2000 req/s bursts), medians over reps, ms and MB/s;
+">2/5/10" = % of busy requests slower than 2/5/10 ms.
+
+Periodic (E2's pattern):
+
+| config | quiet p50 | busy p50 | busy >2/5/10 ms % | busy p95 | busy p99 | batch quiet / busy |
+|---|---|---|---|---|---|---|
+| eevdf | 1.06 | 5.21 | 82 / 51 / 29 | 139 | 342 | 623 / 252 |
+| bpfland | 0.90 | 1.45 | 38 / 14 / 5.7 | 10.8 | 37 | 630 / 243 |
+| lavd | 1.00 | 7.02 | 95 / 67 / 38 | 53 | 126 | 633 / 280 |
+| lavdperf | 1.03 | 7.86 | 95 / 68 / 43 | 135 | 310 | 616 / 276 |
+| never3 | 1.02 | 4.13 | 78 / 42 / 23 | 31 | 147 | 617 / 268 |
+| always | 0.88 | 2.27 | 54 / 25 / 9.4 | 69 | 200 | 549 / 140 |
+| batchvicp | 0.80 | 1.03 | 25 / 12 / 7.6 | 21 | 154 | 564 / 182 |
+| kairos | 0.80 | 0.96 | 18 / 8.9 / 4.7 | 9.4 | 55 | 576 / 190 |
+
+Short bursts (`ml/patterns.py short 101 40`):
+
+| config | quiet p50 | busy p50 | busy >2/5/10 ms % | busy p95 | busy p99 | batch quiet / busy |
+|---|---|---|---|---|---|---|
+| eevdf | 1.16 | 5.50 | 81 / 53 / 33 | 71 | 153 | 585 / 341 |
+| bpfland | 0.97 | 1.40 | 36 / 13 / 4.7 | 9.5 | 44 | 593 / 349 |
+| lavd | 1.06 | 6.91 | 94 / 66 / 37 | 47 | 230 | 611 / 390 |
+| lavdperf | 1.04 | 6.65 | 94 / 64 / 35 | 49 | 126 | 616 / 386 |
+| never3 | 1.03 | 4.12 | 77 / 42 / 19 | 18 | 28 | 617 / 380 |
+| always | 0.90 | 1.55 | 42 / 14 / 5.5 | 38 | 151 | 522 / 271 |
+| batchvicp | 0.78 | 0.87 | 14 / 6.1 / 4.1 | 7.0 | 180 | 546 / 305 |
+| kairos | 0.80 | 0.89 | 14 / 4.7 / 2.4 | 4.8 | 46 | 553 / 310 |
+
+- kairos vs bpfland, reps where bpfland was better (periodic 5, short 4):
+  busy p50 0/5, 0/4; busy p99 4/5, 1/4; batch MB/s quiet 5/5, 4/4 and
+  busy 5/5, 4/4. bpfland: 9% / 7% more batch when quiet, 28% / 13% more
+  when busy. kairos vs eevdf, lavd, lavdperf, never3: busy p50 lower in
+  every rep.
+- Quiet tails: % of quiet requests over 5 ms kairos 1.9 / 2.0, bpfland
+  1.1 / 1.4, batchvicp 0.9 / 1.4, eevdf 0.9 / 2.1 (periodic / short):
+  kairos is not better when quiet.
+- Busy p99 per rep still swings: over the periodic busy phases kairos
+  5–530 ms, bpfland 8–437 ms, batchvicp 6–961 ms.
+- Whole run (`analysis/compare.py`), median over reps, periodic / short:
+
+| config | ctx switches k/s | system time % | server %CPU | idle on CPUs 0–2, %CPU | busy preempt/s |
+|---|---|---|---|---|---|
+| eevdf | 40 / 35 | 9.2 / 9.1 | 124 / 82 | 32 / 43 | – |
+| bpfland | 40 / 32 | 7.3 / 6.7 | 130 / 87 | 29 / 41 | – |
+| lavd | 26 / 24 | 7.4 / 6.9 | 124 / 83 | 26 / 37 | – |
+| lavdperf | 26 / 24 | 7.8 / 7.1 | 127 / 83 | 25 / 37 | – |
+| never3 | 29 / 25 | 7.0 / 5.8 | 125 / 82 | 28 / 40 | 0 |
+| always | 79 / 63 | 13.7 / 11.5 | 147 / 97 | 33 / 47 | ~42,000–49,000 |
+| batchvicp | 53 / 49 | 10.6 / 9.2 | 134 / 89 | 34 / 48 | ~13,300–13,800 |
+| kairos | 47 / 41 | 10.0 / 8.5 | 136 / 90 | 35 / 47 | ~9,200–10,100 |
+
+(system time: % of all 4 CPUs; server and idle: % of one CPU; preempt/s
+from the periodic busy phases.)
+- Short rep 5: always-r5, batchvicp-r5 and kairos-r5 (00:28–00:31, the
+  last three runs) had quiet p50 1.0 / 3.6 / 3.1 ms and quiet batch 439 /
+  108 / 112 MB/s, while the server needed 1.8x its usual CPU for the same
+  requests (161% vs ~90%) and the load generator on its own CPU 1.5x
+  (28–30% vs 16–20%). The kernel log shows normal scheduler exits. Left
+  out with `--skip-reps 5` for every config, so the paired counts stay
+  paired.
+
+
 ## 7. Explanations and insights
 (The "why" behind each result. This is what the report is graded on.)
 
@@ -1514,6 +1595,40 @@ ML for the split (section 6.13):
   predictable structure (periodic arrivals), are where they could matter
   (not tested).
 
+E2-final (section 6.14):
+- KairOS has the lowest median and the fewest requests over 2–10 ms when
+  busy, against every baseline. The closest baseline, bpfland, doesn't
+  preempt at all: its slices are 1 ms (divided by the number of waiting
+  tasks) and it orders tasks by a deadline that favours ones that slept,
+  so a woken service thread waits at most about one short slice (from
+  scx_bpfland's source, `main.bpf.c`; not measured here). That gives a
+  1.4 ms median with no preemption. Linux (2.1 ms base slice) and
+  never3 (3 ms) wait for longer slices; lavd's ~7 ms median in both modes
+  is not explained (not investigated).
+- KairOS pays for it in batch throughput: 7–9% when quiet and 13–28% when
+  busy vs bpfland. Most of that is CPU time zstd didn't get, not slower
+  zstd. Against bpfland, the server uses 4–6% of a CPU more (as in E2:
+  probably Go's threads spinning more when wakeups are fast; guess).
+  The server's CPUs are idle 5–6% of a CPU more, and kernel time is
+  higher with 18–26% more context switches. Rough estimate: zstd CPU ≈ 3
+  CPUs − server − idle − other gives kairos ~8–9% less zstd CPU time than
+  bpfland.
+- The extra idle time comes with preemption: always, batchvicp and
+  kairos all show it, never3 doesn't. A likely cause is a gap in work
+  conservation. A preempted task goes back into a shared queue, and no
+  idle CPU is woken for it, while the CPU of the thread that did the
+  waking may have gone idle in the meantime (a guess, but consistent with
+  the code: scx_kairos never kicked a CPU, bpfland does). Fix in
+  7f1a122 (section 4), tested in E2k.
+- Busy p99 still doesn't rank configs (episodes in single reps); the
+  share of requests over a threshold and p95 do, and agree with p50.
+- The three degraded runs show a host-side slowdown (guess): CPU time per
+  request rose 1.5–1.8x for both the server and the load generator,
+  which run on different CPUs under different policies, in consecutive
+  runs, regardless of config. The in-VM "other processes" check can't
+  see this.
+
+
 ---
 
 ## 8. Limitations
@@ -1556,6 +1671,12 @@ ML for the split (section 6.13):
   one batch of interleaved runs.
 - 3 CPUs is far fewer than a production server; with more CPUs an idle
   one is more often free, so preemption decisions matter less often.
+
+- Host-side slowdowns (the Mac taking CPU from the VM) don't show in the
+  in-VM noise check: the guest just sees everything take more CPU time.
+  The sign is CPU time per request rising for the server and the load
+  generator together (E2-final short rep 5, section 6.14). Such runs are
+  left out by whole reps.
 
 ---
 
@@ -2223,3 +2344,29 @@ tails unrankable.
 **Next:** User to choose: evaluation phase (baselines bpfland/lavd,
 overhead E7, Redis) with the design as it is; a larger-CPU test where
 sizing could matter; a periodicity feature for the predictor.
+
+### 2026-10-31 — E2-final: main comparison against the baselines
+**Did:** Added baseline scx schedulers to the harness (`scx:NAME[:opts]`,
+93d2647). Ran E2-final: eevdf, bpfland, lavd (autopilot and
+performance), never3, always, batchvicp and kairos (split, full LC
+pool), 5 reps, periodic and short-burst patterns. Analysis additions
+(10fb5f5): `--skip-reps`, the share of requests over 2/5/10/50 ms, busy
+p90/p95, server CPU and idle time per config. Added idle kicks to
+scx_kairos (7f1a122, `--no-kick-idle` to turn off) and E2k configs.
+**Found:** Section 6.14. kairos has the lowest busy p50 (0.9–1.0 ms) and
+the fewest busy requests over 2/5/10 ms of all configs. bpfland is next
+(1.4 ms) with 7–9% (quiet) / 13–28% (busy) more batch throughput. Linux
+and lavd: 5–8 ms busy medians. The extra idle time on the server's CPUs
+comes with preemption. Three runs at the end of the short batch were
+slowed by the host and were left out by rep.
+**Interpretation:** Section 7. Preemption buys the lowest latency;
+bpfland's short slices with no preemption get close at no batch cost.
+Part of KairOS's batch loss looks like a work-conservation gap (no idle
+kicks), which the new code addresses.
+**Decisions:** Idle kicks on by default. Leave out whole reps when the
+host slows the VM (`--skip-reps`).
+**Problems:** Host slowdown in short rep 5, invisible to the in-VM noise
+check.
+**Next:** E2k (bpfland, kairos without kicks, kairos with kicks, kairos
+with kicks + no borrower preemption + 1 ms borrow slices; both patterns,
+5 reps). Then the Azure trace replay, E3, E7 and Redis.
