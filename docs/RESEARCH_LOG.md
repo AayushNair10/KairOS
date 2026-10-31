@@ -712,6 +712,7 @@ together with `meta.json` (git commit, kernel, VM config, parameters).
 | MLtr | 2026-10-30 | 02cb689 | split (reactive) with `--ml-trace` | `ml-train.conf`, `ML_SEED` 1–3: `ml/patterns.py random` 60 s | 1 each | `results/2026-10-30-ml-train-s{1,2,3}/` | Training data, 1,277–1,291 samples each; other processes 16–20% |
 | MLte | 2026-10-30 | 549bf7c | split, splitml (`--ml-model ml/models/burst-v1.txt`), splitbuf (`--lc-buffer-pct 150`), batchvicp | `ml-test-short.conf` (`ml/patterns.py short 101 40`), `ml-test-periodic.conf` (E2 pattern) | 5 | `results/2026-10-30-ml-test-short/`, `-periodic/` | The model keeps the LC pool at 3 CPUs ~95% of the time, like a 1.5 CPU buffer; ML ≈ bigger buffer offline and online (section 6.13) |
 | E2f | 2026-10-30 | 93d2647 | eevdf, bpfland, lavd (autopilot), lavdperf (`--performance`), never3, always, batchvicp, kairos (`--split --split-cpus 0-2 --class policy --lc-buffer-pct 150`) | `e2f-periodic.conf` (E2 pattern), `e2f-short.conf` (`ml/patterns.py short 101 40`); zstd SCHED_BATCH, GOMAXPROCS 16; start delayed 90 s | 5 | `results/2026-10-30-e2f-periodic/`, `-short/` | No failed requests. Short rep 5 left out (host slowdown in its last three runs, section 6.14). kairos has the lowest busy p50 (0.9–1.0 ms; bpfland 1.4, eevdf 5.2–5.5, lavd 6.7–7.9) and fewest busy requests over 2/5/10 ms; bpfland has 7–9% (quiet) / 13–28% (busy) more batch MB/s (section 6.14) |
+| E2k | 2026-10-31 | 7f1a122 | bpfland, kairos0 (E2f's kairos, `--no-kick-idle`), kairos (idle kicks), kairosnp (kicks, `--no-borrow-preempt --borrow-slice-us 1000`) | `e2k-periodic.conf`, `e2k-short.conf`: as E2f | 5 | `results/2026-10-31-e2k-periodic/`, `-short/` | **Invalid.** The host held the VM back: calibration 689 / 529 iterations/µs instead of ~1035 (requests carried half to two thirds of the intended work), VM time share 0.02–0.93 in all periodic runs and short reps 1–3 (section 6.15). To be rerun |
 
 ### 5.1 Planned experiments
 | # | Experiment | Pattern | Shows |
@@ -1271,6 +1272,29 @@ from the periodic busy phases.)
   paired.
 
 
+### 6.15 E2k: invalid run, and what it showed about the checks (2026-10-31)
+`results/2026-10-31-e2k-periodic/`, `-short/`. Not usable as a
+comparison:
+- Each batch calibrates the per-request work once at its start. Both
+  calibrations ran while the host was slowing the VM: 689 and 529
+  iterations/µs against 1000–1037 in every main experiment before (only
+  the E1p and an E2p pilot were also low, 868 and 881). So the "500 µs"
+  requests carried ~250–330 µs of work, a lighter load than E2-final.
+- VM time share (VM CPU time from /proc/stat over wall time, section 8):
+  0.97–0.98 in E2-final apart from the two short rep-5 runs left out
+  (0.89, 0.91). E2k: 0.76–0.93 in every periodic run, 0.02 in
+  kairosnp-r4 (30 min of wall time for 38 s of VM time: the Mac asleep),
+  0.30–0.79 in short reps 1–3; short reps 4–5 at 0.96–0.98. A VS Code
+  server started on the VM mid-run (node, up to 318% of a CPU).
+- The two clean short reps (lighter load, so only a hint): idle kicks
+  fire ~3,800–4,000 times a second in kairos (~2,900–3,100 in kairosnp),
+  so idle CPUs missing queued tasks was common, but kairos's batch MB/s
+  was not higher than kairos0's (501 / 348 vs 520 / 370 quiet / busy) and
+  its server CPUs were idle about as much (54 vs 56% of a CPU). kairosnp
+  had a busy p50 of 1.43 ms against bpfland's 0.83, with similar batch.
+  Needs the rerun.
+
+
 ## 7. Explanations and insights
 (The "why" behind each result. This is what the report is graded on.)
 
@@ -1677,6 +1701,21 @@ E2-final (section 6.14):
   The sign is CPU time per request rising for the server and the load
   generator together (E2-final short rep 5, section 6.14). Such runs are
   left out by whole reps.
+- Detecting them (2026-10-31): /proc/stat's CPU times advance only while
+  the VM's CPUs run (tick-based; no steal time is reported here), while
+  per-process CPU times come from a clock that keeps going while the host
+  has paused a vCPU, so a task caught on a paused vCPU is charged wall
+  time. The VM time share (/proc/stat time over wall time between the
+  run's snapshots) is ~0.97–0.98 on a quiet host; `summarize_run.py` warns
+  below 0.95 and `compare.py` prints it. run.sh now calibrates three
+  times, keeps the fastest and refuses to start below `ITERS_MIN` (950).
+- Correction to the "other processes" figures before 2026-10-31: kworkers
+  rename themselves after the work item they run, and the check matched
+  processes by name, so a renamed kworker was charged its whole lifetime
+  CPU (e.g. "kworker/0:0 10–12%" in E2-final, really ~0). Now matched by
+  pid and start time; E2-final's runs were mostly at 3–10% of a CPU
+  (ten at 10–24%, one at 40%). Earlier figures (E2s 9–21%, MLte 12–18%, ...) are overstated by
+  an unknown amount.
 
 ---
 
@@ -2370,3 +2409,22 @@ check.
 **Next:** E2k (bpfland, kairos without kicks, kairos with kicks, kairos
 with kicks + no borrower preemption + 1 ms borrow slices; both patterns,
 5 reps). Then the Azure trace replay, E3, E7 and Redis.
+
+### 2026-10-31 — E2k invalid; host slowdown checks
+**Did:** Ran E2k (bpfland, kairos with and without idle kicks, kairos
+with kicks and no borrower preemption; both patterns, 5 reps). Found it
+invalid and why; fixed the noise check (match processes by pid + start
+time), added the VM time share per run and a calibration guard in run.sh.
+**Found:** Section 6.15. The host held the VM back for most of the run (the
+Mac busy, then asleep ~30 min, then a VS Code server started on the VM),
+and both batches calibrated the per-request work while slowed. The kworker
+"noise" in earlier summaries was an accounting artifact.
+**Interpretation:** Nothing about the schedulers. In the two clean reps the
+idle kicks fire thousands of times a second but did not visibly raise
+batch throughput (lighter load; a hint only).
+**Decisions:** Screen every run by VM time share (< 0.95 = leave the rep
+out); refuse to start when calibration is low.
+**Problems:** Runs depend on the Mac staying awake and idle, which the VM
+can't control.
+**Next:** Rerun E2k with the Mac awake (plugged in, `caffeinate`) and
+idle, IDE disconnected.
