@@ -57,6 +57,10 @@ ADDR=${ADDR:-127.0.0.1:50051}
 WORKERS=${WORKERS:-16}
 WORK_US=${WORK_US:-100}
 ITERS_PER_US=${ITERS_PER_US:-}  # empty: measure once, before the first run
+# Refuse to run if the measured speed is below this: the host was slowing
+# the VM (this VM measures 1000-1037 when quiet; E2k measured 529 and 689
+# and so ran with half to two thirds of the intended work per request).
+ITERS_MIN=${ITERS_MIN:-950}
 PHASES=${PHASES:-10s@1000}
 CONNS=${CONNS:-8}
 SEED=${SEED:-1}
@@ -286,9 +290,20 @@ if [ "$(cat "$STATE")" != disabled ]; then
 fi
 
 # Same work per request in every run of this batch: calibrate once, now,
-# while nothing else is running.
+# while nothing else is running. Three tries, keep the fastest: contention
+# can only make a try slower.
 if [ -z "$ITERS_PER_US" ]; then
-	ITERS_PER_US=$("${SUT_PIN[@]}" "$BIN/grpcserver" -calibrate)
+	for _ in 1 2 3; do
+		c=$("${SUT_PIN[@]}" "$BIN/grpcserver" -calibrate)
+		log "calibration: $c iterations/us"
+		if [ -z "$ITERS_PER_US" ] || awk -v a="$c" -v b="$ITERS_PER_US" 'BEGIN { exit !(a > b) }'; then
+			ITERS_PER_US=$c
+		fi
+	done
+	if awk -v a="$ITERS_PER_US" -v m="$ITERS_MIN" 'BEGIN { exit !(a < m) }'; then
+		log "calibration $ITERS_PER_US < ITERS_MIN $ITERS_MIN: is the host busy or asleep? (set ITERS_PER_US to override)"
+		exit 1
+	fi
 fi
 WORKLOAD="workers=$WORKERS work_us=$WORK_US iters_per_us=$ITERS_PER_US phases=$PHASES"
 WORKLOAD+=" conns=$CONNS seed=$SEED batch_jobs=$BATCH_JOBS"

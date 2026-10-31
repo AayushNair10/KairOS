@@ -41,6 +41,8 @@ def main():
     busy = " ".join(f"{c}={100 * b:.0f}%" for c, b in st["busy"].items())
     print(f"system: {st['ctxt_per_s'] / 1000:.1f}k ctx switches/s, "
           f"system time {100 * st['system_frac']:.1f}%, busy {busy}")
+    warn = "  WARNING: the host held the VM back" if st["vm_share"] < 0.95 else ""
+    print(f"VM time share: {st['vm_share']:.2f} of the wall time{warn}")
     other = runlib.other_cpu(run_dir)
     if other is not None:
         top = ", ".join(f"{c} {s / st['elapsed_s'] * 100:.1f}%" for c, s in other[:5])

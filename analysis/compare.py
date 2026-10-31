@@ -75,7 +75,8 @@ def main():
         print(f"  {n:8} ctx switches k/s {med_range([s['ctxt_per_s'] / 1000 for s in sts])}, "
               f"system time % {med_range([100 * s['system_frac'] for s in sts])}, "
               f"other processes %CPU {med_range(other)}, "
-              f"server %CPU {med_range(server)}, idle on server CPUs %CPU {med_range(idle)}")
+              f"server %CPU {med_range(server)}, idle on server CPUs %CPU {med_range(idle)}, "
+              f"VM time share {med_range([s['vm_share'] for s in sts], '{:.2f}')}")
 
 
 if __name__ == "__main__":

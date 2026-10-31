@@ -54,12 +54,18 @@ def system_stats(run_dir):
     """CPU use and context switches between proc_stat_before and _after.
 
     The elapsed time comes from /proc/stat itself: every CPU's fields
-    together advance by USER_HZ per second.
+    together advance by USER_HZ per second. That is time the VM's CPUs
+    ran: when the host doesn't run them (the Mac busy or asleep) it falls
+    behind the wall clock, and this hypervisor reports no steal time. So
+    vm_share = that time / the wall time between the two snapshots (from
+    the files' modification times); ~0.97-0.98 when the host is quiet.
     """
     a = _read_proc_stat(os.path.join(run_dir, "proc_stat_before"))
     b = _read_proc_stat(os.path.join(run_dir, "proc_stat_after"))
     cpus = sorted((k for k in a if k != "ctxt"), key=lambda k: int(k[3:]))
     ticks = {c: [y - x for x, y in zip(a[c], b[c])] for c in cpus}
+    wall = (os.stat(os.path.join(run_dir, "proc_stat_after")).st_mtime_ns
+            - os.stat(os.path.join(run_dir, "proc_stat_before")).st_mtime_ns) / 1e9
     elapsed = sum(sum(t) for t in ticks.values()) / len(cpus) / USER_HZ
     # Fields: user nice system idle iowait irq softirq steal ...
     busy = {c: 1 - (t[3] + t[4]) / sum(t) for c, t in ticks.items()}
@@ -70,11 +76,13 @@ def system_stats(run_dir):
         "ctxt_per_s": (b["ctxt"] - a["ctxt"]) / elapsed,
         "busy": busy,  # per CPU, fraction of time not idle
         "system_frac": system,  # all CPUs: system + irq + softirq time
+        "vm_share": elapsed / wall if wall > 0 else float("nan"),
     }
 
 
 def _read_procs(path):
-    """{pid: (comm, utime + stime in ticks)} from concatenated /proc/<pid>/stat."""
+    """{pid: (comm, utime + stime in ticks, start time in ticks since boot)}
+    from concatenated /proc/<pid>/stat."""
     out = {}
     with open(path, errors="replace") as f:
         for line in f:
@@ -83,8 +91,10 @@ def _read_procs(path):
             if lp < 0 or rp < 0:
                 continue
             rest = line[rp + 2:].split()
-            # rest[0] is field 3 (state); utime and stime are fields 14, 15.
-            out[int(line[:lp])] = (line[lp + 1:rp], int(rest[11]) + int(rest[12]))
+            # rest[0] is field 3 (state); utime and stime are fields 14, 15;
+            # starttime is field 22.
+            out[int(line[:lp])] = (line[lp + 1:rp], int(rest[11]) + int(rest[12]),
+                                   int(rest[19]))
     return out
 
 
@@ -98,10 +108,13 @@ def other_cpu(run_dir):
     a = _read_procs(before)
     b = _read_procs(os.path.join(run_dir, "procs_after"))
     by_comm = {}
-    for pid, (comm, t) in b.items():
+    for pid, (comm, t, start) in b.items():
         if comm in EXPERIMENT_COMMS:
             continue
-        prev = a[pid][1] if pid in a and a[pid][0] == comm else 0
+        # Same process if the pid has the same start time (pids get reused;
+        # names don't identify it: kworkers rename themselves after the
+        # work item they run, e.g. kworker/2:2-events -> -mm_percpu_wq).
+        prev = a[pid][1] if pid in a and a[pid][2] == start else 0
         if t > prev:
             by_comm[comm] = by_comm.get(comm, 0) + (t - prev) / USER_HZ
     return sorted(by_comm.items(), key=lambda kv: -kv[1])
@@ -113,8 +126,8 @@ def proc_cpu(run_dir, comm):
     or exited in between, like each zstd of the batch loop, is missed)."""
     a = _read_procs(os.path.join(run_dir, "procs_before"))
     b = _read_procs(os.path.join(run_dir, "procs_after"))
-    return sum(t - a[pid][1] for pid, (c, t) in b.items()
-               if c == comm and pid in a and a[pid][0] == comm) / USER_HZ
+    return sum(t - a[pid][1] for pid, (c, t, start) in b.items()
+               if c == comm and pid in a and a[pid][2] == start) / USER_HZ
 
 
 def sut_cpus(run_dir):
