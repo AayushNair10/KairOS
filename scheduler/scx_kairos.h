@@ -31,6 +31,7 @@ enum kairos_stat {
 	STAT_TO_BATCH,		/* a task's class changed to batch */
 	STAT_FROM_BATCH,	/* ... and back */
 	STAT_BORROW,		/* --split: batch task started on an LC CPU */
+	STAT_KICK,		/* queued task woke an idle CPU (kick_idle) */
 	KAIROS_NR_STATS,	/* not NR_STATS: vmlinux.h has one */
 };
 

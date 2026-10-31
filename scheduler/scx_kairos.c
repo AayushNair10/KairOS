@@ -57,6 +57,9 @@ const char help_fmt[] =
 "      --borrow-slice-us N slice of a batch task on an LC CPU (default 3000)\n"
 "      --no-borrow-preempt a woken LC task doesn't preempt a batch task on an\n"
 "                          LC CPU; it waits for the borrow slice instead\n"
+"      --no-kick-idle      don't wake an idle CPU when a task is queued (the\n"
+"                          behaviour before 2026-10-31; idle CPUs then miss\n"
+"                          queued tasks until something else wakes them)\n"
 "      --ml-trace FILE     --split: every --ml-period-ms, write the LC demand\n"
 "                          sample (training data for ml/train_burst.py)\n"
 "      --ml-model FILE     --split: predict LC demand with this tree (from\n"
@@ -109,6 +112,7 @@ enum {
 	OPT_LC_HYST,
 	OPT_LC_SHIFT,
 	OPT_NO_BORROW_PREEMPT,
+	OPT_NO_KICK_IDLE,
 	OPT_ML_TRACE,
 	OPT_ML_MODEL,
 	OPT_ML_PERIOD,
@@ -141,6 +145,7 @@ static const struct option long_opts[] = {
 	{ "lc-hyst-pct",     required_argument, NULL, OPT_LC_HYST },
 	{ "lc-shift",        required_argument, NULL, OPT_LC_SHIFT },
 	{ "no-borrow-preempt", no_argument,     NULL, OPT_NO_BORROW_PREEMPT },
+	{ "no-kick-idle",    no_argument,       NULL, OPT_NO_KICK_IDLE },
 	{ "ml-trace",        required_argument, NULL, OPT_ML_TRACE },
 	{ "ml-model",        required_argument, NULL, OPT_ML_MODEL },
 	{ "ml-period-ms",    required_argument, NULL, OPT_ML_PERIOD },
@@ -489,7 +494,7 @@ static const char csv_header[] =
 	"nr_runnable,procs_running,"
 	"fast_load,slow_load,wake_rate,wait_avg_us,wait_max_us,mode,timer_ticks,"
 	"lat_wakeups,lat_late,late_frac,mode_switches,latency_ms,"
-	"nr_lc,lc_cpus,lc_demand,lc_changes,borrow,ml_fresh,ml_raised\n";
+	"nr_lc,lc_cpus,lc_demand,lc_changes,borrow,ml_fresh,ml_raised,kick\n";
 
 int main(int argc, char **argv)
 {
@@ -619,6 +624,9 @@ restart:
 			break;
 		case OPT_NO_BORROW_PREEMPT:
 			skel->rodata->borrow_preempt = false;
+			break;
+		case OPT_NO_KICK_IDLE:
+			skel->rodata->kick_idle = false;
 			break;
 		case OPT_LC_SHIFT:
 			skel->rodata->lc_shift = parse_num("lc-shift", optarg);
@@ -751,7 +759,7 @@ restart:
 	       "fast_shift=%u slow_shift=%u victim=%s batch_min_run_us=%llu "
 	       "lat_target_us=%llu late_max=%.1f%% hold_ms=%llu-%llu signal_cpus=0x%llx "
 	       "split=%d split_cpus=0x%llx lc=%u-%u lc_buffer=%.2f lc_hyst=%.2f borrow_slice_us=%llu "
-	       "borrow_preempt=%d class=%s\n",
+	       "borrow_preempt=%d class=%s kick_idle=%d\n",
 	       skel->rodata->split ? "split" : skel->rodata->adaptive ? "adaptive" :
 	       skel->rodata->forced_mode == MODE_LATENCY ? "latency" : "batch",
 	       (unsigned long long)skel->rodata->lat_slice_ns / 1000,
@@ -769,7 +777,7 @@ restart:
 	       skel->rodata->lc_buffer / 1024.0, skel->rodata->lc_hyst / 1024.0,
 	       (unsigned long long)skel->rodata->borrow_slice_ns / 1000,
 	       skel->rodata->borrow_preempt,
-	       skel->rodata->class_policy ? "policy" : "run");
+	       skel->rodata->class_policy ? "policy" : "run", skel->rodata->kick_idle);
 
 	__u64 prev[KAIROS_NR_STATS] = {};
 	struct diag diag_prev, diag_cur;
@@ -833,11 +841,12 @@ restart:
 
 		printf("local=%llu global=%llu preempt=%llu (batch %llu) no_victim=%llu "
 		       "class +%llu -%llu runnable=%lld (kernel %ld) load fast=%.2f slow=%.2f "
-		       "wakeups/s=%llu wait avg=%.0fus max=%.0fus\n",
+		       "wakeups/s=%llu wait avg=%.0fus max=%.0fus kick=%llu\n",
 		       d[STAT_LOCAL], d[STAT_GLOBAL], d[STAT_PREEMPT], d[STAT_PREEMPT_BATCH],
 		       d[STAT_NO_VICTIM], d[STAT_TO_BATCH], d[STAT_FROM_BATCH],
 		       (long long)skel->bss->nr_runnable, procs_running(), fast, slow,
-		       (unsigned long long)skel->bss->wake_rate, wait_avg_us, wait_max_us);
+		       (unsigned long long)skel->bss->wake_rate, wait_avg_us, wait_max_us,
+		       d[STAT_KICK]);
 		printf("  mode=%s late %llu/%llu (ewma %.1f%%) switches=%llu latency_ms=%.0f\n",
 		       skel->bss->mode == MODE_LATENCY ? "latency" : "batch",
 		       ll - prev_ll, lw - prev_lw, 100 * late_frac, sw - prev_sw, lat_ms);
@@ -850,7 +859,7 @@ restart:
 		if (csv) {
 			clock_gettime(CLOCK_REALTIME, &ts);
 			fprintf(csv, "%.3f,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%lld,%ld,%.3f,%.3f,%llu,"
-				"%.1f,%.1f,%u,%llu,%llu,%llu,%.4f,%llu,%.1f,%u,%.3f,%.3f,%llu,%llu,%llu,%llu\n",
+				"%.1f,%.1f,%u,%llu,%llu,%llu,%.4f,%llu,%.1f,%u,%.3f,%.3f,%llu,%llu,%llu,%llu,%llu\n",
 				ts.tv_sec + ts.tv_nsec / 1e9, d[STAT_LOCAL], d[STAT_GLOBAL],
 				d[STAT_PREEMPT], d[STAT_PREEMPT_BATCH], d[STAT_NO_VICTIM],
 				d[STAT_TO_BATCH], d[STAT_FROM_BATCH],
@@ -860,7 +869,7 @@ restart:
 				(unsigned long long)skel->bss->nr_timer_ticks,
 				lw - prev_lw, ll - prev_ll, late_frac, sw - prev_sw, lat_ms,
 				skel->bss->nr_lc, lc_cpus, lc_demand, lc_ch - prev_lc_ch,
-				d[STAT_BORROW], mlf - prev_mlf, mlr - prev_mlr);
+				d[STAT_BORROW], mlf - prev_mlf, mlr - prev_mlr, d[STAT_KICK]);
 			fflush(csv);
 		}
 		if (diag_csv) {

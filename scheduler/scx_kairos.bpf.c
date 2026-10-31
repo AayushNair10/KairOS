@@ -119,6 +119,16 @@ const volatile u64 borrow_slice_ns = 3000000;	/* batch task on an LC CPU */
 /* A woken LC task may preempt a borrower; else it waits for the borrow slice. */
 const volatile bool borrow_preempt = true;
 /*
+ * Work conservation. An idle CPU doesn't look at our shared queues until
+ * something wakes it, so a task inserted into one while a CPU it may run
+ * on is idle would wait for nothing. This happens after a preemption: the
+ * preempted task is re-queued a few us after select_cpu() found no idle
+ * CPU, and meanwhile the CPU of the task that did the waking may have
+ * gone idle. With kick_idle, enqueue() wakes such a CPU (--no-kick-idle:
+ * off, as in the runs before 2026-10-31).
+ */
+const volatile bool kick_idle = true;
+/*
  * ML prediction (--ml-model): the loader writes ml_demand and then ml_stamp
  * (= nr_timer_ticks at the time). A prediction at most ml_ttl_ticks old can
  * raise the LC demand the pool is sized from, never lower it. 0 = off.
@@ -503,6 +513,26 @@ static s32 split_select_cpu(struct task_struct *p, s32 prev_cpu)
 	return cpu;
 }
 
+/*
+ * After inserting @p into a shared queue: wake an idle CPU @p may run on,
+ * which then pulls work in dispatch(). scx_bpf_pick_idle_cpu() also claims
+ * the CPU (clears its idle bit), so two inserts don't both kick the same
+ * one and select_cpu() won't place a woken task on it meanwhile; the bit
+ * is set again when the CPU next goes idle.
+ */
+static void kick_idle_cpu(const struct task_struct *p)
+{
+	s32 cpu;
+
+	if (!kick_idle)
+		return;
+	cpu = scx_bpf_pick_idle_cpu(p->cpus_ptr, 0);
+	if (cpu >= 0) {
+		stat_inc(STAT_KICK);
+		scx_bpf_kick_cpu(cpu, SCX_KICK_IDLE);
+	}
+}
+
 static void split_enqueue(struct task_struct *p, u64 enq_flags)
 {
 	struct task_ctx *tctx = bpf_task_storage_get(&task_ctxs, p, 0, 0);
@@ -525,6 +555,7 @@ static void split_enqueue(struct task_struct *p, u64 enq_flags)
 	stat_inc(STAT_GLOBAL);
 	scx_bpf_dsq_insert_vtime(p, batch ? BATCH_DSQ : LC_DSQ,
 				 batch ? batch_slice_ns : lat_slice_ns, vtime, enq_flags);
+	kick_idle_cpu(p);
 }
 
 s32 BPF_STRUCT_OPS(kairos_select_cpu, struct task_struct *p, s32 prev_cpu, u64 wake_flags)
@@ -585,6 +616,7 @@ void BPF_STRUCT_OPS(kairos_enqueue, struct task_struct *p, u64 enq_flags)
 
 	stat_inc(STAT_GLOBAL);
 	scx_bpf_dsq_insert_vtime(p, SHARED_DSQ, cur_slice(), vtime, enq_flags);
+	kick_idle_cpu(p);
 }
 
 void BPF_STRUCT_OPS(kairos_dispatch, s32 cpu, struct task_struct *prev)
