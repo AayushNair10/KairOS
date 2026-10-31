@@ -669,6 +669,8 @@ together with `meta.json` (git commit, kernel, VM config, parameters).
 | EC | 2026-10-30 | 52fe9bb | eevdf, never, batchvic, diagnostics off | `e2-control.conf`: as E2 (2 zstd) | 2 | `results/2026-10-30-e2-control/` | Tails as high as ED/ES without the diagnostics: the evening runs were noisier, not perturbed by the counters (section 6.10) |
 | S1p | 2026-10-30 | 8b32051 | eevdf, never3, batchvicp (`--force-preempt --victim batch --class policy`), split (`--split --split-cpus 0-2 --class policy`) | `e2s-pilot.conf`: E2 2-job workload, zstd SCHED_BATCH, GOMAXPROCS 16 | 1 | `results/2026-10-30-e2s-pilot/` | Functional pilot, noisy (other processes 27–49%). Split and batchvicp collapsed in a busy phase (section 6.11) |
 | S2p | 2026-10-30 | be3eb2c (+REPS 2) | as S1p + splitnp (`--no-borrow-preempt --borrow-slice-us 1000`), `--diag` on | `e2s-pilot-gmp16.conf`, `e2s-pilot-gmp3.conf` (server GOMAXPROCS 16 / 3) | 2 | `results/2026-10-30-e2s-pilot-gmp16/`, `-gmp3/` | Other-process CPU 3–137% between runs (VS Code server, the Claude CLI, kswapd): inconclusive. eevdf failed requests in 4/4 runs (section 6.11) |
+| E2s | 2026-10-30 | a2ac442 | eevdf, never3, batchvicp, split | `e2s.conf`: E2 2-job workload, zstd SCHED_BATCH, GOMAXPROCS 16; Mac and IDE idle, start delayed 90 s | 5 | `results/2026-10-30-e2s/` | No failed requests; other processes 9–21%. split ≈ batchvicp on latency, +4% quiet batch MB/s, 63% fewer preemptions when quiet; vs never3 p50 4–5x lower when busy at 30% less batch (section 6.12) |
+| E2s-n | 2026-10-30 | a2ac442 | eevdf | `e2s-eevdf-normal.conf`: as E2s with zstd SCHED_OTHER | 5 | `results/2026-10-30-e2s-eevdf-normal/` | Same as eevdf with zstd SCHED_BATCH in E2s; the S1p/S2p failures were noise (section 6.12) |
 
 ### 5.1 Planned experiments
 | # | Experiment | Pattern | Shows |
@@ -1088,6 +1090,32 @@ S2p, GOMAXPROCS 16, 2 reps (phases 1/3/5 busy, 0/2/4 quiet):
   (p50 281 ms) and was best in busy phase 5 (p50 1.0, p99 11); batchvicp
   collapsed in busy phases 1 and 3.
 
+
+### 6.12 E2s: soft CPU split, clean run (2026-10-30)
+`results/2026-10-30-e2s/`, 5 interleaved reps, other processes 9–21% of a
+CPU, no failed requests. Medians over reps, ms; phases 0/2/4 quiet (500
+req/s), 1/3/5 busy (3500 req/s).
+
+| config | quiet p50 | quiet p99 | busy p50 | busy p99 | batch MB/s quiet / busy | preempt/s quiet / busy |
+|---|---|---|---|---|---|---|
+| eevdf | 1.1–1.2 | 5–33 | 4.6–5.9 | 51–95 | 606 / 238 | – |
+| never3 | 1.0 | 7–11 | 3.9–5.0 | 28–35 | 627 / 279 | 0 / 0 |
+| batchvicp | 0.8 | 4–8 | 0.9–1.0 | 14–18 | 569 / 191 | ~13,100 / ~13,200 |
+| split | 0.8 | 3–5 | 1.0 | 18–36 | 593 / 196 | ~5,000 / ~10,100 |
+
+(batch MB/s: median over reps of the mean over the three phases.)
+
+- split vs batchvicp, reps of 5 where split was better, phases 0–5:
+  p50 2/3/2/1/2/3, p99 3/3/2/1/4/3, batch MB/s 3/3/5/2/4/3. A tie on
+  latency; batch slightly higher, mostly in quiet phases.
+- split vs never3: p50 lower in 5/5 reps in every phase; p99 lower in
+  2–4/5; batch MB/s higher in 0–1/5 (quiet −5%, busy −30%).
+- E2s-n (`results/2026-10-30-e2s-eevdf-normal/`, eevdf, zstd as
+  SCHED_OTHER, run right after): quiet p50 1.1–1.2, busy p50 4.5–5.6,
+  busy p99 36–50, batch 601–614 / 230–250 MB/s: as eevdf with zstd as
+  SCHED_BATCH. Correction to 6.11: the eevdf failures in S1p/S2p came with
+  the noise, not with SCHED_BATCH.
+
 ---
 
 ## 7. Explanations and insights
@@ -1376,6 +1404,22 @@ Soft CPU split pilots (section 6.11), tentative:
   split's benefit, if real, comes from LC tasks having priority in their
   own queue and pool, not from fewer preemptions. With more CPUs a pool
   could keep idle CPUs without lending them.
+
+E2s (section 6.12):
+- On 3 CPUs the split is about as good as preempting batch tasks
+  everywhere (batchvicp): the same latency, ~4% more batch throughput when
+  quiet, and 63% (quiet) / 24% (busy) fewer preemptions. When quiet the LC
+  pool is 1 CPU, so zstd runs undisturbed on the other two and only the
+  borrower on the LC CPU is preempted.
+- It doesn't escape the trade-off with never3 when busy: the service needs
+  ~2.2 CPUs, so the pool is all 3 CPUs and zstd only borrows (preempted
+  ~10,000 times a second); never3 keeps 30% more batch throughput at 4–5x
+  the median latency. The mechanism that makes CPU splitting work in
+  Heracles or PerfIso, spare idle CPUs while the batch CPUs stay
+  untouched, needs more CPUs than the service uses; here there is no
+  spare CPU in busy phases. More CPUs would test that (guess).
+- The SCHED_BATCH "collapse" in the pilots was noise; with a quiet Mac
+  Linux behaves the same with zstd as SCHED_BATCH or SCHED_OTHER.
 
 ---
 
@@ -2049,3 +2093,20 @@ hysteresis); memory pressure (kswapd) and the IDE during runs.
 **Next:** A clean run (IDE closed or idle, start delayed so the Claude CLI
 is idle): eevdf, never3, batchvicp, split, 5 reps, GOMAXPROCS 16, zstd
 SCHED_BATCH; and a check of eevdf with zstd SCHED_OTHER vs SCHED_BATCH.
+
+### 2026-10-30 — E2s: soft CPU split, clean run
+**Did:** Ran E2s (eevdf, never3, batchvicp, split; 5 reps; zstd
+SCHED_BATCH; Mac idle; 90 s start delay) and E2s-n (eevdf with zstd
+SCHED_OTHER, 5 reps).
+**Found:** Section 6.12. Quiet run (other processes 9–21%), no failures.
+split ≈ batchvicp on latency with slightly more batch throughput and
+fewer preemptions; vs never3, much lower median latency for 5% (quiet)
+to 30% (busy) less batch throughput. Linux unaffected by SCHED_BATCH.
+**Interpretation:** Section 7. On 3 CPUs the split can't keep a spare CPU
+when busy, so it reduces to service priority plus borrower preemption.
+**Decisions:** None; the user decides whether to keep the split as the
+design and how to continue.
+**Problems:** None in the run.
+**Next:** Options: test the split with more CPUs (VM with 6–8 vCPUs);
+cut borrower preemptions (deferred preemption / short borrow slices);
+use ML burst prediction to grow the LC pool ahead of bursts.
