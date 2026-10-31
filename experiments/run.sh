@@ -76,6 +76,15 @@ SERVER_GOMAXPROCS=${SERVER_GOMAXPROCS:-0}
 # comma-separated); empty = off. The server names its worker threads
 # "grpcworker"; its other threads keep "grpcserver".
 DIAG_COMM=${DIAG_COMM:-}
+# Scheduling policy of the batch jobs: "normal" (SCHED_OTHER) or "batch"
+# (SCHED_BATCH, set with chrt and inherited by zstd). Linux's scheduler and
+# scx_kairos --class policy use it to tell batch work from the service.
+BATCH_POLICY=${BATCH_POLICY:-normal}
+case $BATCH_POLICY in
+normal) BATCH_CHRT=() ;;
+batch) BATCH_CHRT=(chrt --batch 0) ;;
+*) echo "BATCH_POLICY must be normal or batch" >&2; exit 1 ;;
+esac
 
 BIN=$ROOT/workloads/bin
 # Command prefixes for pinning. taskset execs the command, so $! after
@@ -163,7 +172,7 @@ stop_sched() {
 # start_batch <run-dir>: BATCH_JOBS copies of the zstd loop, one CSV each.
 start_batch() {
 	for ((i = 0; i < BATCH_JOBS; i++)); do
-		"${SUT_PIN[@]}" "$ROOT/workloads/batch/zstd_loop.sh" "$BATCH_INPUT" \
+		"${SUT_PIN[@]}" "${BATCH_CHRT[@]}" "$ROOT/workloads/batch/zstd_loop.sh" "$BATCH_INPUT" \
 			"$1/batch_$i.csv" "$ZSTD_LEVEL" &
 		BATCH_PIDS+=($!)
 	done
@@ -255,6 +264,7 @@ WORKLOAD+=" batch_warmup_s=$BATCH_WARMUP_S"
 WORKLOAD+=" sut_cpus=${SUT_CPUS:-all} loadgen_cpus=${LOADGEN_CPUS:-all}"
 WORKLOAD+=" loadgen_gomaxprocs=$LOADGEN_GOMAXPROCS server_godebug=$SERVER_GODEBUG"
 WORKLOAD+=" server_gomaxprocs=$SERVER_GOMAXPROCS diag_comm=${DIAG_COMM:-off}"
+WORKLOAD+=" batch_policy=$BATCH_POLICY"
 
 OUT=$ROOT/results/$(date +%F)-$NAME
 [ -e "$OUT" ] && OUT=$OUT-$(date +%H%M%S) # never overwrite earlier raw data

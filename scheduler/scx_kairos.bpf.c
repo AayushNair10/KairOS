@@ -28,6 +28,14 @@
  *   to sleep is "batch". With --victim batch, LATENCY mode only preempts
  *   CPUs running a batch task, so request threads are not preempted in the
  *   middle of a request (E1b, 6.4).
+ * - A soft CPU split (--split; RESEARCH_LOG 2.10), used instead of the two
+ *   modes: the CPUs in split_cpus are divided into LC CPUs (for latency-
+ *   critical tasks) and batch CPUs, each with its own queue. Each pool
+ *   serves its own queue first and lends its CPUs to the other when that
+ *   queue is empty. A woken LC task takes an idle CPU, LC CPUs first, else
+ *   preempts a batch task borrowing an LC CPU, else queues; batch tasks on
+ *   batch CPUs are never preempted. The timer sizes the LC pool from LC
+ *   tasks' CPU use and queue plus a buffer (update_split()).
  * - Diagnostics (--diag): every wait for a CPU, by why the task was waiting
  *   (woken, preempted, slice ran out) and by task group (task-name
  *   prefixes), to see which waits the wakeup-only latency signal misses.
@@ -86,6 +94,26 @@ const volatile u32 late_shift = 6;
 const volatile u64 hold_min_ns = 200000000;	/* LATENCY at least this long */
 const volatile u64 hold_max_ns = 5000000000;
 const volatile u64 signal_cpus = ~0ULL;
+/*
+ * Task class. Default: the run-time rule above (is_batch()). With
+ * class_policy, batch = the SCHED_BATCH and SCHED_IDLE policies, set by the
+ * user (e.g. chrt --batch 0), as for Linux's own scheduler.
+ */
+const volatile bool class_policy;
+/*
+ * Soft CPU split (--split). split_rank[cpu] is the CPU's position among the
+ * split CPUs (-1: not in the split; such CPUs act as LC CPUs). The first
+ * nr_lc split CPUs are LC CPUs. nr_lc stays within [lc_min, lc_max]; the
+ * timer sets it to ceil(LC demand + lc_buffer), in CPUs x 1024.
+ */
+const volatile bool split;
+const volatile s32 split_rank[KAIROS_MAX_CPUS];
+const volatile u32 lc_min = 1, lc_max = 1;	/* the loader sets lc_max */
+const volatile u64 lc_buffer = 512;		/* half a CPU */
+/* Shrink the LC pool only if it would still shrink with this much more demand. */
+const volatile u64 lc_hyst = 256;		/* a quarter CPU */
+const volatile u32 lc_shift = 6;		/* LC demand EWMA: ~64 ms */
+const volatile u64 borrow_slice_ns = 3000000;	/* batch task on an LC CPU */
 /* Diagnostics: per-group wait and run counters (struct diag). */
 const volatile bool diag;
 /* Group i is the tasks whose name starts with diag_comm[i]; "" = unused. */
@@ -94,6 +122,16 @@ const volatile char diag_comm[DIAG_NAMED][DIAG_COMM_LEN];
 UEI_DEFINE(uei);
 
 #define SHARED_DSQ 0
+#define LC_DSQ 1	/* --split: latency-critical tasks */
+#define BATCH_DSQ 2	/* --split: batch tasks */
+
+/* vmlinux.h has no #defines; the values are from uapi/linux/sched.h */
+#ifndef SCHED_BATCH
+#define SCHED_BATCH 3
+#endif
+#ifndef SCHED_IDLE
+#define SCHED_IDLE 5
+#endif
 
 static u64 vtime_now;
 static u32 nr_cpus;
@@ -120,6 +158,12 @@ u64 nr_mode_switches;
 u64 mode_ns[2];			/* time spent in each mode */
 u64 hold_ns;			/* current LATENCY hold before trying BATCH */
 static u64 mode_since;
+/* --split state: lc_run_ns by atomic adds in stopping(), the rest by the timer. */
+u32 nr_lc;			/* current number of LC CPUs */
+u64 lc_run_ns;			/* cumulative CPU time of LC tasks on split CPUs */
+u64 lc_demand;			/* EWMA of LC demand, CPUs x 1024 */
+u64 lc_cpus_ns;			/* integral of nr_lc over time, for its average */
+u64 nr_lc_changes;
 
 struct {
 	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
@@ -162,6 +206,7 @@ struct cpu_ctx {
 	u64 vtime;	/* current task's vtime when it started */
 	u64 weight;	/* current task's weight (nice 0 = 100) */
 	u64 run_since_sleep;	/* current task's, when it started */
+	bool batch;		/* current task's class, when it started */
 };
 
 struct {
@@ -212,6 +257,46 @@ static bool is_batch(u64 run_since_sleep)
 	return run_since_sleep >= batch_min_run_ns;
 }
 
+/* @p's class now: by policy with class_policy, else by the run-time rule. */
+static bool task_batch(const struct task_struct *p, const struct task_ctx *tctx)
+{
+	if (class_policy)
+		return p->policy == SCHED_BATCH || p->policy == SCHED_IDLE;
+	return tctx && is_batch(tctx->run_since_sleep);
+}
+
+/*
+ * --split: @cpu's rank among the split CPUs, -1 if it isn't one.
+ * MEMBER_VPTR (scx/common.bpf.h) does the range check in inline asm next to
+ * the access; a plain C check let the compiler compute the address before
+ * it, and the verifier rejected the access as unbounded.
+ */
+static s32 split_rank_of(s32 cpu)
+{
+	const volatile s32 *rank;
+
+	if (cpu < 0)
+		return -1;
+	rank = MEMBER_VPTR(split_rank, [cpu]);
+	return rank ? *rank : -1;
+}
+
+/* --split: is @cpu an LC CPU now? CPUs outside the split count as LC. */
+static bool lc_cpu(s32 cpu)
+{
+	s32 rank = split_rank_of(cpu);
+
+	return rank < 0 || rank < (s32)nr_lc;
+}
+
+/* --split: slice for a task of class @batch starting on @cpu. */
+static u64 split_slice(bool batch, s32 cpu)
+{
+	if (!batch)
+		return lat_slice_ns;
+	return lc_cpu(cpu) ? borrow_slice_ns : batch_slice_ns;
+}
+
 /*
  * The vtime @p is queued with. scx_simple's rule: a task that slept doesn't
  * keep all the vtime it didn't use, only up to sleep_credit_ns of it.
@@ -258,7 +343,7 @@ static s32 pick_victim(struct task_struct *p, u64 vtime, bool *batch)
 			continue;
 		/* what it has run since it started on this CPU */
 		ran = time_after(now, cctx->running_at) ? now - cctx->running_at : 0;
-		b = is_batch(cctx->run_since_sleep + ran);
+		b = class_policy ? cctx->batch : is_batch(cctx->run_since_sleep + ran);
 		if (victim_batch_only && !b)
 			continue;
 		cur = cctx->vtime + ran * 100 / cctx->weight;
@@ -329,11 +414,111 @@ static void record_wait(u64 ns)
 		wait_max_ns = ns;
 }
 
+/*
+ * --split: claim an idle CPU for @p, or return -1. First CPUs of its own
+ * pool (LC CPUs for an LC task, batch CPUs for a batch task), then of the
+ * other; within a pool @prev_cpu first, for its warm cache.
+ * scx_bpf_test_and_clear_cpu_idle() claims the CPU, so two wakeups can't
+ * both get it.
+ */
+static s32 split_pick_idle(struct task_struct *p, s32 prev_cpu, bool batch)
+{
+	u32 pass;
+	s32 cpu;
+
+	for (pass = 0; pass < 2; pass++) {
+		bool want_lc = (pass == 0) != batch;
+
+		if (prev_cpu >= 0 && bpf_cpumask_test_cpu(prev_cpu, p->cpus_ptr) &&
+		    lc_cpu(prev_cpu) == want_lc && scx_bpf_test_and_clear_cpu_idle(prev_cpu))
+			return prev_cpu;
+		bpf_for(cpu, 0, nr_cpus) {
+			if (cpu == prev_cpu || !bpf_cpumask_test_cpu(cpu, p->cpus_ptr) ||
+			    lc_cpu(cpu) != want_lc)
+				continue;
+			if (scx_bpf_test_and_clear_cpu_idle(cpu))
+				return cpu;
+		}
+	}
+	return -1;
+}
+
+/*
+ * --split: a CPU for woken LC task @p to preempt: an LC CPU running a
+ * borrowed batch task. If @p can't run on any LC CPU (e.g. a per-CPU
+ * kernel thread on a batch CPU), any allowed CPU running a batch task.
+ * Returns -1 if there is none.
+ */
+static s32 split_pick_borrower(struct task_struct *p)
+{
+	bool pinned_here = is_migration_disabled(p), can_lc = false;
+	s32 cpu, any = -1;
+
+	bpf_for(cpu, 0, nr_cpus) {
+		struct cpu_ctx *cctx;
+		bool lc;
+
+		if (!bpf_cpumask_test_cpu(cpu, p->cpus_ptr))
+			continue;
+		if (pinned_here && cpu != scx_bpf_task_cpu(p))
+			continue;
+		lc = lc_cpu(cpu);
+		can_lc |= lc;
+		cctx = lookup_cpu_ctx(cpu);
+		if (!cctx || !cctx->running_at || !cctx->batch)
+			continue;
+		if (lc)
+			return cpu;
+		if (any < 0)
+			any = cpu;
+	}
+	return can_lc ? -1 : any;
+}
+
+static s32 split_select_cpu(struct task_struct *p, s32 prev_cpu)
+{
+	struct task_ctx *tctx = bpf_task_storage_get(&task_ctxs, p, 0, 0);
+	bool batch = task_batch(p, tctx);
+	s32 cpu = split_pick_idle(p, prev_cpu, batch);
+
+	if (cpu < 0)
+		return prev_cpu;	/* enqueue() decides */
+	stat_inc(STAT_LOCAL);
+	scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, split_slice(batch, cpu), 0);
+	return cpu;
+}
+
+static void split_enqueue(struct task_struct *p, u64 enq_flags)
+{
+	struct task_ctx *tctx = bpf_task_storage_get(&task_ctxs, p, 0, 0);
+	bool batch = task_batch(p, tctx);
+	u64 vtime = queue_vtime(p);
+
+	if (!batch && (enq_flags & SCX_ENQ_WAKEUP)) {
+		s32 cpu = split_pick_borrower(p);
+
+		if (cpu >= 0) {
+			stat_inc(STAT_PREEMPT);
+			stat_inc(STAT_PREEMPT_BATCH);
+			p->scx.dsq_vtime = vtime;
+			scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, lat_slice_ns,
+					   enq_flags | SCX_ENQ_PREEMPT);
+			return;
+		}
+		stat_inc(STAT_NO_VICTIM);
+	}
+	stat_inc(STAT_GLOBAL);
+	scx_bpf_dsq_insert_vtime(p, batch ? BATCH_DSQ : LC_DSQ,
+				 batch ? batch_slice_ns : lat_slice_ns, vtime, enq_flags);
+}
+
 s32 BPF_STRUCT_OPS(kairos_select_cpu, struct task_struct *p, s32 prev_cpu, u64 wake_flags)
 {
 	bool is_idle = false;
 	s32 cpu;
 
+	if (split)
+		return split_select_cpu(p, prev_cpu);
 	cpu = scx_bpf_select_cpu_dfl(p, prev_cpu, wake_flags, &is_idle);
 	if (is_idle) {
 		stat_inc(STAT_LOCAL);
@@ -352,6 +537,10 @@ void BPF_STRUCT_OPS(kairos_enqueue, struct task_struct *p, u64 enq_flags)
 		bpf_printk("kairos enqueue: pid=%d comm=%s enq_flags=0x%llx",
 			   p->pid, p->comm, enq_flags);
 
+	if (split) {
+		split_enqueue(p, enq_flags);
+		return;
+	}
 	vtime = queue_vtime(p);
 
 	/*
@@ -385,7 +574,18 @@ void BPF_STRUCT_OPS(kairos_enqueue, struct task_struct *p, u64 enq_flags)
 
 void BPF_STRUCT_OPS(kairos_dispatch, s32 cpu, struct task_struct *prev)
 {
-	scx_bpf_dsq_move_to_local(SHARED_DSQ);
+	if (!split) {
+		scx_bpf_dsq_move_to_local(SHARED_DSQ);
+		return;
+	}
+	/* own pool's queue first, then lend the CPU to the other pool */
+	if (lc_cpu(cpu)) {
+		if (!scx_bpf_dsq_move_to_local(LC_DSQ))
+			scx_bpf_dsq_move_to_local(BATCH_DSQ);
+	} else {
+		if (!scx_bpf_dsq_move_to_local(BATCH_DSQ))
+			scx_bpf_dsq_move_to_local(LC_DSQ);
+	}
 }
 
 /*
@@ -466,7 +666,18 @@ void BPF_STRUCT_OPS(kairos_running, struct task_struct *p)
 		cctx->vtime = p->scx.dsq_vtime;
 		cctx->weight = p->scx.weight;
 		cctx->run_since_sleep = tctx ? tctx->run_since_sleep : 0;
+		cctx->batch = task_batch(p, tctx);
 		cctx->running_at = now;
+	}
+	/*
+	 * --split: a batch task taken from the batch queue by an LC CPU got a
+	 * batch slice when it was queued; on an LC CPU it only borrows, so
+	 * shorten it. (It can still be preempted by an LC wakeup sooner.)
+	 */
+	if (split && task_batch(p, tctx) && lc_cpu(cpu)) {
+		stat_inc(STAT_BORROW);
+		if (p->scx.slice > borrow_slice_ns)
+			scx_bpf_task_set_slice(p, borrow_slice_ns);
 	}
 }
 
@@ -505,6 +716,13 @@ void BPF_STRUCT_OPS(kairos_stopping, struct task_struct *p, bool runnable)
 			if (dg)
 				dg->run_ns += ran;
 		}
+		/* LC demand for --split: CPU time of LC tasks on split CPUs */
+		if (split && !task_batch(p, tctx)) {
+			s32 c = scx_bpf_task_cpu(p);
+
+			if (split_rank_of(c) >= 0)
+				__sync_fetch_and_add(&lc_run_ns, ran);
+		}
 		/*
 		 * Classification. The kernel calls stopping(p, false) when the
 		 * running task is dequeued (it blocked or went to sleep), which
@@ -541,7 +759,46 @@ s32 BPF_STRUCT_OPS(kairos_init_task, struct task_struct *p,
 }
 
 static u64 last_tick_at, last_wakeups, last_wait_sum, last_wait_cnt;
-static u64 last_lat_wakeups, last_lat_late;
+static u64 last_lat_wakeups, last_lat_late, last_lc_run_ns;
+
+/*
+ * --split: size the LC pool. Demand per tick = CPUs' worth of LC run time
+ * in the tick + one CPU per LC task waiting in the LC queue (work that
+ * didn't get a CPU), averaged with weight 1/2^lc_shift per tick (~64 ms):
+ * millisecond bursts are absorbed by idle CPUs and by preempting
+ * borrowers, so the pool only needs to follow slower changes. (An ~8 ms
+ * average changed the pool 11-24 times a second on an idle system.)
+ * nr_lc = ceil(demand + lc_buffer), within [lc_min, lc_max]; it shrinks
+ * only if it would also with lc_hyst more demand, so demand near a whole
+ * CPU doesn't flip it back and forth. Tasks keep running where they are
+ * when a CPU changes pool; the change applies at their next dispatch.
+ */
+static void update_split(u64 dt)
+{
+	u64 run = lc_run_ns, sample, want;
+	u32 n;
+
+	sample = (run - last_lc_run_ns) * 1024 / dt +
+		 scx_bpf_dsq_nr_queued(LC_DSQ) * 1024;
+	last_lc_run_ns = run;
+	lc_demand = ewma(lc_demand, sample, lc_shift);
+	want = lc_demand + lc_buffer;
+	n = (want + 1023) / 1024;
+	if (n < nr_lc) {
+		u32 n_hyst = (want + lc_hyst + 1023) / 1024;
+
+		n = n_hyst < nr_lc ? n_hyst : nr_lc;
+	}
+	if (n < lc_min)
+		n = lc_min;
+	if (n > lc_max)
+		n = lc_max;
+	if (n != nr_lc) {
+		nr_lc = n;
+		nr_lc_changes++;
+	}
+	lc_cpus_ns += nr_lc * dt;
+}
 
 static void set_mode(u32 m, u64 now)
 {
@@ -601,6 +858,8 @@ static int kairos_timerfn(void *map, int *key, struct bpf_timer *timer)
 		last_lat_late = ll;
 		if (adaptive)
 			update_mode(now);
+		if (split)
+			update_split(dt);
 
 		wake_rate = ewma(wake_rate, (w - last_wakeups) * 1000000000 / dt, fast_shift);
 		if (cnt > last_wait_cnt)
@@ -631,10 +890,15 @@ s32 BPF_STRUCT_OPS_SLEEPABLE(kairos_init)
 	/* adaptive starts in LATENCY mode, the safe one for latency */
 	mode = adaptive ? MODE_LATENCY : forced_mode;
 	hold_ns = hold_min_ns;
+	nr_lc = lc_max;	/* start with every split CPU for LC; the timer shrinks it */
 
 	ret = scx_bpf_create_dsq(SHARED_DSQ, -1);
+	if (!ret)
+		ret = scx_bpf_create_dsq(LC_DSQ, -1);
+	if (!ret)
+		ret = scx_bpf_create_dsq(BATCH_DSQ, -1);
 	if (ret) {
-		scx_bpf_error("failed to create DSQ %d (%d)", SHARED_DSQ, ret);
+		scx_bpf_error("failed to create DSQs (%d)", ret);
 		return ret;
 	}
 

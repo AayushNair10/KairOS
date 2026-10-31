@@ -43,6 +43,20 @@ const char help_fmt[] =
 "      --timer-us N        load-signal timer period (default 1000)\n"
 "      --fast-shift N      fast EWMA weight 1/2^N per timer tick (default 3)\n"
 "      --slow-shift N      slow EWMA weight 1/2^N per timer tick (default 6)\n"
+"      --split             soft CPU split instead of the modes: LC CPUs and\n"
+"                          batch CPUs, each pool serving its own queue first\n"
+"      --split-cpus LIST   CPUs the split manages (default all)\n"
+"      --lc-min N          fewest LC CPUs (default 1)\n"
+"      --lc-max N          most LC CPUs (default: all split CPUs)\n"
+"      --lc-buffer-pct N   spare LC capacity on top of LC demand, in %% of a\n"
+"                          CPU (default 50)\n"
+"      --lc-shift N        LC demand EWMA weight 1/2^N per tick (default 6)\n"
+"      --lc-hyst-pct N     shrink the LC pool only if it would with N%% of a\n"
+"                          CPU more demand (default 25)\n"
+"      --borrow-slice-us N slice of a batch task on an LC CPU (default 3000)\n"
+"      --class run|policy  batch = ran --batch-min-run-us since it slept (run),\n"
+"                          or has policy SCHED_BATCH/SCHED_IDLE (policy;\n"
+"                          e.g. chrt --batch 0) (default run)\n"
 "      --victim any|batch  which running tasks LATENCY mode may preempt: any,\n"
 "                          or only those classified batch (default any)\n"
 "      --batch-min-run-us N  a task is batch once it has run N us of CPU\n"
@@ -76,6 +90,15 @@ enum {
 	OPT_SIGNAL_CPUS,
 	OPT_DIAG,
 	OPT_DIAG_COMM,
+	OPT_SPLIT,
+	OPT_SPLIT_CPUS,
+	OPT_LC_MIN,
+	OPT_LC_MAX,
+	OPT_LC_BUFFER,
+	OPT_BORROW_SLICE,
+	OPT_LC_HYST,
+	OPT_LC_SHIFT,
+	OPT_CLASS,
 };
 
 static const struct option long_opts[] = {
@@ -94,6 +117,15 @@ static const struct option long_opts[] = {
 	{ "timer-us",        required_argument, NULL, OPT_TIMER },
 	{ "fast-shift",      required_argument, NULL, OPT_FAST_SHIFT },
 	{ "slow-shift",      required_argument, NULL, OPT_SLOW_SHIFT },
+	{ "split",           no_argument,       NULL, OPT_SPLIT },
+	{ "split-cpus",      required_argument, NULL, OPT_SPLIT_CPUS },
+	{ "lc-min",          required_argument, NULL, OPT_LC_MIN },
+	{ "lc-max",          required_argument, NULL, OPT_LC_MAX },
+	{ "lc-buffer-pct",   required_argument, NULL, OPT_LC_BUFFER },
+	{ "borrow-slice-us", required_argument, NULL, OPT_BORROW_SLICE },
+	{ "lc-hyst-pct",     required_argument, NULL, OPT_LC_HYST },
+	{ "lc-shift",        required_argument, NULL, OPT_LC_SHIFT },
+	{ "class",           required_argument, NULL, OPT_CLASS },
 	{ "victim",          required_argument, NULL, OPT_VICTIM },
 	{ "batch-min-run-us", required_argument, NULL, OPT_BATCH_MIN_RUN },
 	{ "trace-class",     no_argument,       NULL, OPT_TRACE_CLASS },
@@ -135,7 +167,7 @@ static unsigned long long parse_num(const char *name, const char *s)
 }
 
 /* Parse a CPU list such as "0-2" or "0,2-3" into a bitmask, or exit. */
-static unsigned long long parse_cpus(const char *s)
+static unsigned long long parse_cpus(const char *name, const char *s)
 {
 	unsigned long long mask = 0;
 	const char *q = s;
@@ -165,7 +197,7 @@ static unsigned long long parse_cpus(const char *s)
 	if (mask)
 		return mask;
 bad:
-	fprintf(stderr, "invalid CPU list for --signal-cpus: %s\n", s);
+	fprintf(stderr, "invalid CPU list for --%s: %s\n", name, s);
 	exit(1);
 }
 
@@ -303,13 +335,16 @@ static const char csv_header[] =
 	"unix_s,local,global,preempt,preempt_batch,no_victim,to_batch,from_batch,"
 	"nr_runnable,procs_running,"
 	"fast_load,slow_load,wake_rate,wait_avg_us,wait_max_us,mode,timer_ticks,"
-	"lat_wakeups,lat_late,late_frac,mode_switches,latency_ms\n";
+	"lat_wakeups,lat_late,late_frac,mode_switches,latency_ms,"
+	"nr_lc,lc_cpus,lc_demand,lc_changes,borrow\n";
 
 int main(int argc, char **argv)
 {
 	struct scx_kairos *skel;
 	struct bpf_link *link;
 	const char *stats_path = NULL, *diag_path = NULL;
+	unsigned long long split_mask = ~0ULL;
+	long lc_max = -1;	/* -1: all split CPUs */
 	FILE *csv = NULL, *diag_csv = NULL;
 	/* group names for the diagnostics CSV; the last is everything else */
 	char diag_names[DIAG_GROUPS][DIAG_COMM_LEN] = {};
@@ -351,7 +386,7 @@ restart:
 			skel->rodata->hold_max_ns = parse_num("hold-max-ms", optarg) * 1000000;
 			break;
 		case OPT_SIGNAL_CPUS:
-			skel->rodata->signal_cpus = parse_cpus(optarg);
+			skel->rodata->signal_cpus = parse_cpus("signal-cpus", optarg);
 			break;
 		case OPT_LAT_SLICE:
 			skel->rodata->lat_slice_ns = parse_num("lat-slice-us", optarg) * 1000;
@@ -397,6 +432,41 @@ restart:
 		case OPT_DIAG_COMM:
 			parse_diag_comm(skel, optarg, diag_names);
 			break;
+		case OPT_SPLIT:
+			skel->rodata->split = true;
+			break;
+		case OPT_SPLIT_CPUS:
+			split_mask = parse_cpus("split-cpus", optarg);
+			break;
+		case OPT_LC_MIN:
+			skel->rodata->lc_min = parse_num("lc-min", optarg);
+			break;
+		case OPT_LC_MAX:
+			lc_max = parse_num("lc-max", optarg);
+			break;
+		case OPT_LC_BUFFER:
+			/* percent of a CPU -> CPUs x 1024 */
+			skel->rodata->lc_buffer = parse_num("lc-buffer-pct", optarg) * 1024 / 100;
+			break;
+		case OPT_LC_SHIFT:
+			skel->rodata->lc_shift = parse_num("lc-shift", optarg);
+			break;
+		case OPT_LC_HYST:
+			skel->rodata->lc_hyst = parse_num("lc-hyst-pct", optarg) * 1024 / 100;
+			break;
+		case OPT_BORROW_SLICE:
+			skel->rodata->borrow_slice_ns = parse_num("borrow-slice-us", optarg) * 1000;
+			break;
+		case OPT_CLASS:
+			if (!strcmp(optarg, "run")) {
+				skel->rodata->class_policy = false;
+			} else if (!strcmp(optarg, "policy")) {
+				skel->rodata->class_policy = true;
+			} else {
+				fprintf(stderr, "--class must be 'run' or 'policy'\n");
+				return 1;
+			}
+			break;
 		case 't':
 			skel->rodata->trace_enqueue = true;
 			break;
@@ -409,9 +479,10 @@ restart:
 		}
 	}
 	if (skel->rodata->fast_shift > 16 || skel->rodata->slow_shift > 16 ||
-	    skel->rodata->late_shift > 10 || !skel->rodata->timer_interval_ns) {
+	    skel->rodata->late_shift > 10 || skel->rodata->lc_shift > 16 ||
+	    !skel->rodata->timer_interval_ns) {
 		/* late_shift > 10 would round a 1024 sample's step to 0 */
-		fprintf(stderr, "fast/slow shifts must be <= 16, --late-shift <= 10, "
+		fprintf(stderr, "fast/slow/lc shifts must be <= 16, --late-shift <= 10, "
 			"and the timer period > 0\n");
 		return 1;
 	}
@@ -422,6 +493,31 @@ restart:
 	}
 
 	strcpy(diag_names[DIAG_NAMED], "other");
+
+	/*
+	 * Split CPUs get ranks 0, 1, ... in CPU order (the first nr_lc are
+	 * the LC CPUs); the others -1.
+	 */
+	{
+		int nr_possible = libbpf_num_possible_cpus(), nr_split = 0;
+
+		for (int cpu = 0; cpu < KAIROS_MAX_CPUS; cpu++)
+			skel->rodata->split_rank[cpu] =
+				cpu < nr_possible && (split_mask >> cpu) & 1 ? nr_split++ : -1;
+		if (lc_max < 0 || lc_max > nr_split)
+			lc_max = nr_split;
+		skel->rodata->lc_max = lc_max;
+		if (skel->rodata->split &&
+		    (!nr_split || skel->rodata->lc_min < 1 || skel->rodata->lc_min > lc_max)) {
+			fprintf(stderr, "--split needs split CPUs and 1 <= --lc-min <= --lc-max\n");
+			return 1;
+		}
+		if (skel->rodata->split && (skel->rodata->adaptive ||
+					    skel->rodata->forced_mode != MODE_BATCH)) {
+			fprintf(stderr, "--split replaces the modes: drop --adaptive/--force-preempt\n");
+			return 1;
+		}
+	}
 
 	SCX_OPS_LOAD(skel, kairos_ops, scx_kairos, uei);
 	link = SCX_OPS_ATTACH(skel, kairos_ops, scx_kairos);
@@ -446,8 +542,10 @@ restart:
 	}
 	printf("mode=%s lat_slice_us=%llu batch_slice_us=%llu timer_us=%llu "
 	       "fast_shift=%u slow_shift=%u victim=%s batch_min_run_us=%llu "
-	       "lat_target_us=%llu late_max=%.1f%% hold_ms=%llu-%llu signal_cpus=0x%llx\n",
-	       skel->rodata->adaptive ? "adaptive" :
+	       "lat_target_us=%llu late_max=%.1f%% hold_ms=%llu-%llu signal_cpus=0x%llx "
+	       "split=%d split_cpus=0x%llx lc=%u-%u lc_buffer=%.2f lc_hyst=%.2f borrow_slice_us=%llu "
+	       "class=%s\n",
+	       skel->rodata->split ? "split" : skel->rodata->adaptive ? "adaptive" :
 	       skel->rodata->forced_mode == MODE_LATENCY ? "latency" : "batch",
 	       (unsigned long long)skel->rodata->lat_slice_ns / 1000,
 	       (unsigned long long)skel->rodata->batch_slice_ns / 1000,
@@ -459,20 +557,26 @@ restart:
 	       100.0 * skel->rodata->late_max / LATE_ONE,
 	       (unsigned long long)skel->rodata->hold_min_ns / 1000000,
 	       (unsigned long long)skel->rodata->hold_max_ns / 1000000,
-	       (unsigned long long)skel->rodata->signal_cpus);
+	       (unsigned long long)skel->rodata->signal_cpus,
+	       skel->rodata->split, split_mask, skel->rodata->lc_min, skel->rodata->lc_max,
+	       skel->rodata->lc_buffer / 1024.0, skel->rodata->lc_hyst / 1024.0,
+	       (unsigned long long)skel->rodata->borrow_slice_ns / 1000,
+	       skel->rodata->class_policy ? "policy" : "run");
 
 	__u64 prev[KAIROS_NR_STATS] = {};
 	struct diag diag_prev, diag_cur;
 	/* previous values of the bss counters, for per-second deltas */
 	__u64 prev_lw = skel->bss->lat_wakeups, prev_ll = skel->bss->lat_late;
 	__u64 prev_sw = skel->bss->nr_mode_switches, prev_lat_ns = skel->bss->mode_ns[MODE_LATENCY];
+	__u64 prev_lc_ns = skel->bss->lc_cpus_ns, prev_lc_ch = skel->bss->nr_lc_changes;
 	read_stats(skel, prev);
 	read_diag(skel, &diag_prev);
 	while (!exit_req && !UEI_EXITED(skel, uei)) {
 		__u64 stats[KAIROS_NR_STATS], d[KAIROS_NR_STATS];
 		struct timespec ts;
 		double fast, slow, wait_avg_us, wait_max_us, late_frac, lat_ms;
-		__u64 lw, ll, sw, lat_ns;
+		double lc_cpus, lc_demand;
+		__u64 lw, ll, sw, lat_ns, lc_ns, lc_ch;
 		int i;
 
 		sleep(1);
@@ -493,6 +597,11 @@ restart:
 		sw = skel->bss->nr_mode_switches;
 		lat_ns = skel->bss->mode_ns[MODE_LATENCY];
 		lat_ms = (lat_ns - prev_lat_ns) / 1e6;	/* of the last second */
+		lc_ns = skel->bss->lc_cpus_ns;
+		lc_ch = skel->bss->nr_lc_changes;
+		/* nr_lc integrated over the second, over the second's length */
+		lc_cpus = (lc_ns - prev_lc_ns) / 1e9;
+		lc_demand = skel->bss->lc_demand / 1024.0;
 
 		printf("local=%llu global=%llu preempt=%llu (batch %llu) no_victim=%llu "
 		       "class +%llu -%llu runnable=%lld (kernel %ld) load fast=%.2f slow=%.2f "
@@ -504,12 +613,16 @@ restart:
 		printf("  mode=%s late %llu/%llu (ewma %.1f%%) switches=%llu latency_ms=%.0f\n",
 		       skel->bss->mode == MODE_LATENCY ? "latency" : "batch",
 		       ll - prev_ll, lw - prev_lw, 100 * late_frac, sw - prev_sw, lat_ms);
+		if (skel->rodata->split)
+			printf("  split: lc_cpus now %u, avg %.2f, demand %.2f, changes %llu, borrow %llu\n",
+			       skel->bss->nr_lc, lc_cpus, lc_demand, lc_ch - prev_lc_ch,
+			       d[STAT_BORROW]);
 		fflush(stdout);
 
 		if (csv) {
 			clock_gettime(CLOCK_REALTIME, &ts);
 			fprintf(csv, "%.3f,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%lld,%ld,%.3f,%.3f,%llu,"
-				"%.1f,%.1f,%u,%llu,%llu,%llu,%.4f,%llu,%.1f\n",
+				"%.1f,%.1f,%u,%llu,%llu,%llu,%.4f,%llu,%.1f,%u,%.3f,%.3f,%llu,%llu\n",
 				ts.tv_sec + ts.tv_nsec / 1e9, d[STAT_LOCAL], d[STAT_GLOBAL],
 				d[STAT_PREEMPT], d[STAT_PREEMPT_BATCH], d[STAT_NO_VICTIM],
 				d[STAT_TO_BATCH], d[STAT_FROM_BATCH],
@@ -517,7 +630,9 @@ restart:
 				(unsigned long long)skel->bss->wake_rate, wait_avg_us,
 				wait_max_us, skel->bss->mode,
 				(unsigned long long)skel->bss->nr_timer_ticks,
-				lw - prev_lw, ll - prev_ll, late_frac, sw - prev_sw, lat_ms);
+				lw - prev_lw, ll - prev_ll, late_frac, sw - prev_sw, lat_ms,
+				skel->bss->nr_lc, lc_cpus, lc_demand, lc_ch - prev_lc_ch,
+				d[STAT_BORROW]);
 			fflush(csv);
 		}
 		if (diag_csv) {
@@ -531,6 +646,8 @@ restart:
 		prev_ll = ll;
 		prev_sw = sw;
 		prev_lat_ns = lat_ns;
+		prev_lc_ns = lc_ns;
+		prev_lc_ch = lc_ch;
 	}
 
 	bpf_link__destroy(link);

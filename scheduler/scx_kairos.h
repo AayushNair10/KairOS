@@ -30,6 +30,7 @@ enum kairos_stat {
 	STAT_NO_VICTIM,		/* LATENCY mode, no idle CPU and nothing to preempt */
 	STAT_TO_BATCH,		/* a task's class changed to batch */
 	STAT_FROM_BATCH,	/* ... and back */
+	STAT_BORROW,		/* --split: batch task started on an LC CPU */
 	KAIROS_NR_STATS,	/* not NR_STATS: vmlinux.h has one */
 };
 
