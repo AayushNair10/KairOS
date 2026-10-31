@@ -6,6 +6,7 @@
  * Based on scx_simple's loader: Copyright (c) 2022 Meta Platforms, Inc. and
  * affiliates; Tejun Heo <tj@kernel.org>; David Vernet <dvernet@meta.com>.
  */
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -56,6 +57,13 @@ const char help_fmt[] =
 "      --borrow-slice-us N slice of a batch task on an LC CPU (default 3000)\n"
 "      --no-borrow-preempt a woken LC task doesn't preempt a batch task on an\n"
 "                          LC CPU; it waits for the borrow slice instead\n"
+"      --ml-trace FILE     --split: every --ml-period-ms, write the LC demand\n"
+"                          sample (training data for ml/train_burst.py)\n"
+"      --ml-model FILE     --split: predict LC demand with this tree (from\n"
+"                          ml/train_burst.py); the prediction can only grow\n"
+"                          the LC pool, and is ignored once stale\n"
+"      --ml-period-ms N    sampling period (default 50; the model's must match)\n"
+"      --ml-ttl-ms N       a prediction is used for N ms (default 2 periods)\n"
 "      --class run|policy  batch = ran --batch-min-run-us since it slept (run),\n"
 "                          or has policy SCHED_BATCH/SCHED_IDLE (policy;\n"
 "                          e.g. chrt --batch 0) (default run)\n"
@@ -101,6 +109,10 @@ enum {
 	OPT_LC_HYST,
 	OPT_LC_SHIFT,
 	OPT_NO_BORROW_PREEMPT,
+	OPT_ML_TRACE,
+	OPT_ML_MODEL,
+	OPT_ML_PERIOD,
+	OPT_ML_TTL,
 	OPT_CLASS,
 };
 
@@ -129,6 +141,10 @@ static const struct option long_opts[] = {
 	{ "lc-hyst-pct",     required_argument, NULL, OPT_LC_HYST },
 	{ "lc-shift",        required_argument, NULL, OPT_LC_SHIFT },
 	{ "no-borrow-preempt", no_argument,     NULL, OPT_NO_BORROW_PREEMPT },
+	{ "ml-trace",        required_argument, NULL, OPT_ML_TRACE },
+	{ "ml-model",        required_argument, NULL, OPT_ML_MODEL },
+	{ "ml-period-ms",    required_argument, NULL, OPT_ML_PERIOD },
+	{ "ml-ttl-ms",       required_argument, NULL, OPT_ML_TTL },
 	{ "class",           required_argument, NULL, OPT_CLASS },
 	{ "victim",          required_argument, NULL, OPT_VICTIM },
 	{ "batch-min-run-us", required_argument, NULL, OPT_BATCH_MIN_RUN },
@@ -335,12 +351,145 @@ static void write_diag(FILE *f, double t, const struct diag *cur, const struct d
 	fflush(f);
 }
 
+/*
+ * ML burst prediction for --split (RESEARCH_LOG 3.8). Every ml_period_ms
+ * the loader takes one LC demand sample, in CPUs, defined like the BPF
+ * timer's: LC tasks' CPU time over the period / its length, plus the mean
+ * number of LC tasks waiting in the LC queue (lc_queued_ticks /
+ * timer ticks). The model sees the last K samples, newest first, and the
+ * BPF side's demand EWMA:
+ *   x[0] = d(t), x[1] = d(t - 1), ..., x[K-1] = d(t - K + 1), x[K] = ewma(t)
+ * and predicts the largest sample of the next H periods. ml/train_burst.py
+ * builds the same features from --ml-trace files; the two must agree.
+ */
+#define ML_MAX_K	32
+#define ML_MAX_NODES	4096
+
+struct ml_node {
+	int feature;		/* -1: leaf */
+	double threshold;	/* go left if x[feature] <= threshold */
+	int left, right;
+	double value;		/* prediction at a leaf */
+};
+
+struct ml_model {
+	int k, h, period_ms, nr_nodes;
+	struct ml_node nodes[ML_MAX_NODES];
+};
+
+/*
+ * Read a model written by ml/train_burst.py:
+ *   kairos-tree 1
+ *   k <K> h <H> period_ms <P>
+ *   nodes <N>
+ *   <feature> <threshold> <left> <right> <value>    (N lines, node 0 = root)
+ */
+static int ml_load(const char *path, struct ml_model *m)
+{
+	FILE *f = fopen(path, "r");
+	int version;
+
+	if (!f) {
+		perror(path);
+		return -1;
+	}
+	if (fscanf(f, "kairos-tree %d k %d h %d period_ms %d nodes %d", &version, &m->k,
+		   &m->h, &m->period_ms, &m->nr_nodes) != 5 || version != 1 ||
+	    m->k < 1 || m->k > ML_MAX_K || m->nr_nodes < 1 || m->nr_nodes > ML_MAX_NODES)
+		goto bad;
+	for (int i = 0; i < m->nr_nodes; i++) {
+		struct ml_node *n = &m->nodes[i];
+
+		if (fscanf(f, "%d %lf %d %d %lf", &n->feature, &n->threshold, &n->left,
+			   &n->right, &n->value) != 5 || n->feature > m->k ||
+		    (n->feature >= 0 && (n->left <= i || n->right <= i ||
+					 n->left >= m->nr_nodes || n->right >= m->nr_nodes)))
+			goto bad;	/* children come after their parent: no cycles */
+	}
+	fclose(f);
+	return 0;
+bad:
+	fprintf(stderr, "%s: not a valid kairos-tree model\n", path);
+	fclose(f);
+	return -1;
+}
+
+static double ml_eval(const struct ml_model *m, const double *x)
+{
+	int i = 0;
+
+	while (m->nodes[i].feature >= 0)
+		i = x[m->nodes[i].feature] <= m->nodes[i].threshold ?
+		    m->nodes[i].left : m->nodes[i].right;
+	return m->nodes[i].value;
+}
+
+struct ml_state {
+	FILE *trace;
+	struct ml_model *model;	/* NULL: trace only */
+	int k;			/* history kept: the model's K, or ML_MAX_K */
+	double hist[ML_MAX_K];	/* demand samples, newest first */
+	int filled;
+	__u64 last_run, last_queued, last_ticks;
+	struct timespec last, start;
+	__u64 nr_pred;
+};
+
+static double ts_diff_ns(const struct timespec *a, const struct timespec *b)
+{
+	return (a->tv_sec - b->tv_sec) * 1e9 + (a->tv_nsec - b->tv_nsec);
+}
+
+/* One sample; with a model, also a prediction written to the BPF side. */
+static void ml_step(struct scx_kairos *skel, struct ml_state *st)
+{
+	__u64 run = skel->bss->lc_run_ns, queued = skel->bss->lc_queued_ticks;
+	__u64 ticks = skel->bss->nr_timer_ticks;
+	double dt, util, wait, d, ewma = skel->bss->lc_demand / 1024.0, pred = NAN;
+	struct timespec now;
+
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	dt = ts_diff_ns(&now, &st->last);
+	util = dt > 0 ? (run - st->last_run) / dt : 0;
+	wait = ticks > st->last_ticks ? (double)(queued - st->last_queued) /
+					(ticks - st->last_ticks) : 0;
+	d = util + wait;
+	st->last = now;
+	st->last_run = run;
+	st->last_queued = queued;
+	st->last_ticks = ticks;
+
+	memmove(&st->hist[1], &st->hist[0], (st->k - 1) * sizeof(st->hist[0]));
+	st->hist[0] = d;
+	if (st->filled < st->k)
+		st->filled++;
+
+	if (st->model && st->filled == st->k) {
+		double x[ML_MAX_K + 1];
+
+		memcpy(x, st->hist, st->k * sizeof(x[0]));
+		x[st->k] = ewma;
+		pred = ml_eval(st->model, x);
+		if (pred < 0)
+			pred = 0;
+		/* demand first, then the stamp that makes it valid */
+		skel->bss->ml_demand = pred * 1024;
+		__sync_synchronize();
+		skel->bss->ml_stamp = skel->bss->nr_timer_ticks ? skel->bss->nr_timer_ticks : 1;
+		st->nr_pred++;
+	}
+	if (st->trace)
+		fprintf(st->trace, "%.1f,%.4f,%.4f,%.4f,%.4f,%u,%.4f\n",
+			ts_diff_ns(&now, &st->start) / 1e6, util, wait, d, ewma,
+			skel->bss->nr_lc, pred);
+}
+
 static const char csv_header[] =
 	"unix_s,local,global,preempt,preempt_batch,no_victim,to_batch,from_batch,"
 	"nr_runnable,procs_running,"
 	"fast_load,slow_load,wake_rate,wait_avg_us,wait_max_us,mode,timer_ticks,"
 	"lat_wakeups,lat_late,late_frac,mode_switches,latency_ms,"
-	"nr_lc,lc_cpus,lc_demand,lc_changes,borrow\n";
+	"nr_lc,lc_cpus,lc_demand,lc_changes,borrow,ml_fresh,ml_raised\n";
 
 int main(int argc, char **argv)
 {
@@ -349,6 +498,10 @@ int main(int argc, char **argv)
 	const char *stats_path = NULL, *diag_path = NULL;
 	unsigned long long split_mask = ~0ULL;
 	long lc_max = -1;	/* -1: all split CPUs */
+	const char *ml_trace_path = NULL, *ml_model_path = NULL;
+	long ml_period_ms = 50, ml_ttl_ms = -1;	/* -1: two periods */
+	static struct ml_model ml_model;	/* big; not on the stack */
+	struct ml_state ml = {};
 	FILE *csv = NULL, *diag_csv = NULL;
 	/* group names for the diagnostics CSV; the last is everything else */
 	char diag_names[DIAG_GROUPS][DIAG_COMM_LEN] = {};
@@ -452,6 +605,18 @@ restart:
 			/* percent of a CPU -> CPUs x 1024 */
 			skel->rodata->lc_buffer = parse_num("lc-buffer-pct", optarg) * 1024 / 100;
 			break;
+		case OPT_ML_TRACE:
+			ml_trace_path = optarg;
+			break;
+		case OPT_ML_MODEL:
+			ml_model_path = optarg;
+			break;
+		case OPT_ML_PERIOD:
+			ml_period_ms = parse_num("ml-period-ms", optarg);
+			break;
+		case OPT_ML_TTL:
+			ml_ttl_ms = parse_num("ml-ttl-ms", optarg);
+			break;
 		case OPT_NO_BORROW_PREEMPT:
 			skel->rodata->borrow_preempt = false;
 			break;
@@ -501,6 +666,32 @@ restart:
 
 	strcpy(diag_names[DIAG_NAMED], "other");
 
+	if (ml_trace_path || ml_model_path) {
+		if (!skel->rodata->split || ml_period_ms < 1 || ml_period_ms > 1000 ||
+		    1000 % ml_period_ms) {
+			fprintf(stderr, "--ml-* need --split and a --ml-period-ms dividing 1000\n");
+			return 1;
+		}
+		ml.k = ML_MAX_K;
+		if (ml_model_path) {
+			if (ml_load(ml_model_path, &ml_model))
+				return 1;
+			if (ml_model.period_ms != ml_period_ms) {
+				fprintf(stderr, "model period %d ms != --ml-period-ms %ld\n",
+					ml_model.period_ms, ml_period_ms);
+				return 1;
+			}
+			ml.model = &ml_model;
+			ml.k = ml_model.k;
+			if (ml_ttl_ms < 0)
+				ml_ttl_ms = 2 * ml_period_ms;
+			/* in BPF timer ticks */
+			skel->rodata->ml_ttl_ticks = ml_ttl_ms * 1000000 / skel->rodata->timer_interval_ns;
+			if (!skel->rodata->ml_ttl_ticks)
+				skel->rodata->ml_ttl_ticks = 1;
+		}
+	}
+
 	/*
 	 * Split CPUs get ranks 0, 1, ... in CPU order (the first nr_lc are
 	 * the LC CPUs); the others -1.
@@ -536,6 +727,15 @@ restart:
 			exit_req = 1;
 		} else {
 			fputs(csv_header, csv);
+		}
+	}
+	if (ml_trace_path && !ml.trace) {
+		ml.trace = fopen(ml_trace_path, "w");
+		if (!ml.trace) {
+			perror(ml_trace_path);
+			exit_req = 1;
+		} else {
+			fputs("t_ms,util,queued,demand,ewma,nr_lc,pred\n", ml.trace);
 		}
 	}
 	if (diag_path && !diag_csv) {
@@ -577,6 +777,13 @@ restart:
 	__u64 prev_lw = skel->bss->lat_wakeups, prev_ll = skel->bss->lat_late;
 	__u64 prev_sw = skel->bss->nr_mode_switches, prev_lat_ns = skel->bss->mode_ns[MODE_LATENCY];
 	__u64 prev_lc_ns = skel->bss->lc_cpus_ns, prev_lc_ch = skel->bss->nr_lc_changes;
+	__u64 prev_mlf = skel->bss->ml_fresh_ticks, prev_mlr = skel->bss->ml_raised_ticks;
+
+	clock_gettime(CLOCK_MONOTONIC, &ml.start);
+	ml.last = ml.start;
+	ml.last_run = skel->bss->lc_run_ns;
+	ml.last_queued = skel->bss->lc_queued_ticks;
+	ml.last_ticks = skel->bss->nr_timer_ticks;
 	read_stats(skel, prev);
 	read_diag(skel, &diag_prev);
 	while (!exit_req && !UEI_EXITED(skel, uei)) {
@@ -584,10 +791,21 @@ restart:
 		struct timespec ts;
 		double fast, slow, wait_avg_us, wait_max_us, late_frac, lat_ms;
 		double lc_cpus, lc_demand;
-		__u64 lw, ll, sw, lat_ns, lc_ns, lc_ch;
+		__u64 lw, ll, sw, lat_ns, lc_ns, lc_ch, mlf, mlr;
 		int i;
 
-		sleep(1);
+		if (ml.trace || ml.model) {
+			/* one second in ML periods (usleep drift is fine: ml_step
+			 * measures the real interval) */
+			for (i = 0; i < 1000 / ml_period_ms && !exit_req; i++) {
+				usleep(ml_period_ms * 1000);
+				ml_step(skel, &ml);
+			}
+			if (ml.trace)
+				fflush(ml.trace);
+		} else {
+			sleep(1);
+		}
 		read_stats(skel, stats);
 		for (i = 0; i < KAIROS_NR_STATS; i++)
 			d[i] = stats[i] - prev[i];	/* events in the last second */
@@ -610,6 +828,8 @@ restart:
 		/* nr_lc integrated over the second, over the second's length */
 		lc_cpus = (lc_ns - prev_lc_ns) / 1e9;
 		lc_demand = skel->bss->lc_demand / 1024.0;
+		mlf = skel->bss->ml_fresh_ticks;
+		mlr = skel->bss->ml_raised_ticks;
 
 		printf("local=%llu global=%llu preempt=%llu (batch %llu) no_victim=%llu "
 		       "class +%llu -%llu runnable=%lld (kernel %ld) load fast=%.2f slow=%.2f "
@@ -630,7 +850,7 @@ restart:
 		if (csv) {
 			clock_gettime(CLOCK_REALTIME, &ts);
 			fprintf(csv, "%.3f,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%lld,%ld,%.3f,%.3f,%llu,"
-				"%.1f,%.1f,%u,%llu,%llu,%llu,%.4f,%llu,%.1f,%u,%.3f,%.3f,%llu,%llu\n",
+				"%.1f,%.1f,%u,%llu,%llu,%llu,%.4f,%llu,%.1f,%u,%.3f,%.3f,%llu,%llu,%llu,%llu\n",
 				ts.tv_sec + ts.tv_nsec / 1e9, d[STAT_LOCAL], d[STAT_GLOBAL],
 				d[STAT_PREEMPT], d[STAT_PREEMPT_BATCH], d[STAT_NO_VICTIM],
 				d[STAT_TO_BATCH], d[STAT_FROM_BATCH],
@@ -640,7 +860,7 @@ restart:
 				(unsigned long long)skel->bss->nr_timer_ticks,
 				lw - prev_lw, ll - prev_ll, late_frac, sw - prev_sw, lat_ms,
 				skel->bss->nr_lc, lc_cpus, lc_demand, lc_ch - prev_lc_ch,
-				d[STAT_BORROW]);
+				d[STAT_BORROW], mlf - prev_mlf, mlr - prev_mlr);
 			fflush(csv);
 		}
 		if (diag_csv) {
@@ -656,6 +876,8 @@ restart:
 		prev_lat_ns = lat_ns;
 		prev_lc_ns = lc_ns;
 		prev_lc_ch = lc_ch;
+		prev_mlf = mlf;
+		prev_mlr = mlr;
 	}
 
 	bpf_link__destroy(link);
@@ -668,5 +890,7 @@ restart:
 		fclose(csv);
 	if (diag_csv)
 		fclose(diag_csv);
+	if (ml.trace)
+		fclose(ml.trace);
 	return 0;
 }

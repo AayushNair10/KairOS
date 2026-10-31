@@ -17,6 +17,8 @@
 #   proc_stat_before/after  /proc/stat around the load (CPU time, ctx switches)
 #   procs_before/after   every process's /proc/<pid>/stat around the load, to
 #                        see what else used CPU (e.g. the VS Code server)
+#   ml_trace.csv         with ML_TRACE=1, kairos --split runs only: the LC
+#                        demand every 50 ms (training data for ml/)
 #   diag.csv             with DIAG_COMM set, kairos runs only: per second,
 #                        every wait for a CPU and every run by task group
 #                        (scx_kairos --diag); the server then also logs Go's
@@ -80,6 +82,8 @@ DIAG_COMM=${DIAG_COMM:-}
 # (SCHED_BATCH, set with chrt and inherited by zstd). Linux's scheduler and
 # scx_kairos --class policy use it to tell batch work from the service.
 BATCH_POLICY=${BATCH_POLICY:-normal}
+# 1: kairos --split runs also write ml_trace.csv (scx_kairos --ml-trace).
+ML_TRACE=${ML_TRACE:-}
 case $BATCH_POLICY in
 normal) BATCH_CHRT=() ;;
 batch) BATCH_CHRT=(chrt --batch 0) ;;
@@ -142,6 +146,7 @@ start_sched() {
 		opts=${opts#:}
 		opts=${opts//,/ }
 		[ -n "$DIAG_COMM" ] && opts+=" --diag $2/diag.csv --diag-comm $DIAG_COMM"
+		[ -n "$ML_TRACE" ] && [[ $opts == *--split* ]] && opts+=" --ml-trace $2/ml_trace.csv"
 		# $opts is unquoted on purpose: it may hold several options.
 		sudo "$ROOT/scheduler/scx_kairos" $opts --stats "$2/sched_stats.csv" \
 			> "$2/sched.log" 2>&1 &
@@ -264,7 +269,7 @@ WORKLOAD+=" batch_warmup_s=$BATCH_WARMUP_S"
 WORKLOAD+=" sut_cpus=${SUT_CPUS:-all} loadgen_cpus=${LOADGEN_CPUS:-all}"
 WORKLOAD+=" loadgen_gomaxprocs=$LOADGEN_GOMAXPROCS server_godebug=$SERVER_GODEBUG"
 WORKLOAD+=" server_gomaxprocs=$SERVER_GOMAXPROCS diag_comm=${DIAG_COMM:-off}"
-WORKLOAD+=" batch_policy=$BATCH_POLICY"
+WORKLOAD+=" batch_policy=$BATCH_POLICY ml_trace=${ML_TRACE:-0}"
 
 OUT=$ROOT/results/$(date +%F)-$NAME
 [ -e "$OUT" ] && OUT=$OUT-$(date +%H%M%S) # never overwrite earlier raw data

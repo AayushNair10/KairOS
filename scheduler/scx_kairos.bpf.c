@@ -35,7 +35,9 @@
  *   queue is empty. A woken LC task takes an idle CPU, LC CPUs first, else
  *   preempts a batch task borrowing an LC CPU, else queues; batch tasks on
  *   batch CPUs are never preempted. The timer sizes the LC pool from LC
- *   tasks' CPU use and queue plus a buffer (update_split()).
+ *   tasks' CPU use and queue plus a buffer (update_split()). A prediction
+ *   of LC demand written by the loader (--ml-model) can grow the pool
+ *   early; it is ignored once older than ml_ttl_ticks.
  * - Diagnostics (--diag): every wait for a CPU, by why the task was waiting
  *   (woken, preempted, slice ran out) and by task group (task-name
  *   prefixes), to see which waits the wakeup-only latency signal misses.
@@ -116,6 +118,12 @@ const volatile u32 lc_shift = 6;		/* LC demand EWMA: ~64 ms */
 const volatile u64 borrow_slice_ns = 3000000;	/* batch task on an LC CPU */
 /* A woken LC task may preempt a borrower; else it waits for the borrow slice. */
 const volatile bool borrow_preempt = true;
+/*
+ * ML prediction (--ml-model): the loader writes ml_demand and then ml_stamp
+ * (= nr_timer_ticks at the time). A prediction at most ml_ttl_ticks old can
+ * raise the LC demand the pool is sized from, never lower it. 0 = off.
+ */
+const volatile u64 ml_ttl_ticks;
 /* Diagnostics: per-group wait and run counters (struct diag). */
 const volatile bool diag;
 /* Group i is the tasks whose name starts with diag_comm[i]; "" = unused. */
@@ -166,6 +174,11 @@ u64 lc_run_ns;			/* cumulative CPU time of LC tasks on split CPUs */
 u64 lc_demand;			/* EWMA of LC demand, CPUs x 1024 */
 u64 lc_cpus_ns;			/* integral of nr_lc over time, for its average */
 u64 nr_lc_changes;
+u64 lc_queued_ticks;		/* sum over ticks of LC tasks queued (for ML) */
+/* Written by the loader (user space): the predicted LC demand. */
+u64 ml_demand;			/* CPUs x 1024 */
+u64 ml_stamp;			/* nr_timer_ticks when written; 0 = none yet */
+u64 ml_fresh_ticks, ml_raised_ticks;	/* ticks it was fresh / raised demand */
 
 struct {
 	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
@@ -777,14 +790,27 @@ static u64 last_lat_wakeups, last_lat_late, last_lc_run_ns;
  */
 static void update_split(u64 dt)
 {
-	u64 run = lc_run_ns, sample, want;
+	u64 run = lc_run_ns, queued = scx_bpf_dsq_nr_queued(LC_DSQ), sample, base, want;
+	u64 stamp = ml_stamp;
 	u32 n;
 
-	sample = (run - last_lc_run_ns) * 1024 / dt +
-		 scx_bpf_dsq_nr_queued(LC_DSQ) * 1024;
+	sample = (run - last_lc_run_ns) * 1024 / dt + queued * 1024;
 	last_lc_run_ns = run;
+	lc_queued_ticks += queued;
 	lc_demand = ewma(lc_demand, sample, lc_shift);
-	want = lc_demand + lc_buffer;
+	base = lc_demand;
+	/* A fresh prediction may raise the demand; the loader's write is racy
+	 * (two words), which can only pair a demand with a nearby stamp. */
+	if (ml_ttl_ticks && stamp && nr_timer_ticks - stamp <= ml_ttl_ticks) {
+		u64 pred = ml_demand;
+
+		ml_fresh_ticks++;
+		if (pred > base) {
+			base = pred;
+			ml_raised_ticks++;
+		}
+	}
+	want = base + lc_buffer;
 	n = (want + 1023) / 1024;
 	if (n < nr_lc) {
 		u32 n_hyst = (want + lc_hyst + 1023) / 1024;
