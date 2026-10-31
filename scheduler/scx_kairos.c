@@ -54,6 +54,8 @@ const char help_fmt[] =
 "      --lc-hyst-pct N     shrink the LC pool only if it would with N%% of a\n"
 "                          CPU more demand (default 25)\n"
 "      --borrow-slice-us N slice of a batch task on an LC CPU (default 3000)\n"
+"      --no-borrow-preempt a woken LC task doesn't preempt a batch task on an\n"
+"                          LC CPU; it waits for the borrow slice instead\n"
 "      --class run|policy  batch = ran --batch-min-run-us since it slept (run),\n"
 "                          or has policy SCHED_BATCH/SCHED_IDLE (policy;\n"
 "                          e.g. chrt --batch 0) (default run)\n"
@@ -98,6 +100,7 @@ enum {
 	OPT_BORROW_SLICE,
 	OPT_LC_HYST,
 	OPT_LC_SHIFT,
+	OPT_NO_BORROW_PREEMPT,
 	OPT_CLASS,
 };
 
@@ -125,6 +128,7 @@ static const struct option long_opts[] = {
 	{ "borrow-slice-us", required_argument, NULL, OPT_BORROW_SLICE },
 	{ "lc-hyst-pct",     required_argument, NULL, OPT_LC_HYST },
 	{ "lc-shift",        required_argument, NULL, OPT_LC_SHIFT },
+	{ "no-borrow-preempt", no_argument,     NULL, OPT_NO_BORROW_PREEMPT },
 	{ "class",           required_argument, NULL, OPT_CLASS },
 	{ "victim",          required_argument, NULL, OPT_VICTIM },
 	{ "batch-min-run-us", required_argument, NULL, OPT_BATCH_MIN_RUN },
@@ -448,6 +452,9 @@ restart:
 			/* percent of a CPU -> CPUs x 1024 */
 			skel->rodata->lc_buffer = parse_num("lc-buffer-pct", optarg) * 1024 / 100;
 			break;
+		case OPT_NO_BORROW_PREEMPT:
+			skel->rodata->borrow_preempt = false;
+			break;
 		case OPT_LC_SHIFT:
 			skel->rodata->lc_shift = parse_num("lc-shift", optarg);
 			break;
@@ -544,7 +551,7 @@ restart:
 	       "fast_shift=%u slow_shift=%u victim=%s batch_min_run_us=%llu "
 	       "lat_target_us=%llu late_max=%.1f%% hold_ms=%llu-%llu signal_cpus=0x%llx "
 	       "split=%d split_cpus=0x%llx lc=%u-%u lc_buffer=%.2f lc_hyst=%.2f borrow_slice_us=%llu "
-	       "class=%s\n",
+	       "borrow_preempt=%d class=%s\n",
 	       skel->rodata->split ? "split" : skel->rodata->adaptive ? "adaptive" :
 	       skel->rodata->forced_mode == MODE_LATENCY ? "latency" : "batch",
 	       (unsigned long long)skel->rodata->lat_slice_ns / 1000,
@@ -561,6 +568,7 @@ restart:
 	       skel->rodata->split, split_mask, skel->rodata->lc_min, skel->rodata->lc_max,
 	       skel->rodata->lc_buffer / 1024.0, skel->rodata->lc_hyst / 1024.0,
 	       (unsigned long long)skel->rodata->borrow_slice_ns / 1000,
+	       skel->rodata->borrow_preempt,
 	       skel->rodata->class_policy ? "policy" : "run");
 
 	__u64 prev[KAIROS_NR_STATS] = {};

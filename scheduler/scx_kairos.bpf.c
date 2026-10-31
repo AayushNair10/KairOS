@@ -114,6 +114,8 @@ const volatile u64 lc_buffer = 512;		/* half a CPU */
 const volatile u64 lc_hyst = 256;		/* a quarter CPU */
 const volatile u32 lc_shift = 6;		/* LC demand EWMA: ~64 ms */
 const volatile u64 borrow_slice_ns = 3000000;	/* batch task on an LC CPU */
+/* A woken LC task may preempt a borrower; else it waits for the borrow slice. */
+const volatile bool borrow_preempt = true;
 /* Diagnostics: per-group wait and run counters (struct diag). */
 const volatile bool diag;
 /* Group i is the tasks whose name starts with diag_comm[i]; "" = unused. */
@@ -494,7 +496,7 @@ static void split_enqueue(struct task_struct *p, u64 enq_flags)
 	bool batch = task_batch(p, tctx);
 	u64 vtime = queue_vtime(p);
 
-	if (!batch && (enq_flags & SCX_ENQ_WAKEUP)) {
+	if (!batch && borrow_preempt && (enq_flags & SCX_ENQ_WAKEUP)) {
 		s32 cpu = split_pick_borrower(p);
 
 		if (cpu >= 0) {
