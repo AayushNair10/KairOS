@@ -615,6 +615,32 @@ choices. Add as you go.)
   With the load generator's times they split the rest of the latency into
   in / wake / out (`analysis/split.py`).
 
+
+- Soft CPU split (`--split`, 8b32051, be3eb2c): two DSQs (LC_DSQ,
+  BATCH_DSQ). `split_rank[]` (rodata, from `--split-cpus`) orders the
+  split CPUs; the first `nr_lc` are LC CPUs, CPUs outside the split act as
+  LC CPUs. `dispatch()` takes from the CPU's own pool's queue first, then
+  the other's. `select_cpu()` claims an idle CPU with
+  `scx_bpf_test_and_clear_cpu_idle()`, own pool first, `prev_cpu` first.
+  A woken LC task with no idle CPU preempts a batch task running on an LC
+  CPU (`SCX_ENQ_PREEMPT`; off with `--no-borrow-preempt`), or any batch
+  task if it can't run on an LC CPU. A batch task starting on an LC CPU
+  gets `borrow_slice_ns` (`scx_bpf_task_set_slice()` in `running()`).
+  Sizing in the timer: demand = LC run time per tick + one CPU per task in
+  LC_DSQ, EWMA weight 1/2^`lc_shift`; nr_lc = ceil(demand + buffer) in
+  [lc_min, lc_max], shrinking only if it would with `lc_hyst` more demand.
+  Two fixes on the way: an ~8 ms demand average changed the pool 11-24
+  times a second on an idle system (now ~64 ms: 0-4); and the verifier
+  rejected `split_rank[cpu]` as unbounded because clang computed the
+  address before the C range check, even with `& 63` (it knew the mask was
+  redundant): `MEMBER_VPTR()` from `scx/common.bpf.h` does the check in
+  inline asm.
+- Task class `--class policy`: batch = SCHED_BATCH/SCHED_IDLE
+  (`p->policy`); the harness sets it with `chrt --batch 0` when the config
+  has `BATCH_POLICY=batch` (inherited by zstd). The fair class only stops
+  SCHED_BATCH wakees from preempting (`wakeup_preempt_fair`, "BATCH and
+  IDLE tasks do not preempt others"); weights are unchanged.
+
 ---
 
 ## 5. Experiment log
@@ -641,6 +667,8 @@ together with `meta.json` (git commit, kernel, VM config, parameters).
 | ED | 2026-10-30 | e557e62 | as E2 (2 zstd): eevdf, never, never3, batchvic, a5, a10, with `--diag` | `e2-diag.conf`: E2's 2-job workload, groups grpcworker, grpcserver, zstd, loadgen, ksoftirqd | 3 | `results/2026-10-30-e2-diag/` | Server threads' waits are ≥ 95% wakeups; worker wakeup waits in BATCH mostly 2–5 ms. Tails 2–8x E2's for all configs incl. eevdf (section 6.10) |
 | ES | 2026-10-30 | dbfae96 | as ED | `e2-split.conf`: as ED, server reports handler receive time and wake delay | 2 | `results/2026-10-30-e2-split/` | The slowest 1% are 81–97% "in" + "out" (gRPC/network path and client) in every config (section 6.10) |
 | EC | 2026-10-30 | 52fe9bb | eevdf, never, batchvic, diagnostics off | `e2-control.conf`: as E2 (2 zstd) | 2 | `results/2026-10-30-e2-control/` | Tails as high as ED/ES without the diagnostics: the evening runs were noisier, not perturbed by the counters (section 6.10) |
+| S1p | 2026-10-30 | 8b32051 | eevdf, never3, batchvicp (`--force-preempt --victim batch --class policy`), split (`--split --split-cpus 0-2 --class policy`) | `e2s-pilot.conf`: E2 2-job workload, zstd SCHED_BATCH, GOMAXPROCS 16 | 1 | `results/2026-10-30-e2s-pilot/` | Functional pilot, noisy (other processes 27–49%). Split and batchvicp collapsed in a busy phase (section 6.11) |
+| S2p | 2026-10-30 | be3eb2c (+REPS 2) | as S1p + splitnp (`--no-borrow-preempt --borrow-slice-us 1000`), `--diag` on | `e2s-pilot-gmp16.conf`, `e2s-pilot-gmp3.conf` (server GOMAXPROCS 16 / 3) | 2 | `results/2026-10-30-e2s-pilot-gmp16/`, `-gmp3/` | Other-process CPU 3–137% between runs (VS Code server, the Claude CLI, kswapd): inconclusive. eevdf failed requests in 4/4 runs (section 6.11) |
 
 ### 5.1 Planned experiments
 | # | Experiment | Pattern | Shows |
@@ -1023,6 +1051,43 @@ of p50; then the parts' mean over each rep's slowest 1%:
   (cause not identified; the host is the guess). Medians are close to
   E2's; tail numbers from ED/ES/EC are not comparable with E2.
 
+
+### 6.11 Soft CPU split pilots (2026-10-30)
+Tentative: other processes used 3–137% of a CPU per run (VS Code server,
+the Claude CLI, kswapd under memory pressure; 373 MB swap in use), which
+moves tails by hundreds of ms. Medians over reps, ms.
+
+S2p, GOMAXPROCS 16, 2 reps (phases 1/3/5 busy, 0/2/4 quiet):
+
+| config | quiet p50 | quiet p99 | quiet batch MB/s | busy p50 | busy p99 | busy batch MB/s | other CPU % |
+|---|---|---|---|---|---|---|---|
+| never3 | 1.2–1.3 | 40–90 | 492–531 | 7.5–69 | 429–781 | 134–210 | 26 |
+| batchvicp | 1.0–2.6 | 33–471 | 399–410 | 1.6–2.9 | 309–741 | 142–155 | 28 |
+| split | 0.8–0.9 | 8–27 | 495–547 | 1.0–1.3 | 35–122 | 164–192 | 15.5 |
+| splitnp | 1.1–3.1 | 28–43 | 361–532 | 2.6–8.2 | 285–465 | 132–210 | 45 |
+| eevdf | failed requests in both reps | | | | | | 75 |
+
+- Busy-phase waits per request (diag): workers split 0.47, batchvicp
+  0.90, never3 1.63, splitnp 1.31 ms; Go goroutine waits ≥ 20 ms 0.06,
+  1.25, 2.17, 0.56%. zstd preempted 1.6–1.7 times per request under split
+  and batchvicp (~5,500–6,000/s), 0 under never3. Server non-worker
+  threads' CPU: never3 24, batchvicp 32, split 33, splitnp 27% of a CPU.
+- Split's LC pool: 1–2 CPUs in quiet phases, 3 in busy phases (demand
+  2–20 CPUs counting queued LC tasks).
+- S2p, GOMAXPROCS 3: busy p50/p99/batch never3 2.3–2.9 / 59–102 /
+  278–298; batchvicp 0.8–1.1 / 47–154 / 211–249; splitnp 1.9–31.5 /
+  103–186 / 192–273; split collapsed in rep 1 (other processes: VS Code
+  server 53%, Claude CLI 24%). Server threads' kernel waits were ≤ 0.04
+  ms per request in every config; queueing moved into Go (goroutine
+  waits ≥ 20 ms 0.4–8.8%).
+- eevdf with zstd as SCHED_BATCH failed requests (timeouts) in all 4 runs
+  (both GOMAXPROCS settings) while zstd got 226–376 MB/s in busy phases;
+  with zstd as SCHED_OTHER it never failed (E2, EC). Cause not found
+  (see section 4: SCHED_BATCH only stops batch wakees preempting).
+- S1p (1 rep, GOMAXPROCS 16, no diag): split collapsed in busy phase 1
+  (p50 281 ms) and was best in busy phase 5 (p50 1.0, p99 11); batchvicp
+  collapsed in busy phases 1 and 3.
+
 ---
 
 ## 7. Explanations and insights
@@ -1298,6 +1363,19 @@ E2 diagnostics (section 6.10):
   a variable write; what cost a5 its latency was the BATCH stints during
   busy phases (seconds with BATCH time: p50 4.5 ms vs 1.6 ms in seconds
   fully in LATENCY, pooled over E2's reps).
+
+Soft CPU split pilots (section 6.11), tentative:
+- With GOMAXPROCS 16, the split cut both kernel waits and long Go waits
+  the most and kept batch throughput near never3's, but its runs were
+  also the quietest; a clean rerun is needed before believing it.
+- Not preempting borrowers (splitnp, 1 ms borrow slices) lost most of the
+  latency gain: with 3 CPUs the LC pool is all 3 CPUs in busy phases, so
+  zstd only ever borrows and LC wakeups mostly find borrowers.
+- The split didn't reduce zstd preemptions (~5,500/s busy, like
+  batchvicp): with 3 CPUs there is no spare CPU to keep idle; the
+  split's benefit, if real, comes from LC tasks having priority in their
+  own queue and pool, not from fewer preemptions. With more CPUs a pool
+  could keep idle CPUs without lending them.
 
 ---
 
@@ -1952,3 +2030,22 @@ interrupted ~3,600/s; don't: 2–5 ms waits) is what CPU splitting avoids.
 **Problems:** Several numbers come from abstracts and summaries only.
 **Next:** Choose among a soft CPU split sized by load or queueing delay,
 a flexible slice, and a service-side or queueing-delay signal.
+
+### 2026-10-30 — Soft CPU split: implementation and pilots
+**Did:** Implemented `--split` (LC and batch CPU pools, own queue first,
+lending, LC wakeups preempt borrowers, pool sized by LC demand with
+hysteresis), `--class policy` (batch = SCHED_BATCH) and the harness's
+`BATCH_POLICY`. Pilots S1p (1 rep) and S2p (2 reps, GOMAXPROCS 16 and 3,
+with a no-borrower-preemption variant).
+**Found:** Section 6.11. Noise from other processes (3–137% of a CPU)
+dominated the tails. Linux with zstd as SCHED_BATCH failed requests in
+every run.
+**Interpretation:** Section 7. Promising but unproven at GOMAXPROCS 16;
+borrower preemption is what gives the latency.
+**Decisions:** Keep borrower preemption on by default.
+**Problems:** Verifier rejected an unbounded rodata index (fixed with
+`MEMBER_VPTR`); the pool flapped with an 8 ms average (now 64 ms +
+hysteresis); memory pressure (kswapd) and the IDE during runs.
+**Next:** A clean run (IDE closed or idle, start delayed so the Claude CLI
+is idle): eevdf, never3, batchvicp, split, 5 reps, GOMAXPROCS 16, zstd
+SCHED_BATCH; and a check of eevdf with zstd SCHED_OTHER vs SCHED_BATCH.
