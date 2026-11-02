@@ -57,9 +57,9 @@ const char help_fmt[] =
 "      --borrow-slice-us N slice of a batch task on an LC CPU (default 3000)\n"
 "      --no-borrow-preempt a woken LC task doesn't preempt a batch task on an\n"
 "                          LC CPU; it waits for the borrow slice instead\n"
-"      --no-kick-idle      don't wake an idle CPU when a task is queued (the\n"
-"                          behaviour before 2026-10-31; idle CPUs then miss\n"
-"                          queued tasks until something else wakes them)\n"
+"      --kick-idle         wake an idle CPU when a task is queued in a shared\n"
+"                          queue (off by default: no gain measured in E2k)\n"
+"      --no-kick-idle      the default; kept so older configs still run\n"
 "      --ml-trace FILE     --split: every --ml-period-ms, write the LC demand\n"
 "                          sample (training data for ml/train_burst.py)\n"
 "      --ml-model FILE     --split: predict LC demand with this tree (from\n"
@@ -112,6 +112,7 @@ enum {
 	OPT_LC_HYST,
 	OPT_LC_SHIFT,
 	OPT_NO_BORROW_PREEMPT,
+	OPT_KICK_IDLE,
 	OPT_NO_KICK_IDLE,
 	OPT_ML_TRACE,
 	OPT_ML_MODEL,
@@ -145,6 +146,7 @@ static const struct option long_opts[] = {
 	{ "lc-hyst-pct",     required_argument, NULL, OPT_LC_HYST },
 	{ "lc-shift",        required_argument, NULL, OPT_LC_SHIFT },
 	{ "no-borrow-preempt", no_argument,     NULL, OPT_NO_BORROW_PREEMPT },
+	{ "kick-idle",       no_argument,       NULL, OPT_KICK_IDLE },
 	{ "no-kick-idle",    no_argument,       NULL, OPT_NO_KICK_IDLE },
 	{ "ml-trace",        required_argument, NULL, OPT_ML_TRACE },
 	{ "ml-model",        required_argument, NULL, OPT_ML_MODEL },
@@ -624,6 +626,9 @@ restart:
 			break;
 		case OPT_NO_BORROW_PREEMPT:
 			skel->rodata->borrow_preempt = false;
+			break;
+		case OPT_KICK_IDLE:
+			skel->rodata->kick_idle = true;
 			break;
 		case OPT_NO_KICK_IDLE:
 			skel->rodata->kick_idle = false;

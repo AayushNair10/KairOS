@@ -678,6 +678,9 @@ choices. Add as you go.)
   twice) and `scx_bpf_kick_cpu(cpu, SCX_KICK_IDLE)` (wakes it only if it
   is still idle; it then runs `dispatch()`), counted as STAT_KICK. The
   same pattern as `scx_central` and scx_bpfland's enqueue.
+  → 2026-11-01: off by default, `--kick-idle` turns them on
+  (`--no-kick-idle` is still accepted). The E2k rerun measured no gain
+  (section 6.16).
 
 ---
 
@@ -713,6 +716,7 @@ together with `meta.json` (git commit, kernel, VM config, parameters).
 | MLte | 2026-10-30 | 549bf7c | split, splitml (`--ml-model ml/models/burst-v1.txt`), splitbuf (`--lc-buffer-pct 150`), batchvicp | `ml-test-short.conf` (`ml/patterns.py short 101 40`), `ml-test-periodic.conf` (E2 pattern) | 5 | `results/2026-10-30-ml-test-short/`, `-periodic/` | The model keeps the LC pool at 3 CPUs ~95% of the time, like a 1.5 CPU buffer; ML ≈ bigger buffer offline and online (section 6.13) |
 | E2f | 2026-10-30 | 93d2647 | eevdf, bpfland, lavd (autopilot), lavdperf (`--performance`), never3, always, batchvicp, kairos (`--split --split-cpus 0-2 --class policy --lc-buffer-pct 150`) | `e2f-periodic.conf` (E2 pattern), `e2f-short.conf` (`ml/patterns.py short 101 40`); zstd SCHED_BATCH, GOMAXPROCS 16; start delayed 90 s | 5 | `results/2026-10-30-e2f-periodic/`, `-short/` | No failed requests. Short rep 5 left out (host slowdown in its last three runs, section 6.14). kairos has the lowest busy p50 (0.9–1.0 ms; bpfland 1.4, eevdf 5.2–5.5, lavd 6.7–7.9) and fewest busy requests over 2/5/10 ms; bpfland has 7–9% (quiet) / 13–28% (busy) more batch MB/s (section 6.14) |
 | E2k | 2026-10-31 | 7f1a122 | bpfland, kairos0 (E2f's kairos, `--no-kick-idle`), kairos (idle kicks), kairosnp (kicks, `--no-borrow-preempt --borrow-slice-us 1000`) | `e2k-periodic.conf`, `e2k-short.conf`: as E2f | 5 | `results/2026-10-31-e2k-periodic/`, `-short/` | **Invalid.** The host held the VM back: calibration 689 / 529 iterations/µs instead of ~1035 (requests carried half to two thirds of the intended work), VM time share 0.02–0.93 in all periodic runs and short reps 1–3 (section 6.15). To be rerun |
+| E2k-r | 2026-11-01 | 11f6a01 | as E2k | as E2k; Mac plugged in with `caffeinate`, IDE idle, start delayed 60 s | 5 | `results/2026-11-01-e2k-periodic/`, `-short/` | Clean: calibration 1026–1036, VM time share 0.97–0.98 in all 40 runs, other processes mostly ~5%. Idle kicks: no gain. Borrower preemption is what gives KairOS its latency; without it KairOS is worse than bpfland (section 6.16) |
 
 ### 5.1 Planned experiments
 | # | Experiment | Pattern | Shows |
@@ -1294,6 +1298,59 @@ comparison:
   had a busy p50 of 1.43 ms against bpfland's 0.83, with similar batch.
   Needs the rerun.
 
+### 6.16 E2k rerun: idle kicks and borrower preemption (2026-11-01)
+`results/2026-11-01-e2k-periodic/`, `-short/`, 5 reps each, configs
+interleaved per rep. Clean: calibration 1034–1036 (periodic) and
+1026–1036 (short) iterations/µs, VM time share 0.97–0.98 in every run,
+other processes 4–8% of a CPU (one run 17%, mostly this Claude session).
+No failed requests. kairos0 = E2-final's kairos (no kicks), kairos = with
+idle kicks, kairosnp = kicks, no borrower preemption, 1 ms borrow slices.
+`analysis/byrate.py`, medians over reps, ms and MB/s, columns as in 6.14.
+
+Periodic:
+
+| config | quiet p50 | busy p50 | busy >2/5/10 ms % | busy p95 | busy p99 | batch quiet / busy |
+|---|---|---|---|---|---|---|
+| bpfland | 0.95 | 1.49 | 39 / 14 / 4.1 | 8.8 | 30 | 617 / 242 |
+| kairos0 | 0.81 | 0.91 | 15 / 4.2 / 1.9 | 4.4 | 25 | 588 / 212 |
+| kairos | 0.81 | 0.94 | 16 / 4.1 / 1.1 | 4.5 | 11 | 594 / 213 |
+| kairosnp | 1.00 | 2.42 | 58 / 23 / 7.3 | 12.3 | 28 | 634 / 260 |
+
+Short bursts:
+
+| config | quiet p50 | busy p50 | busy >2/5/10 ms % | busy p95 | busy p99 | batch quiet / busy |
+|---|---|---|---|---|---|---|
+| bpfland | 0.96 | 1.42 | 36 / 13 / 3.8 | 8.5 | 32 | 597 / 347 |
+| kairos0 | 0.80 | 0.87 | 11 / 2.4 / 0.7 | 3.4 | 8.2 | 561 / 321 |
+| kairos | 0.82 | 0.89 | 13 / 3.3 / 1.1 | 3.8 | 11 | 560 / 320 |
+| kairosnp | 1.03 | 2.22 | 55 / 22 / 8.3 | 14.2 | 29 | 600 / 359 |
+
+- Paired, reps where bpfland beat kairos0 (periodic / short): busy p50
+  0/5, 0/5; busy p99 3/5, 1/5; batch quiet 5/5, 5/5; batch busy 5/5, 4/5.
+  bpfland's batch lead: 5% / 6% quiet, 14% / 8% busy (E2-final: 7–9% /
+  13–28%). kairos0's busy batch here (212 / 321) is above E2-final's
+  kairos (190 / 310) for the same config.
+- Kicks (kairos vs kairos0), reps where kairos was better: periodic busy
+  p50 2/5, batch quiet 4/5, busy 3/5; short busy p50 0/5, quiet p50 0/5,
+  batch quiet 1/5, busy 2/5. Batch within 1%.
+- kairosnp vs bpfland: batch 3% / 7% (periodic quiet / busy) and 0% / 3%
+  (short) higher; busy p50 1.6x and busy >5 ms 1.6–1.8x bpfland's.
+- Whole run (`analysis/compare.py`, sched_stats.csv means), periodic /
+  short:
+
+| config | ctx switches k/s | system time % | server %CPU | idle on CPUs 0–2, %CPU | kick/s | borrow/s | preempt/s |
+|---|---|---|---|---|---|---|---|
+| bpfland | 40 / 33 | 7.1 / 6.6 | 130 / 87 | 29 / 41 | – | – | – |
+| kairos0 | 48 / 42 | 9.6 / 8.3 | 131 / 89 | 36 / 49 | 0 | 9,050 / 9,590 | 7,970 / 7,790 |
+| kairos | 48 / 42 | 9.7 / 8.7 | 133 / 91 | 35 / 47 | 3,900 / 3,700 | 9,050 / 9,640 | 8,000 / 7,870 |
+| kairosnp | 33 / 27 | 6.6 / 6.2 | 127 / 86 | 28 / 39 | 3,140 / 3,000 | 2,820 / 3,280 | 0 |
+
+- Idle per CPU (CPU 0 / 1 / 2, % of the run, median over reps; batch and
+  server are both pinned to CPUs 0–2): periodic bpfland 9.8 / 9.8 / 9.4,
+  kairos0 15.0 / 11.8 / 8.6, kairos 17.3 / 12.8 / 4.6, kairosnp 9.0 / 9.3
+  / 9.3; short bpfland 14.3 / 13.4 / 13.7, kairos0 20.1 / 16.0 / 12.6,
+  kairos 23.3 / 17.6 / 6.6, kairosnp 13.4 / 12.8 / 13.0.
+
 
 ## 7. Explanations and insights
 (The "why" behind each result. This is what the report is graded on.)
@@ -1652,6 +1709,36 @@ E2-final (section 6.14):
   runs, regardless of config. The in-VM "other processes" check can't
   see this.
 
+E2k rerun (section 6.16):
+- The latency ranking from E2-final holds on a clean run with full
+  per-request work: KairOS's busy median is 0.6x bpfland's, and it has
+  3–5x fewer busy requests over 5 ms and about half the busy p95.
+- The missing-kick explanation for the extra idle time (above) is not
+  supported. Kicks fire ~3,800 times a second, but total idle on the
+  server's CPUs and batch throughput don't change. They move idle time
+  from CPU 2 to CPUs 0 and 1 instead. So kicks are off by default again.
+- The extra idle time comes with borrower preemption. kairosnp (kicks,
+  no borrower preemption) has bpfland's idle time, fewer context switches
+  than bpfland, and slightly more batch throughput. In the preempting
+  configs the idle time is uneven, with CPU 0 idle most. Guess, from the
+  code: `split_pick_borrower()` scans from CPU 0 and preempts the first LC
+  CPU running a batch task, so CPU 0 is preempted most often. It is not
+  known why this leaves CPUs idle while batch loses CPU time. Measuring
+  time spent idle while a queue holds a task would show whether it is a
+  work-conservation gap. Preemptions per CPU are not measured either.
+- Borrower preemption is what makes KairOS fast. Without it, with 1 ms
+  borrow slices, a woken LC task waits for a borrower's slice to end:
+  busy median 2.2–2.4 ms, worse than bpfland (1.4–1.5). bpfland's slices
+  shrink with the number of waiting tasks, and its deadline ordering
+  favours tasks that slept. kairosnp's fixed 1 ms borrow slice doesn't
+  shrink.
+- So the trade-off is the same as in E2-final: borrower preemption costs
+  5–14% batch throughput against bpfland (about 6% less zstd CPU time from
+  the table: 300 − server − idle) and buys a lower median and fewer slow
+  requests. The same config's busy batch differs by 4–12% between
+  E2-final and this run (kairos 190 vs 212 MB/s periodic, 310 vs 321
+  short), so batch gaps under ~10% need same-batch comparisons.
+
 
 ---
 
@@ -1763,6 +1850,11 @@ E2-final (section 6.14):
   18.5%) and lower batch throughput in the burst (231 vs 433 MB/s). Printk
   cost, the shared DSQ's lock, or tasks moving between CPUs? Recheck without
   the printk.
+- (E2k rerun, section 6.16.) Why does borrower preemption leave the
+  server's CPUs idle 6–8% of a CPU more, mostly CPU 0, while batch gets
+  less CPU time? Idle kicks don't change it. Next check: count, per CPU,
+  time idle while LC_DSQ or BATCH_DSQ holds a task (`ops.update_idle`),
+  and preemptions per CPU.
 
 ---
 
@@ -2428,3 +2520,26 @@ out); refuse to start when calibration is low.
 can't control.
 **Next:** Rerun E2k with the Mac awake (plugged in, `caffeinate`) and
 idle, IDE disconnected.
+
+### 2026-11-01 — E2k rerun: idle kicks off, borrower preemption confirmed
+**Did:** Reran E2k with the Mac plugged in under `caffeinate` and the IDE
+idle, in a tmux session, with a watcher flagging runs by VM time share.
+Made idle kicks opt-in (`--kick-idle`; `--no-kick-idle` still accepted).
+**Found:** Section 6.16. All 40 runs clean (VM time share 0.97–0.98,
+calibration 1026–1036). KairOS's busy median 0.87–0.94 ms vs bpfland's
+1.42–1.49, with 3–5x fewer busy requests over 5 ms. bpfland has 5–6% /
+8–14% more batch (quiet / busy). Kicks fire ~3,800/s and change neither
+batch nor total idle time. KairOS without borrower preemption (1 ms
+borrow slices) has bpfland's batch but a 2.2–2.4 ms busy median.
+**Interpretation:** Section 7. The extra idle time comes with borrower
+preemption, not with missed wakeups. Preempting borrowers is what gives
+KairOS its latency lead, and it costs the batch gap.
+**Decisions:** Idle kicks off by default (no gain, slight p50 cost on
+short bursts). This changes the 2026-10-31 decision. "kairos" in later
+experiments = `--split --split-cpus 0-2 --class policy --lc-buffer-pct 150`,
+the E2-final config.
+**Problems:** None in this run. This Claude session's own CPU use showed up
+as noise (17% in one run) while it handled notifications; the watcher now
+only reports bad runs.
+**Next:** Azure trace replay, then E3 (burst length), E7 (overhead), Redis.
+Optional: per-CPU idle-with-queued-work counter for the batch gap (section 9).

@@ -124,10 +124,11 @@ const volatile bool borrow_preempt = true;
  * on is idle would wait for nothing. This happens after a preemption: the
  * preempted task is re-queued a few us after select_cpu() found no idle
  * CPU, and meanwhile the CPU of the task that did the waking may have
- * gone idle. With kick_idle, enqueue() wakes such a CPU (--no-kick-idle:
- * off, as in the runs before 2026-10-31).
+ * gone idle. With kick_idle (--kick-idle), enqueue() wakes such a CPU.
+ * Off by default: in E2k (2026-11-01) the kicks fired ~3,800/s but changed
+ * neither batch throughput nor idle time, and cost a little latency.
  */
-const volatile bool kick_idle = true;
+const volatile bool kick_idle;
 /*
  * ML prediction (--ml-model): the loader writes ml_demand and then ml_stamp
  * (= nr_timer_ticks at the time). A prediction at most ml_ttl_ticks old can
