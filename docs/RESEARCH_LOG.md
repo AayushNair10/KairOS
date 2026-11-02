@@ -717,6 +717,7 @@ together with `meta.json` (git commit, kernel, VM config, parameters).
 | E2f | 2026-10-30 | 93d2647 | eevdf, bpfland, lavd (autopilot), lavdperf (`--performance`), never3, always, batchvicp, kairos (`--split --split-cpus 0-2 --class policy --lc-buffer-pct 150`) | `e2f-periodic.conf` (E2 pattern), `e2f-short.conf` (`ml/patterns.py short 101 40`); zstd SCHED_BATCH, GOMAXPROCS 16; start delayed 90 s | 5 | `results/2026-10-30-e2f-periodic/`, `-short/` | No failed requests. Short rep 5 left out (host slowdown in its last three runs, section 6.14). kairos has the lowest busy p50 (0.9–1.0 ms; bpfland 1.4, eevdf 5.2–5.5, lavd 6.7–7.9) and fewest busy requests over 2/5/10 ms; bpfland has 7–9% (quiet) / 13–28% (busy) more batch MB/s (section 6.14) |
 | E2k | 2026-10-31 | 7f1a122 | bpfland, kairos0 (E2f's kairos, `--no-kick-idle`), kairos (idle kicks), kairosnp (kicks, `--no-borrow-preempt --borrow-slice-us 1000`) | `e2k-periodic.conf`, `e2k-short.conf`: as E2f | 5 | `results/2026-10-31-e2k-periodic/`, `-short/` | **Invalid.** The host held the VM back: calibration 689 / 529 iterations/µs instead of ~1035 (requests carried half to two thirds of the intended work), VM time share 0.02–0.93 in all periodic runs and short reps 1–3 (section 6.15). To be rerun |
 | E2k-r | 2026-11-01 | 11f6a01 | as E2k | as E2k; Mac plugged in with `caffeinate`, IDE idle, start delayed 60 s | 5 | `results/2026-11-01-e2k-periodic/`, `-short/` | Clean: calibration 1026–1036, VM time share 0.97–0.98 in all 40 runs, other processes mostly ~5%. Idle kicks: no gain. Borrower preemption is what gives KairOS its latency; without it KairOS is worse than bpfland (section 6.16) |
+| E2a | 2026-11-01 | e735eae | eevdf, bpfland, lavd, lavdperf, never3, kairos (as E2f) | `e2a-azure.conf`: Azure Functions 2021 trace, hours 36, 54, 284 (random, seed 1), 100x compressed, per-hour peak 3500 req/s, floor 300 (`workloads/traces/azure_phases.py`); otherwise as E2f | 5 | `results/2026-11-01-e2a-azure/` | No failed requests; calibration 1034. Reps 1 and 4 partly disturbed (VS Code and this session, 20–27% other CPU in 3 runs); leaving them out changes nothing. kairos: lowest p50 at every load level and fewest requests over 2/5/10 ms in every rep; 8% less batch than bpfland, 11% less than never3 (section 6.17) |
 
 ### 5.1 Planned experiments
 | # | Experiment | Pattern | Shows |
@@ -1351,6 +1352,73 @@ Short bursts:
   / 9.3; short bpfland 14.3 / 13.4 / 13.7, kairos0 20.1 / 16.0 / 12.6,
   kairos 23.3 / 17.6 / 6.6, kairosnp 13.4 / 12.8 / 13.0.
 
+### 6.17 E2a: Azure Functions trace replay (2026-11-01)
+`results/2026-11-01-e2a-azure/`, 5 reps, configs interleaved per rep,
+no failed requests, calibration 1034 iterations/µs.
+
+The pattern comes from `workloads/traces/azure_phases.py`, committed as
+`workloads/traces/azure2021-pick3-seed1.phases`:
+- Arrival = end_timestamp − duration.
+- Three one-hour windows: hours 36, 54 and 284, picked at random (seed 1)
+  among the hours with at least the median number of arrivals.
+- 10 s of trace becomes a 100 ms phase, so each hour replays in 36 s and
+  a run lasts 108 s.
+- Each hour is scaled so its busiest 10 s are at 3500 req/s, with a
+  300 req/s floor.
+
+Mean rates per hour are 1,014 / 1,148 / 372 req/s. Of the replay time,
+0% / 16% / 0% is at 2000 req/s or more. Hour 36 is moderate with one
+spike, hour 54 has a sustained busy stretch, and hour 284 is one spike
+then the floor.
+
+Requests are pooled by their phase's target rate (`analysis/bylevel.py
+--windows 3`). Medians over reps, ms; >5 = % of requests slower than
+5 ms. Requests per run: 45,000 below 1000, 32,000 at 1000–2000, 15,000
+at 2000 or more.
+
+| config | <1000: p50 / >5 | 1000–2000: p50 / >5 | ≥2000: p50 / >5 | all: p50 / p99 / p99.9 | all >2 / 5 / 10 % | batch MB/s |
+|---|---|---|---|---|---|---|
+| eevdf | 1.24 / 2.9 | 1.68 / 13.6 | 4.09 / 43 | 1.52 / 49 / 109 | 36 / 13 / 5.9 | 566 |
+| bpfland | 0.98 / 2.2 | 1.06 / 3.6 | 1.28 / 11.1 | 1.04 / 15 / 100 | 15 / 3.7 / 1.6 | 568 |
+| lavd | 1.14 / 5.6 | 1.58 / 14.5 | 3.98 / 41 | 1.43 / 131 / 511 | 37 / 15 / 6.8 | 565 |
+| lavdperf | 1.11 / 5.1 | 1.53 / 10.8 | 3.90 / 41 | 1.39 / 118 / 195 | 35 / 13 / 6.3 | 581 |
+| never3 | 1.07 / 3.1 | 1.41 / 8.2 | 2.82 / 26 | 1.32 / 22 / 137 | 29 / 8.8 / 3.2 | 588 |
+| kairos | 0.81 / 2.0 | 0.78 / 1.9 | 0.81 / 2.8 | 0.80 / 12 / 107 | 5.4 / 2.1 / 1.3 | 523 |
+
+- Paired against kairos, reps where the baseline was better:
+  - p50 at each of the three levels: 0/5 for every baseline.
+  - Share of all requests over 5 ms: 0/5 for every baseline.
+  - p99 of all requests: bpfland 2/5, eevdf 1/5, never3 1/5, lavd and
+    lavdperf 0/5.
+  - Batch MB/s: 4/5 for every baseline, 5/5 for never3.
+- Batch by hour (36 / 54 / 284):
+
+  | config | MB/s |
+  |---|---|
+  | bpfland | 567 / 545 / 586 |
+  | eevdf | 558 / 531 / 598 |
+  | never3 | 589 / 568 / 605 |
+  | kairos | 517 / 473 / 581 |
+
+  So kairos is 9% / 13% / 1% below bpfland.
+- Share of requests over 5 ms by hour (36 / 54 / 284): bpfland 2.7 / 3.9 /
+  3.5, kairos 1.3 / 3.4 / 1.1.
+- Whole run (`analysis/compare.py`):
+
+  | config | context switches k/s | server %CPU | idle on CPUs 0–2, %CPU |
+  |---|---|---|---|
+  | eevdf | 35 | 58 | 45 |
+  | bpfland | 28 | 60 | 43 |
+  | lavd | 24 | 62 | 36 |
+  | lavdperf | 25 | 62 | 37 |
+  | never3 | 23 | 58 | 42 |
+  | kairos | 39 | 66 | 53 |
+- Disturbed runs: bpfland-r1 (VM time share 0.948, other processes 24%,
+  this Claude session 11% while it wrote a message), lavd-r1 (27%,
+  VS Code's node 19%) and lavdperf-r4 (0.94, 20%). Without reps 1 and 4,
+  the medians move little: kairos all p50 0.80, over 5 ms 2.0%, batch
+  520; bpfland 1.04, 3.7%, 572. Every paired count keeps its direction.
+
 
 ## 7. Explanations and insights
 (The "why" behind each result. This is what the report is graded on.)
@@ -1739,6 +1807,30 @@ E2k rerun (section 6.16):
   E2-final and this run (kairos 190 vs 212 MB/s periodic, 310 vs 321
   short), so batch gaps under ~10% need same-batch comparisons.
 
+E2a, Azure trace replay (section 6.17):
+- The synthetic-pattern results carry over to a real arrival pattern.
+  KairOS's median stays at 0.78–0.81 ms at every load level. Every
+  baseline's median rises with load: bpfland from 0.98 to 1.28 ms, never3
+  from 1.07 to 2.82, Linux from 1.24 to 4.09.
+- The trace spends much of its time at moderate load (1000–2000 req/s, a
+  third of the requests), which the synthetic patterns hardly had. There
+  KairOS has a quarter of bpfland's requests over 2 ms (4.0 vs 15%).
+  Linux and lavd already have a 1.5–1.7 ms median there.
+- The extreme tail is not better: p99.9 of all requests is ~100–110 ms
+  for kairos, bpfland and Linux alike. Guess: the slow episodes seen in
+  every config since N1 (section 6.1), not waits for a CPU.
+- The batch cost follows the service's load. It is 1% below bpfland in
+  the mostly quiet hour 284 and 13% in hour 54 with its busy stretch, 8%
+  over the whole replay. The mechanism is the same as in E2k: more
+  context switches (39 vs 28 k/s) and 9% of a CPU more idle time on the
+  server's CPUs with borrower preemption. The server also used 6% of
+  a CPU more.
+- The trace is much less busy than the synthetic patterns. Only 5% of the
+  time is at 2000 req/s or more, against a third to a half in E2's
+  patterns. KairOS's
+  batch gap to bpfland (8%) is therefore at the low end of E2-final's
+  7–28%.
+
 
 ---
 
@@ -1748,6 +1840,14 @@ E2k rerun (section 6.16):
 - Synthetic service (gRPC CPU loop) may not reflect real request costs; mitigated
   with Redis runs.
 - Trace replay is time-compressed and rate-scaled.
+  → Details (E2a, 2026-11-01):
+  - 10 s bins at 100x compression average away structure shorter than
+    10 s of trace, such as the spikes at the top of each minute from
+    timer-triggered functions (5.7% of all arrivals fall in second :00).
+  - Each window is scaled to its own busiest bin, so the windows' absolute
+    load levels are not kept.
+  - Within a bin, arrivals are Poisson, not the trace's own timing.
+  - Three hours, not the whole two weeks.
 - VM noise (measured 2026-10-29; quick checks, raw output not kept): a thread
   pinned to each vCPU that only reads the clock lost 2–5% of 10 s to gaps
   > 100 µs (largest gap 6–27 ms). Most of that was waiting in the guest's run
@@ -1803,6 +1903,17 @@ E2k rerun (section 6.16):
   pid and start time; E2-final's runs were mostly at 3–10% of a CPU
   (ten at 10–24%, one at 40%). Earlier figures (E2s 9–21%, MLte 12–18%, ...) are overstated by
   an unknown amount.
+- The VM time share's normal value depends on the scheduler loaded. Linux
+  reads 1.00–1.01 in every experiment (E2-final, E2a). sched_ext
+  schedulers read 0.97–0.98, lavd 0.96–0.97, on a quiet host. The cut at
+  0.95 therefore leaves less margin under sched_ext. Not investigated.
+  Guess: /proc/stat's busy times are sampled at ticks while idle time is
+  measured exactly, and the sum falls short when CPUs switch between
+  idle and busy more often.
+- This Claude session and the VS Code window it runs in add load inside
+  the VM while it writes messages: 10–20% of a CPU during the run in
+  which it happens (E2k, E2a). During runs it should stay idle; a watcher
+  that only reports bad runs keeps it quiet.
 
 ---
 
@@ -2543,3 +2654,28 @@ as noise (17% in one run) while it handled notifications; the watcher now
 only reports bad runs.
 **Next:** Azure trace replay, then E3 (burst length), E7 (overhead), Redis.
 Optional: per-CPU idle-with-queued-work counter for the batch gap (section 9).
+
+### 2026-11-01 — E2a: Azure Functions trace replay
+**Did:** Wrote `workloads/traces/azure_phases.py`, which turns the Azure
+Functions 2021 trace into load-generator phases. Three random hours
+(seed 1), 10 s → 100 ms, scaled per hour to a 3500 req/s peak with a
+300 floor. Ran E2a (eevdf, bpfland, lavd, lavdperf, never3, kairos;
+5 reps; one kairos smoke run first in `results/2026-11-01-e2a-smoke/`).
+Added `analysis/bylevel.py`, which reports latency by target-rate level
+and by trace window.
+**Found:** Section 6.17. kairos has the lowest p50 at every load level
+(0.78–0.81 ms) and the fewest requests over 2/5/10 ms, in every rep
+against every baseline. bpfland is next: p50 0.98–1.28 ms, 3.7% of
+requests over 5 ms vs kairos's 2.1%. kairos has 8% less batch than
+bpfland and 11% less than never3: 1% in the quiet hour, 13% in the
+busy one. p99.9 ~100 ms for kairos, bpfland and Linux alike.
+**Interpretation:** Section 7. The synthetic results hold on a real
+arrival pattern. Its moderate-load stretches show the gap in tail shares
+more than the median. The batch cost follows the service's load.
+**Decisions:** Report all 5 reps (leaving out the two partly disturbed
+reps changes nothing). Under sched_ext the VM time share cut (0.95) has
+2–3 points of margin, not 5 (section 8).
+**Problems:** Claude's and VS Code's own CPU use disturbed three runs.
+**Next:** E3 (burst-length sweep), E7 (overhead: bpf_stats, zstd-only
+throughput, `perf bench sched pipe`), Redis. Optional: a second trace
+sample (another seed) to check that the three hours are not special.

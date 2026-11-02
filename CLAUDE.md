@@ -74,6 +74,8 @@ scripts/        helpers (log_entry.sh, meta.sh)
 - Summarize one run: `./analysis/summarize_run.py results/<date>-<name>/<run>`
 - Compare configurations (per phase, paired counts): `./analysis/compare.py results/<date>-<name>`
 - Spread across reps: `./analysis/aggregate.py results/<date>-<name>`; slow episodes vs GC: `./analysis/episodes.py <run>`
+- Many-phase patterns: by busy/quiet `./analysis/byrate.py results/<date>-<name> --ref kairos`; by load level and window `./analysis/bylevel.py results/<date>-<name> --ref kairos [--windows N]`
+- Azure trace phases: `./workloads/traces/azure_phases.py ~/kairos-data/azure2021/AzureFunctionsInvocationTraceForTwoWeeksJan2021.txt --pick 3 --seed 1 > workloads/traces/<name>.phases`
 - New log entry skeleton: `./scripts/log_entry.sh "<title>"`
 
 ## Coding rules
