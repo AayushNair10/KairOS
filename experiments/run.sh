@@ -17,6 +17,7 @@
 #   proc_stat_before/after  /proc/stat around the load (CPU time, ctx switches)
 #   procs_before/after   every process's /proc/<pid>/stat around the load, to
 #                        see what else used CPU (e.g. the VS Code server)
+#   vmstat_before/after  /proc/vmstat around the load (swapping, reclaim)
 #   ml_trace.csv         with ML_TRACE=1, kairos --split runs only: the LC
 #                        demand every 50 ms (training data for ml/)
 #   diag.csv             with DIAG_COMM set, kairos runs only: per second,
@@ -232,10 +233,12 @@ cleanup() {
 trap cleanup EXIT
 trap 'log "interrupted"; exit 130' INT TERM
 
-# snapshot <run-dir> <before|after>: system-wide and per-process CPU time.
-# (Processes can exit while cat reads /proc, hence the || true.)
+# snapshot <run-dir> <before|after>: system-wide and per-process CPU time,
+# and memory counters. (Processes can exit while cat reads /proc, hence the
+# || true.)
 snapshot() {
 	cp /proc/stat "$1/proc_stat_$2"
+	cp /proc/vmstat "$1/vmstat_$2"
 	cat /proc/[0-9]*/stat > "$1/procs_$2" 2> /dev/null || true
 }
 

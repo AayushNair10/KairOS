@@ -80,6 +80,30 @@ def system_stats(run_dir):
     }
 
 
+def memory_stats(run_dir):
+    """Memory counters between vmstat_before and _after: pages swapped in
+    and out, major page faults (a thread waited for a page from disk),
+    direct-reclaim stalls (an allocation waited for memory to be freed)
+    and compaction stalls. None for runs from before these files existed.
+    In E3 (2026-11-02) the slowest seconds came with swap-in bursts."""
+    before = os.path.join(run_dir, "vmstat_before")
+    if not os.path.exists(before):
+        return None
+    vals = []
+    for path in (before, os.path.join(run_dir, "vmstat_after")):
+        with open(path) as f:
+            vals.append(dict((k, int(v)) for k, v in (line.split() for line in f)))
+    a, b = vals
+    d = {k: b[k] - a[k] for k in a if k in b}
+    return {
+        "swap_in": d.get("pswpin", 0),
+        "swap_out": d.get("pswpout", 0),
+        "major_faults": d.get("pgmajfault", 0),
+        "reclaim_stalls": sum(v for k, v in d.items() if k.startswith("allocstall_")),
+        "compact_stalls": d.get("compact_stall", 0),
+    }
+
+
 def _read_procs(path):
     """{pid: (comm, utime + stime in ticks, start time in ticks since boot)}
     from concatenated /proc/<pid>/stat."""

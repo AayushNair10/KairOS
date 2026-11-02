@@ -681,6 +681,12 @@ choices. Add as you go.)
   → 2026-11-01: off by default, `--kick-idle` turns them on
   (`--no-kick-idle` is still accepted). The E2k rerun measured no gain
   (section 6.16).
+- EWMA resolution (`ewma()`: `avg - (avg >> shift) + (sample >> shift)`).
+  Both terms are truncated, so the average stops moving when it is within
+  about 2^shift units of the sample. For the LC demand (CPUs x 1024) that
+  is 1/16 CPU at `--lc-shift 6` (the default), 1/4 CPU at 8 and a whole
+  CPU at 10. A slower pool average (e.g. ~1 s for E3) would need more
+  fractional bits in the demand first. Found 2026-11-02, not changed.
 
 ---
 
@@ -718,6 +724,8 @@ together with `meta.json` (git commit, kernel, VM config, parameters).
 | E2k | 2026-10-31 | 7f1a122 | bpfland, kairos0 (E2f's kairos, `--no-kick-idle`), kairos (idle kicks), kairosnp (kicks, `--no-borrow-preempt --borrow-slice-us 1000`) | `e2k-periodic.conf`, `e2k-short.conf`: as E2f | 5 | `results/2026-10-31-e2k-periodic/`, `-short/` | **Invalid.** The host held the VM back: calibration 689 / 529 iterations/µs instead of ~1035 (requests carried half to two thirds of the intended work), VM time share 0.02–0.93 in all periodic runs and short reps 1–3 (section 6.15). To be rerun |
 | E2k-r | 2026-11-01 | 11f6a01 | as E2k | as E2k; Mac plugged in with `caffeinate`, IDE idle, start delayed 60 s | 5 | `results/2026-11-01-e2k-periodic/`, `-short/` | Clean: calibration 1026–1036, VM time share 0.97–0.98 in all 40 runs, other processes mostly ~5%. Idle kicks: no gain. Borrower preemption is what gives KairOS its latency; without it KairOS is worse than bpfland (section 6.16) |
 | E2a | 2026-11-01 | e735eae | eevdf, bpfland, lavd, lavdperf, never3, kairos (as E2f) | `e2a-azure.conf`: Azure Functions 2021 trace, hours 36, 54, 284 (random, seed 1), 100x compressed, per-hour peak 3500 req/s, floor 300 (`workloads/traces/azure_phases.py`); otherwise as E2f | 5 | `results/2026-11-01-e2a-azure/` | No failed requests; calibration 1034. Reps 1 and 4 partly disturbed (VS Code and this session, 20–27% other CPU in 3 runs); leaving them out changes nothing. kairos: lowest p50 at every load level and fewest requests over 2/5/10 ms in every rep; 8% less batch than bpfland, 11% less than never3 (section 6.17) |
+| E3 | 2026-11-02 | a06db56 | eevdf, bpfland, lavd, never3, kairos (as E2a, without lavdperf) | `e3-burst.conf`: busy (3500 req/s) and quiet (500) phases of equal length L, 50% duty, one block per L = 10, 30, 100, 300, 1000, 3000, 10000 ms in shuffled order (seed 1), 2 s quiet before each block (`workloads/traces/burst_sweep.py`); otherwise as E2f | 5 | `results/2026-11-02-e3-burst/` | **Invalid.** The VM was short of memory and swapping: seconds with ≥ 10% of requests over 50 ms were 10–38% of each config's run time, against 0–6% in E2k-r and E2a (section 6.18). To be rerun |
+| E3-md | 2026-11-02 | a06db56 | eevdf | as E3, 1 s samples of /proc/vmstat (`vmstat_1s.txt`, `vmsample.sh` in the run directory) | 1 | `results/2026-11-02-e3-memdiag/` | Diagnostic. The three worst seconds (58–95% of requests over 50 ms) came with 190–940 pages swapped in per second (section 6.18) |
 
 ### 5.1 Planned experiments
 | # | Experiment | Pattern | Shows |
@@ -1420,6 +1428,36 @@ at 2000 or more.
   520; bpfland 1.04, 3.7%, 572. Every paired count keeps its direction.
 
 
+### 6.18 E3: invalid run, memory pressure in the VM (2026-11-02)
+`results/2026-11-02-e3-burst/`, 25 runs. Not usable as a comparison:
+- The CPUs were fine. Calibration 995 / 1035 / 1013 iterations/µs (the
+  fastest is kept). Uncontended service time p10 517 µs, the same as in
+  E2k-r and E2a. VM time share 0.93–0.99, except eevdf-r4 (0.76; other
+  processes 86% of a CPU: claude 31, node 23, kswapd0 15) and bpfland-r4
+  (0.89, 52%).
+- Slow episodes were far more common. Seconds in which at least 10% of
+  requests took over 50 ms: bpfland 30%, eevdf 38%, lavd 32%, never3
+  14%, kairos 10% of all run seconds. E2k-r periodic (the same two rates,
+  5 s phases) had 0–2%, and E2a 1–6%. In the 10 s block, bpfland's busy
+  p95 was 246 ms and eevdf's 1,059 ms.
+- The VM was swapping. It had been up 4 days 7 h with 576–625 MB of swap
+  in use. Since boot, ~503k pages (~2 GB) had been swapped back in.
+  Resident: VS Code's node ~750 MB over its processes, this Claude
+  session 400 MB, of 3.9 GB.
+- Diagnostic run E3-md (eevdf, 1 rep, /proc/vmstat every second): over
+  153 s, 3,162 pages swapped in and 3,173 out, 2,765 major faults, 879
+  direct-reclaim stalls and 2,211 compaction stalls. 14 of 153 seconds
+  had at least 10% of requests over 50 ms. The three worst (seconds
+  69–71: 58, 95 and 70%) had 235, 936 and 192 swap-ins. The next worst
+  (second 9, 40%) had 538. Not every slow second had swap-ins: seconds
+  26–27 (33%, 50%) had 13 and 8.
+- Even a 10 s smoke run afterwards had 95 direct-reclaim stalls and 244
+  compaction stalls (24 swap-ins).
+- A hint only, from the invalid data: kairos's busy p50 stayed at
+  0.88–1.04 ms at every burst length and at every time since a burst
+  started, while every baseline's rose. Its p95 and p99 rose with the
+  episodes too (p95 163 ms in the 1 s block).
+
 ## 7. Explanations and insights
 (The "why" behind each result. This is what the report is graded on.)
 
@@ -1914,6 +1952,13 @@ E2a, Azure trace replay (section 6.17):
   the VM while it writes messages: 10–20% of a CPU during the run in
   which it happens (E2k, E2a). During runs it should stay idle; a watcher
   that only reports bad runs keeps it quiet.
+- Memory. The VM has 3.9 GB, and VS Code's server and this Claude
+  session hold ~1.1 GB of it after a long session. After 4 days of uptime
+  the VM was swapping during runs, and its worst seconds came with
+  swap-in bursts (E3, section 6.18). Each run now records /proc/vmstat
+  before and after (`vmstat_before`, `vmstat_after`). summarize_run.py
+  warns above 1,000 pages swapped in (a first guess). compare.py prints
+  swap-ins and direct-reclaim stalls per config.
 
 ---
 
@@ -2679,3 +2724,27 @@ reps changes nothing). Under sched_ext the VM time share cut (0.95) has
 **Next:** E3 (burst-length sweep), E7 (overhead: bpf_stats, zstd-only
 throughput, `perf bench sched pipe`), Redis. Optional: a second trace
 sample (another seed) to check that the three hours are not special.
+
+### 2026-11-02 — E3 invalid: the VM was swapping
+**Did:** Wrote `workloads/traces/burst_sweep.py` (busy and quiet phases of
+equal length L from 10 ms to 10 s, one shuffled block per L) and
+`analysis/byburst.py` (latency by burst length and by time since a burst
+started or ended). Ran E3 (eevdf, bpfland, lavd, never3, kairos; 5 reps)
+and a diagnostic eevdf run with 1 s memory counters. run.sh now saves
+/proc/vmstat around every run, and summarize_run.py and compare.py report
+swapping.
+**Found:** Section 6.18. Seconds with at least 10% of requests over 50 ms
+were 10–38% of the run time, against 0–6% in yesterday's runs, for every
+config. CPU speed was unchanged. The VM was swapping (600 MB in swap after
+4 days up), and the worst seconds in the diagnostic run came with
+swap-in bursts of 190–940 pages a second.
+**Interpretation:** The run measures the VM's memory pressure more than the
+schedulers. The configs were interleaved, so all were exposed, but the
+episodes dominate p95 and p99 and add noise to the medians.
+**Decisions:** E3 is invalid and will be rerun with the VM's memory freed.
+Every run now records swapping; leave out runs that swapped. The
+threshold, 1,000 pages, is a guess to refine.
+**Problems:** `--lc-shift` above ~8 is too coarse for the LC demand
+(section 4), so a slow-pool variant of kairos was not tried.
+**Next:** Free the VM's memory (restart the VM, or swapoff/swapon), then
+rerun E3. Then E7 and Redis.

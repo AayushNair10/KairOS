@@ -12,6 +12,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import runlib  # noqa: E402
 
+SWAP_IN_WARN = 1000  # pages (4 KiB) swapped in during the load
+
 
 def main():
     run_dir = sys.argv[1]
@@ -43,6 +45,14 @@ def main():
           f"system time {100 * st['system_frac']:.1f}%, busy {busy}")
     warn = "  WARNING: the host held the VM back" if st["vm_share"] < 0.95 else ""
     print(f"VM time share: {st['vm_share']:.2f} of the wall time{warn}")
+    mem = runlib.memory_stats(run_dir)
+    if mem is not None:
+        # The threshold is a first guess: ~3,000 swap-ins came with slow
+        # seconds in the E3 diagnostic run; refine it once clean runs exist.
+        warn = "  WARNING: the VM was swapping" if mem["swap_in"] > SWAP_IN_WARN else ""
+        print(f"memory: {mem['swap_in']} pages swapped in, {mem['swap_out']} out, "
+              f"{mem['major_faults']} major faults, {mem['reclaim_stalls']} direct-reclaim "
+              f"stalls, {mem['compact_stalls']} compaction stalls{warn}")
     other = runlib.other_cpu(run_dir)
     if other is not None:
         top = ", ".join(f"{c} {s / st['elapsed_s'] * 100:.1f}%" for c, s in other[:5])

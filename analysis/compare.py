@@ -77,6 +77,10 @@ def main():
               f"other processes %CPU {med_range(other)}, "
               f"server %CPU {med_range(server)}, idle on server CPUs %CPU {med_range(idle)}, "
               f"VM time share {med_range([s['vm_share'] for s in sts], '{:.2f}')}")
+        mem = [runlib.memory_stats(d) for d in groups[n]]
+        if all(m is not None for m in mem):
+            print(f"  {'':8} pages swapped in {med_range([m['swap_in'] for m in mem], '{:.0f}')}, "
+                  f"direct-reclaim stalls {med_range([m['reclaim_stalls'] for m in mem], '{:.0f}')}")
 
 
 if __name__ == "__main__":
