@@ -20,6 +20,10 @@
 #   vmstat_before/after  /proc/vmstat around the load (swapping, reclaim)
 #   vmstat_1s.txt        the same counters once a second during the load
 #                        (scripts/vmsample.sh)
+#   bpf_progs.json       with BPF_STATS=1, sched_ext schedulers only:
+#                        `bpftool prog show` just before unloading; with
+#                        kernel.bpf_stats_enabled=1 it holds each program's
+#                        run count and total run time since it was loaded
 #   ml_trace.csv         with ML_TRACE=1, kairos --split runs only: the LC
 #                        demand every 50 ms (training data for ml/)
 #   diag.csv             with DIAG_COMM set, kairos runs only: per second,
@@ -281,6 +285,9 @@ run_one() {
 	stop_batch
 	stop_pid "$SERVER_PID"
 	SERVER_PID=
+	if [ "${BPF_STATS:-0}" = 1 ] && [ -n "$SCHED_PID" ]; then
+		sudo bpftool prog show --json > "$dir/bpf_progs.json" 2> /dev/null || true
+	fi
 	stop_sched
 	python3 "$ROOT/analysis/summarize_run.py" "$dir"
 	# This run's files stay on disk but leave the page cache, so a batch
