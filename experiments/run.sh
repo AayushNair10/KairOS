@@ -18,6 +18,8 @@
 #   procs_before/after   every process's /proc/<pid>/stat around the load, to
 #                        see what else used CPU (e.g. the VS Code server)
 #   vmstat_before/after  /proc/vmstat around the load (swapping, reclaim)
+#   vmstat_1s.txt        the same counters once a second during the load
+#                        (scripts/vmsample.sh)
 #   ml_trace.csv         with ML_TRACE=1, kairos --split runs only: the LC
 #                        demand every 50 ms (training data for ml/)
 #   diag.csv             with DIAG_COMM set, kairos runs only: per second,
@@ -267,17 +269,23 @@ run_one() {
 	start_batch "$dir"
 	sleep "$BATCH_WARMUP_S" # let the batch jobs reach a steady state
 
+	"$ROOT/scripts/vmsample.sh" > "$dir/vmstat_1s.txt" &
+	local vmsample_pid=$!
 	snapshot "$dir" before
 	GOMAXPROCS=$LOADGEN_GOMAXPROCS "${LOADGEN_PIN[@]}" "$BIN/loadgen" -addr "$ADDR" \
 		-phases "$PHASES" -work-us "$WORK_US" -conns "$CONNS" -seed "$SEED" \
 		-out "$dir/requests.csv" -summary "$dir/loadgen.json" 2> "$dir/loadgen.log"
 	snapshot "$dir" after
+	kill "$vmsample_pid"
 
 	stop_batch
 	stop_pid "$SERVER_PID"
 	SERVER_PID=
 	stop_sched
 	python3 "$ROOT/analysis/summarize_run.py" "$dir"
+	# This run's files stay on disk but leave the page cache, so a batch
+	# doesn't fill the VM's memory with results (RESEARCH_LOG 6.18).
+	"$ROOT/scripts/evict_cache.py" "$dir" 2> /dev/null || true
 }
 
 # Build first, so the binaries match the commit recorded in meta.json.
