@@ -93,17 +93,24 @@ SERVER_GOMAXPROCS=${SERVER_GOMAXPROCS:-0}
 # comma-separated); empty = off. The server names its worker threads
 # "grpcworker"; its other threads keep "grpcserver".
 DIAG_COMM=${DIAG_COMM:-}
-# Scheduling policy of the batch jobs: "normal" (SCHED_OTHER) or "batch"
-# (SCHED_BATCH, set with chrt and inherited by zstd). Linux's scheduler and
-# scx_kairos --class policy use it to tell batch work from the service.
+# Scheduling policy of the batch jobs: "normal" (SCHED_OTHER), "batch"
+# (SCHED_BATCH) or "idle" (SCHED_IDLE), set with chrt and inherited by zstd.
+# Linux's scheduler and scx_kairos --class policy use it to tell batch work
+# from the service. BATCH_POLICY_<label> (e.g. BATCH_POLICY_eevdfidle=idle)
+# overrides it for one SCHEDULERS entry.
 BATCH_POLICY=${BATCH_POLICY:-normal}
 # 1: kairos --split runs also write ml_trace.csv (scx_kairos --ml-trace).
 ML_TRACE=${ML_TRACE:-}
-case $BATCH_POLICY in
-normal) BATCH_CHRT=() ;;
-batch) BATCH_CHRT=(chrt --batch 0) ;;
-*) echo "BATCH_POLICY must be normal or batch" >&2; exit 1 ;;
-esac
+# set_batch_policy <policy>: the chrt prefix for the batch jobs.
+set_batch_policy() {
+	case $1 in
+	normal) BATCH_CHRT=() ;;
+	batch) BATCH_CHRT=(chrt --batch 0) ;;
+	idle) BATCH_CHRT=(chrt --idle 0) ;;
+	*) echo "batch policy must be normal, batch or idle, not '$1'" >&2; exit 1 ;;
+	esac
+}
+set_batch_policy "$BATCH_POLICY"
 
 BIN=$ROOT/workloads/bin
 SCX_RUST_BIN=${SCX_RUST_BIN:-$HOME/scx/target/release}
@@ -261,10 +268,18 @@ run_one() {
 	fi
 	local dir=$OUT/$label-r$rep
 	mkdir -p "$dir"
-	log "run: $sched, rep $rep -> ${dir#"$ROOT"/}"
+	# BATCH_POLICY_<label> overrides BATCH_POLICY (only for labels that
+	# are valid variable names; ${!var} is the value of the variable
+	# named by $var).
+	local policy=$BATCH_POLICY var=BATCH_POLICY_$label
+	if [[ $label =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+		policy=${!var:-$BATCH_POLICY}
+	fi
+	set_batch_policy "$policy"
+	log "run: $sched, rep $rep, batch policy $policy -> ${dir#"$ROOT"/}"
 
 	start_sched "$sched" "$dir"
-	"$ROOT/scripts/meta.sh" "$dir" "$entry" "$WORKLOAD" > /dev/null
+	"$ROOT/scripts/meta.sh" "$dir" "$entry" "$WORKLOAD batch_policy=$policy" > /dev/null
 
 	GODEBUG=$SERVER_GODEBUG "${SUT_PIN[@]}" "$BIN/grpcserver" -addr "$ADDR" -workers "$WORKERS" -work-us "$WORK_US" \
 		-iters-per-us "$ITERS_PER_US" -gomaxprocs "$SERVER_GOMAXPROCS" \
@@ -330,7 +345,7 @@ WORKLOAD+=" batch_warmup_s=$BATCH_WARMUP_S"
 WORKLOAD+=" sut_cpus=${SUT_CPUS:-all} loadgen_cpus=${LOADGEN_CPUS:-all}"
 WORKLOAD+=" loadgen_gomaxprocs=$LOADGEN_GOMAXPROCS server_godebug=$SERVER_GODEBUG"
 WORKLOAD+=" server_gomaxprocs=$SERVER_GOMAXPROCS diag_comm=${DIAG_COMM:-off}"
-WORKLOAD+=" batch_policy=$BATCH_POLICY ml_trace=${ML_TRACE:-0}"
+WORKLOAD+=" ml_trace=${ML_TRACE:-0}" # batch_policy is added per run
 
 OUT=$ROOT/results/$(date +%F)-$NAME
 [ -e "$OUT" ] && OUT=$OUT-$(date +%H%M%S) # never overwrite earlier raw data
