@@ -32,6 +32,8 @@ enum kairos_stat {
 	STAT_FROM_BATCH,	/* ... and back */
 	STAT_BORROW,		/* --split: batch task started on an LC CPU */
 	STAT_KICK,		/* queued task woke an idle CPU (kick_idle) */
+	STAT_DELAYED,		/* --preempt-wait-us: LC wakeup waited instead of preempting */
+	STAT_LATE_PREEMPT,	/* ... and was still waiting after it: borrower preempted */
 	KAIROS_NR_STATS,	/* not NR_STATS: vmlinux.h has one */
 };
 

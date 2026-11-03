@@ -119,6 +119,24 @@ const volatile u64 borrow_slice_ns = 3000000;	/* batch task on an LC CPU */
 /* A woken LC task may preempt a borrower; else it waits for the borrow slice. */
 const volatile bool borrow_preempt = true;
 /*
+ * Delayed borrower preemption (--preempt-wait-us; RESEARCH_LOG section 9,
+ * direction 2). 0: a woken LC task that finds no idle CPU preempts a
+ * borrower at once. Otherwise it waits in LC_DSQ, where an LC CPU that
+ * frees up (its LC task sleeps, or a borrow slice ends) takes it, and
+ * only if it is still waiting after preempt_wait_ns is a borrower
+ * preempted for it (wait_timerfn()). Fewer preemptions, longer waits.
+ */
+const volatile u64 preempt_wait_ns;
+/*
+ * With preempt_wait_ns: a task whose runs average at least this long
+ * (from waking to sleeping, avg_run) still preempts at once; 0 = none
+ * does. Meant for short runs (~10 us) of Go runtime threads, which caused
+ * most preemptions in a smoke test, against 500 us request handlers.
+ */
+const volatile u64 preempt_min_run_ns;
+/* avg_run's EWMA weight per run: 1/2^avg_run_shift. */
+const volatile u32 avg_run_shift = 2;
+/*
  * Work conservation. An idle CPU doesn't look at our shared queues until
  * something wakes it, so a task inserted into one while a CPU it may run
  * on is idle would wait for nothing. This happens after a preemption: the
@@ -222,6 +240,8 @@ struct task_ctx {
 	u8 ready_kind;		/* why it is waiting (enum kairos_ready) */
 	u8 group;		/* diagnostics group, set in running() */
 	u8 preempted_in;	/* --diag: its next run starts by preempting */
+	u8 delayed;		/* waits in LC_DSQ for preempt_wait_ns (STAT_DELAYED) */
+	u64 avg_run;		/* EWMA of CPU time from waking to sleeping */
 };
 
 struct {
@@ -261,6 +281,16 @@ struct {
 	__type(key, u32);
 	__type(value, struct kairos_timer);
 } timer_map SEC(".maps");
+
+/* One-shot timer for delayed preemption; wait_timer_armed: it is pending. */
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, u32);
+	__type(value, struct kairos_timer);
+} wait_timer_map SEC(".maps");
+
+static u32 wait_timer_armed;
 
 static void stat_inc(u32 idx)
 {
@@ -545,17 +575,44 @@ static s32 split_select_cpu(struct task_struct *p, s32 prev_cpu)
  * one and select_cpu() won't place a woken task on it meanwhile; the bit
  * is set again when the CPU next goes idle.
  */
-static void kick_idle_cpu(const struct task_struct *p)
+static void kick_an_idle_cpu(const struct task_struct *p)
 {
-	s32 cpu;
+	s32 cpu = scx_bpf_pick_idle_cpu(p->cpus_ptr, 0);
 
-	if (!kick_idle)
-		return;
-	cpu = scx_bpf_pick_idle_cpu(p->cpus_ptr, 0);
 	if (cpu >= 0) {
 		stat_inc(STAT_KICK);
 		scx_bpf_kick_cpu(cpu, SCX_KICK_IDLE);
 	}
+}
+
+static void kick_idle_cpu(const struct task_struct *p)
+{
+	if (kick_idle)
+		kick_an_idle_cpu(p);
+}
+
+/* --split: does woken LC task (context @tctx) preempt a borrower at once? */
+static bool preempt_at_once(const struct task_ctx *tctx)
+{
+	if (!preempt_wait_ns)
+		return true;
+	return preempt_min_run_ns && tctx && tctx->avg_run >= preempt_min_run_ns;
+}
+
+/*
+ * Arm the delayed-preemption timer unless it is pending. Only the first
+ * delayed task arms it; wait_timerfn() re-arms it for later ones.
+ */
+static void arm_wait_timer(void)
+{
+	struct kairos_timer *t;
+	u32 key = 0;
+
+	if (__sync_val_compare_and_swap(&wait_timer_armed, 0, 1))
+		return;
+	t = bpf_map_lookup_elem(&wait_timer_map, &key);
+	if (t)
+		bpf_timer_start(&t->timer, preempt_wait_ns, 0);
 }
 
 static void split_enqueue(struct task_struct *p, u64 enq_flags)
@@ -567,13 +624,28 @@ static void split_enqueue(struct task_struct *p, u64 enq_flags)
 	if (!batch && borrow_preempt && (enq_flags & SCX_ENQ_WAKEUP)) {
 		s32 cpu = split_pick_borrower(p);
 
-		if (cpu >= 0) {
+		if (cpu >= 0 && preempt_at_once(tctx)) {
 			stat_inc(STAT_PREEMPT);
 			stat_inc(STAT_PREEMPT_BATCH);
 			count_preempt(cpu, tctx);
 			p->scx.dsq_vtime = vtime;
 			scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, lat_slice_ns,
 					   enq_flags | SCX_ENQ_PREEMPT);
+			return;
+		}
+		if (cpu >= 0) {
+			/*
+			 * Delayed: wait in LC_DSQ like a task with nothing to
+			 * preempt, but with the timer as a deadline. A CPU may
+			 * have gone idle since select_cpu() found none; wake it.
+			 */
+			stat_inc(STAT_DELAYED);
+			stat_inc(STAT_GLOBAL);
+			if (tctx)
+				tctx->delayed = 1;
+			scx_bpf_dsq_insert_vtime(p, LC_DSQ, lat_slice_ns, vtime, enq_flags);
+			kick_an_idle_cpu(p);
+			arm_wait_timer();
 			return;
 		}
 		stat_inc(STAT_NO_VICTIM);
@@ -731,6 +803,7 @@ void BPF_STRUCT_OPS(kairos_running, struct task_struct *p)
 			}
 		}
 		tctx->ready_at = 0;
+		tctx->delayed = 0;
 		tctx->running_at = now;
 		tctx->slice_at_run = p->scx.slice;
 	}
@@ -810,6 +883,9 @@ void BPF_STRUCT_OPS(kairos_stopping, struct task_struct *p, bool runnable)
 		 * while still runnable (slice expired or preempted).
 		 */
 		was_batch = is_batch(tctx->run_since_sleep);
+		if (!runnable)	/* the run since it woke is over */
+			tctx->avg_run = ewma(tctx->avg_run, tctx->run_since_sleep + ran,
+					     avg_run_shift);
 		tctx->run_since_sleep = runnable ? tctx->run_since_sleep + ran : 0;
 		if (is_batch(tctx->run_since_sleep) != was_batch) {
 			stat_inc(was_batch ? STAT_FROM_BATCH : STAT_TO_BATCH);
@@ -1020,6 +1096,69 @@ static int kairos_timerfn(void *map, int *key, struct bpf_timer *timer)
 	return 0;
 }
 
+/*
+ * Delayed preemption (preempt_wait_ns). Each firing takes the first
+ * delayed LC task that has waited in LC_DSQ for preempt_wait_ns since
+ * waking and preempts a borrower for it (SCX_KICK_PREEMPT: that CPU stops
+ * its task and runs dispatch(), which takes LC_DSQ first on an LC CPU).
+ * The task's delayed flag is cleared, so it causes at most one late
+ * preemption; the kicked CPU takes the first LC task by vtime, which may
+ * be another one. If more tasks are overdue, the timer fires again at
+ * once; if some haven't waited that long yet, it is re-armed for the
+ * first of them. Only tasks that found a borrower they may run on when
+ * they were queued are delayed, so the load generator's tasks, which
+ * wait in LC_DSQ too but may only run on CPU 3, never count.
+ *
+ * Verifier: an exact count of overdue tasks, used to kick that many CPUs,
+ * made the loops too complex (each count value is a separate state), so
+ * the state here is two booleans and the time to the next deadline.
+ */
+static int wait_timerfn(void *map, int *key, struct bpf_timer *timer)
+{
+	u64 now = scx_bpf_now(), next = 0;
+	bool found = false, more = false, kicked = false;
+	struct task_struct *p;
+	s32 cpu;
+
+	wait_timer_armed = 0;
+	bpf_for_each(scx_dsq, p, LC_DSQ, 0) {
+		struct task_ctx *tctx = bpf_task_storage_get(&task_ctxs, p, 0, 0);
+		u64 waited;
+
+		if (!tctx || !tctx->delayed || !tctx->ready_at)
+			continue;
+		waited = time_after(now, tctx->ready_at) ? now - tctx->ready_at : 0;
+		if (waited < preempt_wait_ns) {
+			if (!next || preempt_wait_ns - waited < next)
+				next = preempt_wait_ns - waited;
+		} else if (!found) {
+			tctx->delayed = 0;
+			found = true;
+		} else {
+			more = true;
+		}
+	}
+	if (found) {
+		bpf_for(cpu, 0, nr_cpus) {
+			struct cpu_ctx *cctx = lookup_cpu_ctx(cpu);
+
+			if (cctx && cctx->running_at && cctx->batch && lc_cpu(cpu)) {
+				scx_bpf_kick_cpu(cpu, SCX_KICK_PREEMPT);
+				stat_inc(STAT_LATE_PREEMPT);
+				count_preempt(cpu, NULL);
+				kicked = true;
+				break;
+			}
+		}
+	}
+	/* more overdue tasks and a borrower left to kick: again at once */
+	if (more && kicked)
+		next = 1;
+	if (next && !__sync_val_compare_and_swap(&wait_timer_armed, 0, 1))
+		bpf_timer_start(timer, next, 0);
+	return 0;
+}
+
 s32 BPF_STRUCT_OPS_SLEEPABLE(kairos_init)
 {
 	struct bpf_timer *timer;
@@ -1052,9 +1191,18 @@ s32 BPF_STRUCT_OPS_SLEEPABLE(kairos_init)
 	bpf_timer_init(timer, &timer_map, CLOCK_MONOTONIC);
 	bpf_timer_set_callback(timer, kairos_timerfn);
 	ret = bpf_timer_start(timer, timer_interval_ns, 0);
-	if (ret)
+	if (ret) {
 		scx_bpf_error("bpf_timer_start failed (%d)", ret);
-	return ret;
+		return ret;
+	}
+
+	/* started only by arm_wait_timer() */
+	timer = bpf_map_lookup_elem(&wait_timer_map, &key);
+	if (!timer)
+		return -ESRCH;
+	bpf_timer_init(timer, &wait_timer_map, CLOCK_MONOTONIC);
+	bpf_timer_set_callback(timer, wait_timerfn);
+	return 0;
 }
 
 void BPF_STRUCT_OPS(kairos_exit, struct scx_exit_info *ei)
