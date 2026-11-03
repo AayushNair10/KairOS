@@ -5,12 +5,14 @@
 # through the scheduler on one CPU; on CPUs 0,1 the wakeups also cross
 # CPUs. Schedulers interleaved per rep, as in run.sh.
 # Usage: experiments/e7_pipe.sh [REPS]  -> results/<date>-e7-pipe/pipe.csv
+# ORDER (names below) and NAME (results directory) can be set, e.g.
+#   ORDER="simple never3 kairos kairossync" NAME=e12-pipe experiments/e7_pipe.sh
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 REPS=${1:-5}
 LOOPS=${LOOPS:-200000}
 STATE=/sys/kernel/sched_ext/state
-OUT=$ROOT/results/$(date +%F)-e7-pipe
+OUT=$ROOT/results/$(date +%F)-${NAME:-e7-pipe}
 [ -e "$OUT" ] && OUT=$OUT-$(date +%H%M%S)
 mkdir -p "$OUT"
 
@@ -22,8 +24,9 @@ declare -A CMD=(
 	[lavd]="$HOME/scx/target/release/scx_lavd --autopilot"
 	[never3]="$ROOT/scheduler/scx_kairos --never-preempt --batch-slice-us 3000"
 	[kairos]="$ROOT/scheduler/scx_kairos --split --split-cpus 0-2 --class policy --lc-buffer-pct 150"
+	[kairossync]="$ROOT/scheduler/scx_kairos --split --split-cpus 0-2 --class policy --lc-buffer-pct 150 --wake-sync"
 )
-ORDER="eevdf simple bpfland lavd never3 kairos"
+ORDER=${ORDER:-"eevdf simple bpfland lavd never3 kairos"}
 
 wait_state() {
 	for _ in $(seq 100); do

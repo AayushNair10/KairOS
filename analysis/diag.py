@@ -115,6 +115,18 @@ def main():
                 print(f"    {g:11s} {sum(cnt):6.2f}  " + "/".join(f"{c:.2f}" for c in cnt)
                       + f"   {sum(ms):7.2f}  " + "/".join(f"{x:.2f}" for x in ms)
                       + "   " + "/".join(f"{x:.0f}" for x in long_) + f"   {cpu:5.1f}")
+                # Runs that began by preempting a CPU (kind "preempt": count,
+                # ms, then counts by run length, bounds 50/200/1000 us ...).
+                prs = [(r.get((g, "preempt")), r) for r in rs if r["secs"]]
+                prs = [(p, r) for p, r in prs if p and p[0]]
+                if prs:
+                    per_s_pre = med([p[0] / r["secs"] for p, r in prs])
+                    mean_us = med([1000 * p[1] / p[0] for p, r in prs])
+                    sh = [med([100 * sum(p[2:][sl]) / p[0] for p, r in prs])
+                          for sl in (slice(0, 1), slice(1, 2), slice(2, 3), slice(3, None))]
+                    print(f"      preempting runs {per_s_pre:.0f}/s, mean {mean_us:.0f} us; "
+                          f"<50 us {sh[0]:.0f}%, 50-200 us {sh[1]:.0f}%, "
+                          f"0.2-1 ms {sh[2]:.0f}%, >=1 ms {sh[3]:.0f}%")
             sl = [(r["schedlat"], r) for r in rs if r["schedlat"] and r["req"]]
             if sl:
                 n_all = med([sum(c) / r["req"] for c, r in sl])
