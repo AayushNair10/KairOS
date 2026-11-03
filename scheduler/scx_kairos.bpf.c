@@ -127,6 +127,16 @@ const volatile bool borrow_preempt = true;
  */
 const volatile u32 borrower_pick = PICK_FIRST;	/* enum kairos_pick */
 /*
+ * Per-CPU LC queues (--lc-queue percpu; RESEARCH_LOG section 9, direction
+ * 4), an ablation of the shared LC_DSQ. A queued LC task (no idle CPU, no
+ * borrower preempted) waits in its CPU's own queue, LC_PCPU_DSQ(cpu); that
+ * CPU serves it before batch work, other CPUs only when they would go
+ * idle. Linux places a woken task on one CPU's run queue too and moves it
+ * only by load balancing; this is stricter (no periodic balancing), so it
+ * bounds what serving LC tasks from one shared queue is worth.
+ */
+const volatile bool lc_percpu;
+/*
  * Delayed borrower preemption (--preempt-wait-us; RESEARCH_LOG section 9,
  * direction 2). 0: a woken LC task that finds no idle CPU preempts a
  * borrower at once. Otherwise it waits in LC_DSQ, where an LC CPU that
@@ -181,6 +191,7 @@ UEI_DEFINE(uei);
 #define SHARED_DSQ 0
 #define LC_DSQ 1	/* --split: latency-critical tasks */
 #define BATCH_DSQ 2	/* --split: batch tasks */
+#define LC_PCPU_DSQ(cpu) (16 + (u64)(cpu))	/* --lc-queue percpu */
 
 /* vmlinux.h has no #defines; the values are from uapi/linux/sched.h */
 #ifndef SCHED_BATCH
@@ -739,6 +750,14 @@ static void split_enqueue(struct task_struct *p, u64 enq_flags)
 		stat_inc(STAT_NO_VICTIM);
 	}
 	stat_inc(STAT_GLOBAL);
+	if (!batch && lc_percpu) {
+		s32 cpu = scx_bpf_task_cpu(p);
+
+		scx_bpf_dsq_insert_vtime(p, LC_PCPU_DSQ(cpu), lat_slice_ns, vtime, enq_flags);
+		/* only @cpu looks at this queue soon; wake it if it went idle */
+		scx_bpf_kick_cpu(cpu, SCX_KICK_IDLE);
+		return;
+	}
 	scx_bpf_dsq_insert_vtime(p, batch ? BATCH_DSQ : LC_DSQ,
 				 batch ? batch_slice_ns : lat_slice_ns, vtime, enq_flags);
 	kick_idle_cpu(p);
@@ -808,8 +827,30 @@ void BPF_STRUCT_OPS(kairos_enqueue, struct task_struct *p, u64 enq_flags)
 
 void BPF_STRUCT_OPS(kairos_dispatch, s32 cpu, struct task_struct *prev)
 {
+	s32 c;
+
 	if (!split) {
 		scx_bpf_dsq_move_to_local(SHARED_DSQ);
+		return;
+	}
+	if (lc_percpu) {
+		/*
+		 * Own LC queue first on an LC CPU (after batch on a batch
+		 * CPU); another CPU's LC queue only when there is nothing
+		 * else to run.
+		 */
+		bool lc = lc_cpu(cpu);
+
+		if (lc && scx_bpf_dsq_move_to_local(LC_PCPU_DSQ(cpu)))
+			return;
+		if (scx_bpf_dsq_move_to_local(BATCH_DSQ))
+			return;
+		if (!lc && scx_bpf_dsq_move_to_local(LC_PCPU_DSQ(cpu)))
+			return;
+		bpf_for(c, 0, nr_cpus) {
+			if (c != cpu && scx_bpf_dsq_move_to_local(LC_PCPU_DSQ(c)))
+				return;
+		}
 		return;
 	}
 	/* own pool's queue first, then lend the CPU to the other pool */
@@ -1006,6 +1047,26 @@ static u64 last_tick_at, last_wakeups, last_wait_sum, last_wait_cnt;
 static u64 last_lat_wakeups, last_lat_late, last_lc_run_ns;
 
 /*
+ * Verifier: a sum over a bpf_for loop gets a wider range in every
+ * iteration, so the loop's states never match and it isn't proven to end
+ * ("jumps too complex"). Masking the sum in the loop keeps its range
+ * fixed; far fewer than 2^24 tasks are ever queued.
+ */
+#define QUEUED_MASK 0xffffff
+
+/* --split: LC tasks waiting in our queues (LC_DSQ, or the per-CPU ones). */
+static u64 nr_lc_queued(void)
+{
+	u64 n = scx_bpf_dsq_nr_queued(LC_DSQ) & QUEUED_MASK;
+	s32 cpu;
+
+	if (lc_percpu)
+		bpf_for(cpu, 0, nr_cpus)
+			n = (n + scx_bpf_dsq_nr_queued(LC_PCPU_DSQ(cpu))) & QUEUED_MASK;
+	return n;
+}
+
+/*
  * --split: size the LC pool. Demand per tick = CPUs' worth of LC run time
  * in the tick + one CPU per LC task waiting in the LC queue (work that
  * didn't get a CPU), averaged with weight 1/2^lc_shift per tick (~64 ms):
@@ -1019,7 +1080,7 @@ static u64 last_lat_wakeups, last_lat_late, last_lc_run_ns;
  */
 static void update_split(u64 dt)
 {
-	u64 run = lc_run_ns, queued = scx_bpf_dsq_nr_queued(LC_DSQ), sample, base, want;
+	u64 run = lc_run_ns, queued = nr_lc_queued(), sample, base, want;
 	u64 stamp = ml_stamp;
 	u32 n;
 
@@ -1073,6 +1134,19 @@ static u32 nr_fitting(u64 dsq_id, s32 cpu)
 	return n;
 }
 
+/* --lc-queue percpu: tasks waiting in the split CPUs' own LC queues. */
+static u32 nr_split_pcpu_queued(void)
+{
+	u32 n = 0;
+	s32 cpu;
+
+	bpf_for(cpu, 0, nr_cpus) {
+		if (split_rank_of(cpu) >= 0)	/* see QUEUED_MASK */
+			n = (n + scx_bpf_dsq_nr_queued(LC_PCPU_DSQ(cpu))) & QUEUED_MASK;
+	}
+	return n;
+}
+
 /*
  * Each tick, for the idle-time question in RESEARCH_LOG section 9: how many
  * split CPUs are idle, and how many of them could be running a task that
@@ -1100,7 +1174,9 @@ static void sample_idle(u64 dt)
 	if (first < 0)
 		return;
 	idle_cpus_ns += nr_idle * dt;
-	if (split)
+	if (split && lc_percpu)	/* the split CPUs' own queues: their tasks fit */
+		nr_waiting = nr_split_pcpu_queued() + nr_fitting(BATCH_DSQ, first);
+	else if (split)
 		nr_waiting = nr_fitting(LC_DSQ, first) + nr_fitting(BATCH_DSQ, first);
 	else
 		nr_waiting = nr_fitting(SHARED_DSQ, first);
@@ -1265,6 +1341,15 @@ s32 BPF_STRUCT_OPS_SLEEPABLE(kairos_init)
 		ret = scx_bpf_create_dsq(LC_DSQ, -1);
 	if (!ret)
 		ret = scx_bpf_create_dsq(BATCH_DSQ, -1);
+	if (!ret && lc_percpu) {
+		s32 cpu;
+
+		bpf_for(cpu, 0, nr_cpus) {
+			ret = scx_bpf_create_dsq(LC_PCPU_DSQ(cpu), -1);
+			if (ret)
+				break;
+		}
+	}
 	if (ret) {
 		scx_bpf_error("failed to create DSQs (%d)", ret);
 		return ret;

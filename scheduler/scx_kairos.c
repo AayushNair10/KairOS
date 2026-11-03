@@ -61,6 +61,10 @@ const char help_fmt[] =
 "                          preempts: the first LC CPU running one (CPU 0\n"
 "                          first), its previous CPU if that runs one, or the\n"
 "                          one running longest (default first)\n"
+"      --lc-queue shared|percpu  queued LC tasks wait in one queue that\n"
+"                          every LC CPU serves first (shared), or in their\n"
+"                          CPU's own queue, which other CPUs serve only when\n"
+"                          idle (percpu; an ablation) (default shared)\n"
 "      --preempt-wait-us N a woken LC task that finds no idle CPU waits up to\n"
 "                          N us for an LC CPU to free up before it preempts a\n"
 "                          borrower (default 0: preempts at once)\n"
@@ -127,6 +131,7 @@ enum {
 	OPT_NO_BORROW_PREEMPT,
 	OPT_PREEMPT_WAIT,
 	OPT_BORROWER_PICK,
+	OPT_LC_QUEUE,
 	OPT_PREEMPT_MIN_RUN,
 	OPT_KICK_IDLE,
 	OPT_NO_KICK_IDLE,
@@ -165,6 +170,7 @@ static const struct option long_opts[] = {
 	{ "no-borrow-preempt", no_argument,     NULL, OPT_NO_BORROW_PREEMPT },
 	{ "preempt-wait-us", required_argument, NULL, OPT_PREEMPT_WAIT },
 	{ "borrower-pick",   required_argument, NULL, OPT_BORROWER_PICK },
+	{ "lc-queue",        required_argument, NULL, OPT_LC_QUEUE },
 	{ "preempt-min-run-us", required_argument, NULL, OPT_PREEMPT_MIN_RUN },
 	{ "kick-idle",       no_argument,       NULL, OPT_KICK_IDLE },
 	{ "no-kick-idle",    no_argument,       NULL, OPT_NO_KICK_IDLE },
@@ -675,6 +681,16 @@ restart:
 				return 1;
 			}
 			break;
+		case OPT_LC_QUEUE:
+			if (!strcmp(optarg, "shared")) {
+				skel->rodata->lc_percpu = false;
+			} else if (!strcmp(optarg, "percpu")) {
+				skel->rodata->lc_percpu = true;
+			} else {
+				fprintf(stderr, "--lc-queue must be 'shared' or 'percpu'\n");
+				return 1;
+			}
+			break;
 		case OPT_PREEMPT_WAIT:
 			skel->rodata->preempt_wait_ns = parse_num("preempt-wait-us", optarg) * 1000;
 			break;
@@ -792,6 +808,11 @@ restart:
 				"--preempt-min-run-us needs --preempt-wait-us\n");
 			return 1;
 		}
+		if (skel->rodata->lc_percpu &&
+		    (!skel->rodata->split || skel->rodata->preempt_wait_ns)) {
+			fprintf(stderr, "--lc-queue percpu needs --split and no --preempt-wait-us\n");
+			return 1;
+		}
 		if (skel->rodata->wake_sync && !skel->rodata->split) {
 			fprintf(stderr, "--wake-sync is for --split (the modes use the kernel's rule)\n");
 			return 1;
@@ -832,7 +853,7 @@ restart:
 	       "fast_shift=%u slow_shift=%u victim=%s batch_min_run_us=%llu "
 	       "lat_target_us=%llu late_max=%.1f%% hold_ms=%llu-%llu signal_cpus=0x%llx "
 	       "split=%d split_cpus=0x%llx lc=%u-%u lc_buffer=%.2f lc_hyst=%.2f borrow_slice_us=%llu "
-	       "borrow_preempt=%d borrower_pick=%s preempt_wait_us=%llu preempt_min_run_us=%llu class=%s kick_idle=%d wake_sync=%d\n",
+	       "borrow_preempt=%d borrower_pick=%s preempt_wait_us=%llu preempt_min_run_us=%llu class=%s kick_idle=%d wake_sync=%d lc_queue=%s\n",
 	       skel->rodata->split ? "split" : skel->rodata->adaptive ? "adaptive" :
 	       skel->rodata->forced_mode == MODE_LATENCY ? "latency" : "batch",
 	       (unsigned long long)skel->rodata->lat_slice_ns / 1000,
@@ -855,7 +876,7 @@ restart:
 	       (unsigned long long)skel->rodata->preempt_wait_ns / 1000,
 	       (unsigned long long)skel->rodata->preempt_min_run_ns / 1000,
 	       skel->rodata->class_policy ? "policy" : "run", skel->rodata->kick_idle,
-	       skel->rodata->wake_sync);
+	       skel->rodata->wake_sync, skel->rodata->lc_percpu ? "percpu" : "shared");
 
 	__u64 prev[KAIROS_NR_STATS] = {};
 	struct diag diag_prev, diag_cur;
