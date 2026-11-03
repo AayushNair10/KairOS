@@ -257,6 +257,103 @@ https://syslab.cs.washington.edu/papers/latency-socc14.pdf,
 https://www.usenix.org/conference/osdi14/technical-sessions/presentation/belay,
 https://go.dev/blog/container-aware-gomaxprocs
 
+### 2.11 Systems close to KairOS's split, and why some get more batch throughput (read 2026-11-02)
+Question after E3: KairOS has the lowest latency in every block but 7–20%
+less batch throughput; which similar systems get both, and how? From
+abstracts, docs, artifact reviews, one engineering blog and the 7.0
+kernel source on this VM (paper bodies mostly not read; numbers are the
+authors' claims):
+- **Linux SCHED_IDLE** is the closest mechanism in mainline. In 7.0's
+  fair class a woken non-idle task always preempts a SCHED_IDLE one,
+  without slice protection (`check_preempt_wakeup_fair()`:
+  `PREEMPT_WAKEUP_SHORT`), and a CPU running only SCHED_IDLE tasks counts
+  as idle when a woken task looks for a CPU (`sched_idle_cpu()` in
+  `select_idle_sibling()` and the slow path). SCHED_IDLE weight is 3
+  against 1024 for nice 0. The placement rule came from Viresh Kumar's
+  2019 series: mean wakeup latency in rt-app fell from ~1,117 to ~103 µs
+  with 5 SCHED_IDLE tasks running; Song Liu saw fewer long wakeups for a
+  web service with an ffmpeg side job (LKML). That is KairOS's borrower
+  preemption without a CPU split or a pool. Never measured here: all our
+  runs used SCHED_BATCH, which only stops batch jobs from preempting.
+  → Measured in E3-idle (section 6.21): about KairOS's batch throughput
+  (+2%) at 2-3x its busy median.
+- **Kernel QoS classes in production kernels** do the same with cgroups:
+  Alibaba Cloud Linux's Group Identity (a second run queue tree, so
+  high-identity tasks wake first, and an "SMT expeller" keeps
+  low-identity ones off busy SMT siblings; vendor-reported <5%
+  interference to online tasks at >60% CPU utilization) and openEuler's `cpu.qos_level` (offline groups
+  become SCHED_IDLE and are throttled while online tasks run on the CPU;
+  from the patch titles, offline tasks are throttled only on return to
+  user space, so they don't hold kernel locks while throttled). Both use absolute priority on wakeup, not a CPU split.
+- **UFS** (Bilodeau-Savaria et al., arXiv 2605.02377, May 2026), a
+  sched_ext policy for PostgreSQL: two tiers by cgroup, background work
+  runs only on idle capacity and is preempted at once by time-sensitive
+  work, which is placed on a chosen CPU and kicked there. Against EEVDF,
+  TPC-C (bursty tier) kept 75% of its solo throughput vs 40% under EEVDF
+  in a 50:50 mix, with mean/p95 latency 4.4/11.4 ms vs 7.5/17.2 ms;
+  SCHED_RR collapsed (183/1,398 ms). Their explanation: EEVDF stacks
+  short bursty tasks on a few CPUs and balances too slowly; FIFO/RR lose
+  fairness within the tier. They also had to handle priority inversion
+  (a lock-holding background backend is boosted, from lock waits that
+  PostgreSQL reports in a BPF map).
+- **Meta's ads policy** (sched_ext, engineering blog 2026-07-13): two CPU
+  pools sized by "load-based heuristics", threads assigned by domain
+  knowledge; -28% p99 on ads retrieval vs CFS (6.4), then a further -60%
+  from user-space policy updates, and 1.6% lower CPU utilization. Pool
+  sizing, lending and preemption details aren't published.
+- **Systems with spare cores**: PerfIso (keeps a buffer of idle cores),
+  Heracles (moves cores every 15 s from tail latency vs SLO), Shenango
+  and Caladan (move cores every 5–10 µs from queueing delay; Shenango
+  kept p99.9 under 125 µs through an extreme load shift, Caladan reports
+  52 µs vs 580 ms against PARTIES during resource shifts). They get both
+  because the batch CPUs are never touched and the buffer is small when
+  reallocation is fast. Perséphone (SOSP 2021, DARC) goes further:
+  keeping a few cores idle for short requests sustains up to 2.3x more
+  load than Shinjuku and 1.3x more than Shenango, at a 5% throughput cost ("when idling is
+  ideal"). McClure et al. (NSDI 2022) compared core-allocation policies
+  (by queueing delay, arrivals or utilization): several do about equally
+  well, and for small tasks a static allocation often beats reallocating
+  at the same efficiency.
+- **Why bpfland gets 6–13% more batch than KairOS here** (from its source,
+  section 2.9, and E2k/E3 numbers): it never preempts, but its slices are
+  short (1 ms / waiting tasks) and its deadlines favour tasks that slept,
+  so a woken service thread waits at most about one short slice on any of
+  the 3 CPUs. KairOS preempts a borrower on every LC wakeup that finds no
+  idle CPU: 21% more context switches than bpfland in E3, ~0.07 CPUs more
+  idle on CPUs 0–2 and ~0.02–0.09 CPUs more server CPU.
+- **ghOSt** (SOSP 2021) and **Nest** (EuroSys 2022) are context: ghOSt's
+  claim is parity with the kernel scheduler while moving policy to user
+  space (and 5–30% better tail latency than Google's MicroQuanta for
+  Snap); Nest gains 10%–2x on light loads by keeping tasks on a few warm
+  cores, little when all cores are busy (our case).
+
+Takeaways for KairOS:
+- On 3 CPUs nothing can give the service spare cores, so the systems that
+  get both (PerfIso, Caladan) don't apply directly; what remains is how
+  cheaply the batch work is displaced. Linux's own answer is SCHED_IDLE,
+  which must be the baseline KairOS beats.
+- The cost per displacement is what bpfland avoids: it bounds waits with
+  short slices instead of preempting. A middle ground: preempt only when
+  a wait would exceed the target, otherwise shorten the borrower's slice
+  (lavd's `scx_bpf_task_set_slice()` approach).
+
+Sources: kernel/sched/fair.c (v7.0, ~/linux-src),
+https://lkml.rescloud.iu.edu/1906.3/03218.html,
+https://lkml.iu.edu/hypermail/linux/kernel/1905.1/06262.html,
+https://lab.nexedi.com/kirr/linux/-/commit/17346452b25b98acfb395d2a82ec2e4ad0cb7a01,
+https://www.alibabacloud.com/blog/600068,
+https://help.aliyun.com/en/alinux/user-guide/group-identity-feature,
+https://mailweb.openeuler.org/archives/list/kernel@openeuler.org/thread/VO6RYWGEYPV6UT2ZCMLZEFG63OMDKNI7,
+https://arxiv.org/abs/2605.02377,
+https://engineering.fb.com/2026/07/13/ml-applications/modernizing-the-meta-ads-service-with-an-open-source-kernel-scheduler/,
+https://www.usenix.org/conference/nsdi19/presentation/ousterhout,
+https://www.usenix.org/conference/osdi20/presentation/fried,
+https://www.microsoft.com/en-us/research/?p=782413,
+https://sysartifacts.github.io/sosp2021/summaries/perséphone,
+https://www.usenix.org/conference/nsdi22/presentation/mcclure,
+https://research.google/pubs/ghost-fast-and-flexible-user-space-delegation-of-linux-scheduling/,
+https://sysartifacts.github.io/eurosys2022/summaries/nest
+
 ---
 
 ## 3. Design
@@ -726,6 +823,9 @@ together with `meta.json` (git commit, kernel, VM config, parameters).
 | E2a | 2026-11-01 | e735eae | eevdf, bpfland, lavd, lavdperf, never3, kairos (as E2f) | `e2a-azure.conf`: Azure Functions 2021 trace, hours 36, 54, 284 (random, seed 1), 100x compressed, per-hour peak 3500 req/s, floor 300 (`workloads/traces/azure_phases.py`); otherwise as E2f | 5 | `results/2026-11-01-e2a-azure/` | No failed requests; calibration 1034. Reps 1 and 4 partly disturbed (VS Code and this session, 20–27% other CPU in 3 runs); leaving them out changes nothing. kairos: lowest p50 at every load level and fewest requests over 2/5/10 ms in every rep; 8% less batch than bpfland, 11% less than never3 (section 6.17) |
 | E3 | 2026-11-02 | a06db56 | eevdf, bpfland, lavd, never3, kairos (as E2a, without lavdperf) | `e3-burst.conf`: busy (3500 req/s) and quiet (500) phases of equal length L, 50% duty, one block per L = 10, 30, 100, 300, 1000, 3000, 10000 ms in shuffled order (seed 1), 2 s quiet before each block (`workloads/traces/burst_sweep.py`); otherwise as E2f | 5 | `results/2026-11-02-e3-burst/` | **Invalid.** The VM was short of memory and swapping: seconds with ≥ 10% of requests over 50 ms were 10–38% of each config's run time, against 0–6% in E2k-r and E2a (section 6.18). To be rerun |
 | E3-md | 2026-11-02 | a06db56 | eevdf | as E3, 1 s samples of /proc/vmstat (`vmstat_1s.txt`, `vmsample.sh` in the run directory) | 1 | `results/2026-11-02-e3-memdiag/` | Diagnostic. The three worst seconds (58–95% of requests over 50 ms) came with 190–940 pages swapped in per second (section 6.18) |
+| E3-r | 2026-11-02 | 91c348a (run.sh at abdb4ec; `git_dirty` true, section 6.19) | as E3 | as E3; page cache dropped before the batch and after each run (`scripts/evict_cache.py`); 1 s memory counters | 5 | `results/2026-11-02-e3-burst-171449/` | Clean apart from rep 1 (lavd-r1 swapped 34k pages; bpfland-r1 VM share 0.93); no reclaim stalls. kairos busy p50 0.90–0.98 ms at every L, lower than every baseline in 5/5 paired; 6–20% less batch MB/s (section 6.19) |
+| E7 | 2026-11-02 | 91c348a | eevdf, simple, bpfland, lavd, never3, kairos (bpfstats without eevdf) | `e7-batch.conf` (3 zstd, 10 req/s), `e7-light.conf` (500 req/s, no batch), `experiments/e7_pipe.sh` (perf bench sched pipe, 1 and 2 CPUs), `e7-bpfstats.conf` (kernel.bpf_stats_enabled=1) | 5 (bpfstats 2) | `results/2026-11-02-e7-{batch,light,pipe,bpfstats}/` | Batch only: all within ±3% of simple (rep 1 left out, disturbed by my analysis). Light load: kairos lowest p50 (1.04 ms). Pipe on 2 CPUs: kairos 15.2 µs per round trip vs simple 1.6 (ignores sync wakeups). Callbacks 4.1% of a CPU (simple 1.5, bpfland 5.5, lavd 7.3) (section 6.20) |
+| E3-idle | 2026-11-02 | 8086c1f | eevdfidle (Linux, zstd SCHED_IDLE), kairos (zstd SCHED_BATCH, as E3) | `e3-idle.conf`: E3's phases | 3 | `results/2026-11-02-e3-idle/` | All clean. kairos busy p50 0.89-1.05 ms vs 1.8-3.0 for eevdfidle, better in 3/3 at every L; eevdfidle 2% more batch over the whole run (section 6.21) |
 
 ### 5.1 Planned experiments
 | # | Experiment | Pattern | Shows |
@@ -1458,6 +1558,136 @@ at 2000 or more.
   started, while every baseline's rose. Its p95 and p99 rose with the
   episodes too (p95 163 ms in the 1 s block).
 
+### 6.19 E3 rerun: burst-length sweep (2026-11-02)
+`results/2026-11-02-e3-burst-171449/`, 25 runs, 17:14–18:24. VM not
+restarted (up 4 days); memory freed without root instead: the page cache
+was dropped before the batch (posix_fadvise DONTNEED; free 197 -> 1,250
+MB) and each run's files after it (`scripts/evict_cache.py`).
+- Clean apart from rep 1. No direct-reclaim or compaction stalls in any
+  run. Swap-ins 0–651 pages per run, except lavd-r1 (34,374 pages, 22,890
+  major faults: its first load paging back in). bpfland-r1 had VM share
+  0.93 (others 0.97–1.00). Calibration 1,035 iterations/µs. Other
+  processes under 30% of a CPU in every run.
+- Recorded commit: 91c348a with `git_dirty` true for 24 of 25 runs (the
+  first, at 17:14, recorded abdb4ec). The working tree's run.sh was
+  abdb4ec's while the batch ran; 91c348a only adds the BPF_STATS hook,
+  inactive here.
+- Medians over 5 reps (ms; busy = 3500 req/s phases, quiet = 500 req/s;
+  MB/s over the block). Leaving out rep 1 changes no ranking.
+
+| L (ms) | busy p50: kairos / bpfland / eevdf / lavd / never3 | busy >5 ms (%) | quiet >5 ms (%) | MB/s |
+|---|---|---|---|---|
+| 10 | 0.93 / 1.35 / 2.62 / 3.05 / 3.72 | 2.1 / 8.8 / 25 / 27 / 38 | 1.0 / 1.4 / 10 / 12 / 11 | 391 / 436 / 423 / 450 / 495 |
+| 30 | 0.97 / 1.33 / 3.50 / 4.57 / 3.43 | 3.4 / 10.7 / 37 / 45 / 33 | 1.6 / 0.9 / 8.8 / 6.6 / 3.8 | 391 / 444 / 444 / 467 / 459 |
+| 100 | 0.98 / 1.47 / 5.81 / 5.81 / 3.74 | 3.1 / 13.5 / 55 / 58 / 38 | 0.9 / 1.1 / 7.1 / 4.2 / 2.6 | 397 / 436 / 412 / 468 / 452 |
+| 300 | 0.95 / 1.64 / 11.29 / 10.19 / 4.98 | 5.9 / 17.9 / 71 / 78 / 50 | 1.1 / 1.5 / 4.1 / 3.4 / 2.8 | 393 / 427 / 448 / 481 / 450 |
+| 1000 | 0.90 / 1.48 / 3.91 / 4.91 / 2.97 | 3.4 / 15.0 / 43 / 49 / 27 | 1.4 / 2.3 / 1.8 / 4.1 / 1.8 | 396 / 421 / 435 / 444 / 456 |
+| 3000 | 0.93 / 1.52 / 3.55 / 4.58 / 3.25 | 3.4 / 20.5 / 37 / 44 / 35 | 1.2 / 1.4 / 1.6 / 1.5 / 1.5 | 397 / 425 / 431 / 468 / 462 |
+| 10000 | 0.92 / 1.42 / 4.32 / 5.76 / 3.26 | 4.1 / 12.6 / 45 / 58 / 31 | 1.0 / 2.8 / 1.5 / 4.1 / 1.8 | 397 / 425 / 435 / 458 / 463 |
+
+- Paired over 5 reps: kairos had the lower busy p50 than every baseline
+  in 5/5 at every L, and the smaller busy >5 ms share in 5/5, except
+  bpfland at 100 ms (3/5). Every baseline had more batch MB/s than kairos
+  in 3–5/5 at every L.
+- By time since a burst started (busy p50, all L pooled): kairos
+  0.90–1.00 ms in every bin from 0–2 ms to 3–10 s; bpfland 1.36–1.57;
+  eevdf 2.1 at 0–2 ms rising to 8.1 at 30–100 ms; lavd 2.2 rising to
+  7.3; never3 3.0–4.3 throughout.
+- After a burst ends (quiet >5 ms share, first 2 ms): eevdf 24%, lavd
+  19%, never3 17%, falling to their quiet level within ~100 ms; kairos
+  1.8% and bpfland 1.6% from the first bin on.
+- Busy p99 doesn't rank configs (as since N1): kairos's ranges from 9.7
+  to 52 ms between blocks, bpfland's from 11 to 270 ms.
+- Whole run, medians: context switches kairos 46.7k/s, bpfland 38.5k,
+  eevdf 39.7k, never3 28.8k, lavd 26.9k. Idle on CPUs 0–2: kairos 0.38
+  CPUs, others 0.26–0.31. Server CPU: kairos 1.25 CPUs, bpfland 1.23,
+  others 1.16–1.17. Rough zstd CPU (3 − idle − server): kairos 1.37,
+  bpfland 1.46, eevdf 1.53, never3 1.55, lavd 1.57; MB/s per zstd CPU is
+  within ±4% across configs, so the batch gap is CPU time zstd didn't
+  get, not slower zstd.
+- KairOS's LC pool (sched_stats.csv): 2.98 CPUs on average, at 3 CPUs in
+  97–98% of seconds in every rep; preemptions ~8,500/s on average.
+
+### 6.20 E7: scheduler overhead (2026-11-02)
+`results/2026-11-02-e7-{batch,light,pipe,bpfstats}/`, 18:25–18:55, commit
+91c348a (clean). Configs eevdf, simple (scx_simple), bpfland, lavd
+(autopilot), never3, kairos (as E3); bpfstats without eevdf. No run
+flagged by VM share (0.97–1.01) or swapping (≤ 184 pages swapped in),
+but two batch-only runs, bpfland-r1 and lavd-r1, had python3 at 89% of a
+CPU: my E3 analysis, niced and pinned to the load generator's CPU 3. They
+were the two lowest runs (607 and 590 MB/s, others 725–834), so a busy
+CPU 3 lowers zstd's throughput on CPUs 0–2 too (guess: the host gives
+the vCPU threads less, e.g. moves them to efficiency cores). Rep 1 of
+the batch-only runs is left out below. `analysis/overhead.py`.
+Median [min-max] over reps; "n/N" = reps better than simple.
+- **Batch only** (`e7-batch.conf`: 3 zstd, SCHED_BATCH, 10 req/s; zstd
+  MB/s over 15 s; reps 2–5): eevdf 825 [751–834] (3/4), simple 801
+  [783–820], lavd 796 [772–815] (1/4), never3 791 [732–813] (1/4),
+  bpfland 777 [725–812] (1/4), kairos 775 [746–854] (1/4). All within
+  ±3% of simple, inside each config's own spread. Context switches:
+  simple 4.9k/s, lavd 5.3k, never3 6.4k, kairos 6.8k, eevdf 7.5k,
+  bpfland 7.8k.
+- **Light load** (`e7-light.conf`: 500 req/s, no batch, 15 s): p50 kairos
+  1.039 ms (5/5), never3 1.053 (5/5), lavd 1.059 (5/5), bpfland 1.125
+  (3/5), simple 1.137, eevdf 1.249 (0/5). p99 4.4–4.8 ms for kairos,
+  bpfland, lavd and eevdf; never3 7.4 [3.7–35.9], simple 14.4
+  [4.5–22.1]. Server CPU per request: bpfland 1,020 µs, eevdf 1,052,
+  kairos 1,061, never3 1,085, lavd 1,094, simple 1,149 (500 µs of it is
+  the handler's work). System time 3.6–4.4% for the sched_ext
+  schedulers, 8.0% for eevdf, whose CPUs 0–2 were also busier (0.67 vs
+  0.51–0.55 CPUs).
+- **perf bench sched pipe** (`experiments/e7_pipe.sh`, 200k round
+  trips): µs per round trip pinned to CPU 0: simple 1.50, never3 1.59,
+  kairos 1.65, bpfland 1.81, eevdf 2.00, lavd 2.05. On CPUs 0,1: simple
+  1.62, never3 1.64, bpfland 2.00, eevdf 14.6, kairos 15.2, lavd 15.9.
+  (The script runs the schedulers in the same order every rep, unlike
+  run.sh.)
+- **BPF callbacks** (`e7-bpfstats.conf`: 2 zstd, 5 s phases
+  500/3500/500/3500 req/s, 2 reps, kernel.bpf_stats_enabled=1, reset to 0
+  after): all struct_ops programs together, % of one CPU from load to
+  unload: simple 1.46, never3 2.63, kairos 4.11, bpfland 5.53, lavd
+  7.28. kairos per call: dispatch 418 ns, select_cpu 363, running 164,
+  enqueue 150, runnable 131, stopping 96, quiescent 63; simple: dispatch
+  404, select_cpu 247, enqueue 92, running 39, stopping 36. kairos made
+  ~37k running() calls/s against simple's ~19k under the same load. The
+  1 ms BPF timer isn't counted (bpf_stats counts program entries only).
+
+### 6.21 E3-idle: Linux with SCHED_IDLE batch jobs (2026-11-02)
+`results/2026-11-02-e3-idle/`, 6 runs, 18:56–19:13, commit 8086c1f
+(clean). eevdfidle = Linux's scheduler with zstd as SCHED_IDLE; kairos as
+in E3 (zstd SCHED_BATCH); E3's phases; 3 reps. All runs clean: VM share
+0.98–0.99, swap-ins ≤ 40 pages, no reclaim stalls, other processes
+≤ 15% of a CPU. Calibration 1,033.
+- Medians over 3 reps (eevdfidle / kairos):
+
+| L (ms) | busy p50 | busy >5 ms (%) | quiet >5 ms (%) | MB/s |
+|---|---|---|---|---|
+| 10 | 1.82 / 0.96 | 14.2 / 4.4 | 1.7 / 2.8 | 413 / 373 |
+| 30 | 2.20 / 0.92 | 22.6 / 3.5 | 1.8 / 1.8 | 416 / 392 |
+| 100 | 2.56 / 0.98 | 28.1 / 3.2 | 4.2 / 0.8 | 405 / 405 |
+| 300 | 2.97 / 0.98 | 33.5 / 8.0 | 1.9 / 2.9 | 390 / 378 |
+| 1000 | 2.75 / 0.89 | 30.5 / 2.2 | 2.4 / 0.8 | 386 / 408 |
+| 3000 | 2.27 / 1.05 | 22.1 / 8.4 | 1.6 / 2.6 | 378 / 364 |
+| 10000 | 2.42 / 0.99 | 23.7 / 11.6 | 1.5 / 1.6 | 398 / 388 |
+
+- Paired: kairos had the lower busy p50 and the smaller busy >5 ms share
+  in 3/3 at every L. eevdfidle had more block MB/s in 14 of the 21
+  block-rep pairs; over the whole run 414 vs 405 MB/s (median; per rep
+  372/370, 414/410, 437/405).
+- By time since a burst started, eevdfidle's busy p50 is 1.5 ms in the
+  first 2 ms and 2.3–2.9 ms after 5 ms, with no rise-and-fall as under
+  SCHED_BATCH (6.19). After a burst ends there's no backlog (quiet
+  >5 ms 3.7% in the first 2 ms, against 24% for eevdf with SCHED_BATCH).
+- kairos in this batch: busy p50 0.89–1.05 ms as in E3-r. Its 10 s
+  block had a slow episode in one rep (p99 283 ms, >5 ms 11.6% vs 4.1%
+  in E3-r). Pool 2.98 CPUs, preemptions 7,700–8,600/s.
+- Whole run (medians): context switches 44.2k/s (eevdfidle) vs 45.0k;
+  idle on CPUs 0–2 0.38 vs 0.37 CPUs; server 1.20 vs 1.26 CPUs.
+- Against E3-r's eevdf with SCHED_BATCH (other batch, so rough):
+  SCHED_IDLE cut Linux's busy p50 from 2.6–11.3 ms to 1.8–3.0 ms and
+  its batch from 412–448 to 378–416 MB/s, and raised its idle time on
+  CPUs 0–2 from 0.31 to 0.38 CPUs.
+
 ## 7. Explanations and insights
 (The "why" behind each result. This is what the report is graded on.)
 
@@ -1869,6 +2099,101 @@ E2a, Azure trace replay (section 6.17):
   batch gap to bpfland (8%) is therefore at the low end of E2-final's
   7–28%.
 
+E3 rerun, burst-length sweep (section 6.19):
+- KairOS's latency doesn't depend on how long a burst lasts: its busy
+  p50 is 0.90–1.00 ms from the first 2 ms of a burst to 10 s into it,
+  and at every L from 10 ms to 10 s. The LC pool follows demand with a
+  ~64 ms average, but on 3 CPUs that reaction time doesn't matter.
+  Borrower preemption serves each wakeup at once whatever the pool size,
+  and the pool was at all 3 CPUs in 97–98% of seconds anyway, quiet
+  phases included: 500 req/s needs ~0.5 CPUs, and the 1.5-CPU buffer
+  rounds that up to 3. So zstd only ever borrowed, and was preempted
+  ~8,500 times a second on average. The expectation at the top of this
+  section ("adaptivity helps only when bursts last longer than the
+  reaction time") doesn't apply: KairOS's fast path doesn't adapt, it is
+  always on.
+- The baselines get worse as a burst goes on, then partly recover:
+  eevdf's p50 rises from 2.1 ms (0–2 ms) to ~8 ms (30–300 ms) and falls
+  to 3.2–4.3 ms after 300 ms; lavd's is similar (2.2 -> 7.3 -> ~5 ms).
+  A queue builds at the start of a burst while the batch jobs hold the
+  CPUs for whole slices. Why it shrinks again after ~300 ms is not
+  known (not investigated; guess: Go's scheduler or the batch jobs'
+  vtime/lag settles).
+- The backlog also outlives the burst: in the first 2 ms of a quiet
+  phase 17–24% of requests take over 5 ms under eevdf, lavd and never3,
+  and the share falls to the quiet level within ~100 ms. KairOS and
+  bpfland don't carry a backlog (1.6–1.8%), so their quiet phases are
+  quiet from the start.
+- bpfland is the strong baseline again. It never preempts, yet its
+  median is 1.3–1.6 ms at every L, because its waits are bounded by
+  short slices (section 2.11). KairOS's advantage over it is in the
+  slow requests (busy >5 ms 2–6% vs 9–21%) more than in the median.
+- The batch cost is the same at every L (391–397 MB/s against 421–495
+  for the baselines) and matches E2-final/E2a. It is CPU time: zstd gets
+  ~0.1–0.2 CPUs less (more idle and more server CPU), while MB/s per
+  zstd CPU-second is about the same in every config. It isn't the BPF
+  callbacks: E7 puts kairos's callbacks at ~1.5% of one CPU more than
+  never3's (0.015 CPUs), a tenth of the gap.
+- So E3 confirms what E2k and E2a suggested: what makes KairOS fast on
+  3 CPUs is preempting batch work on every service wakeup, and its price
+  is paid in context switches and lost batch CPU time. That is also
+  what Linux's SCHED_IDLE does (section 2.11). Whether KairOS's split
+  adds anything over it is the question E3-idle tests.
+
+E7, overhead (section 6.20):
+- Where nothing gets preempted, KairOS costs little. With batch jobs only,
+  every scheduler is within ±3% of scx_simple, inside the run-to-run
+  spread. At light load kairos has the lowest median (1.04 ms against
+  1.14 for scx_simple and 1.25 for Linux), probably because an LC task
+  takes its previous CPU first (`split_pick_idle()`; guess).
+- Callbacks cost more per call than scx_simple's (running() 164 vs
+  39 ns, select_cpu() 363 vs 247 ns: task-storage lookups, wait
+  accounting, the per-CPU context and the idle-CPU scan), but in total
+  4.1% of one CPU under E2's load, less than bpfland (5.5%) and lavd
+  (7.3%). Part of the difference is more calls: kairos switches tasks
+  more often (preemptions), so running()/stopping() run ~2x as often as
+  under scx_simple.
+- Sync wakeups are a real gap. When a task wakes another and is about to
+  sleep (pipes, the kernel's WF_SYNC), `scx_bpf_select_cpu_dfl()` puts
+  the wakee on the waker's CPU if that CPU has nothing queued and the
+  system isn't saturated (kernel/sched/ext_idle.c). never3 and
+  scx_simple use it and stay at 1.6 µs per pipe round trip on 2 CPUs.
+  kairos's `split_pick_idle()` ignores the flag and moves the wakee to
+  the other, idle CPU every time: 15.2 µs, like Linux and lavd. On this
+  VM waking an idle vCPU seems to cost ~7 µs per hop (guess: the host
+  has to wake the vCPU thread). Whether the gRPC path has sync wakeups
+  (Go's futex wakeups are not sync; loopback TCP may be) is not
+  measured.
+
+E3-idle, Linux with SCHED_IDLE batch jobs (section 6.21):
+- KairOS beats Linux's own mechanism for "batch only on spare CPU": at
+  about the same batch throughput (2% less over the whole run, within
+  this batch's spread), its busy median is 2–3x lower and it has 2–14x
+  fewer busy requests over 5 ms, in 3/3 reps at every burst length.
+- So the batch cost is a property of yielding to the service on every
+  wakeup, not of KairOS's code. Under Linux, SCHED_IDLE costs about as
+  much batch throughput as KairOS's borrower preemption, with the same
+  context-switch rate (44–45k/s) and the same extra idle time on the
+  server's CPUs (0.37–0.38 CPUs, vs ~0.31 with SCHED_BATCH). This weakens
+  the guess in 6.16 that the extra idle is a work-conservation gap in
+  KairOS's queues. Both implementations show it; the cause is still not
+  known.
+- Why KairOS gets more latency out of the same displacement (guess, not
+  measured): its LC tasks share one queue (LC_DSQ) that any LC CPU takes
+  from as soon as it frees up, and a woken LC task picks an idle CPU or a
+  borrower from all 3 CPUs. Linux places a woken task on one CPU's run
+  queue (`select_idle_sibling()`, which also counts SCHED_IDLE CPUs as
+  idle), and after that only load balancing (when a CPU goes idle, and
+  periodically) moves it. The 16 Go threads compete with each other in
+  per-CPU queues with 2.1 ms base slices. One shared
+  queue for 3 servers waits less than 3 separate queues (the M/M/3 vs
+  3×M/M/1 effect that Shinjuku and Concord rely on, section 2.2). A run
+  of KairOS with per-CPU LC queues would test this.
+- What this means for the claim: on 3 CPUs, KairOS's value is not the
+  pool sizing (the pool was full 98% of the time) but service-first
+  scheduling from a shared queue. It gets 2–3x lower median latency than
+  Linux's built-in option for this at the same batch throughput, and ~1.5x
+  lower than bpfland at 6–13% less batch.
 
 ---
 
@@ -1959,6 +2284,19 @@ E2a, Azure trace replay (section 6.17):
   before and after (`vmstat_before`, `vmstat_after`). summarize_run.py
   warns above 1,000 pages swapped in (a first guess). compare.py prints
   swap-ins and direct-reclaim stalls per config.
+- Waking an idle vCPU is expensive here. A pipe round trip across 2 CPUs
+  costs ~15 µs under schedulers that wake the other CPU, against 1.6 µs
+  when both tasks stay on one (E7, section 6.20), so ~7 µs per wakeup of
+  an idle CPU (guess: the host has to run the vCPU thread again). On bare
+  metal this is typically a few µs or less (not measured here), so
+  placement choices that wake idle CPUs cost more in this VM.
+- Any CPU-heavy process during a run disturbs it, even niced and pinned
+  to the load generator's CPU 3. An analysis at ~90% of a CPU there cut
+  zstd's throughput on CPUs 0–2 by ~20–25% in two E7 runs (section
+  6.20). Analyses only between batches.
+- Three CPUs for service and batch. In E3 KairOS's LC pool was at all 3
+  CPUs in 97–98% of seconds, so pool sizing (reactive or predicted) was
+  never exercised. A machine with spare CPUs is needed to test it.
 
 ---
 
@@ -1991,6 +2329,9 @@ E2a, Azure trace replay (section 6.17):
   `bpftool prog show`: run_time_ns / run_cnt)? Does skipping it when load is
   known to be high save anything measurable, or is the shared DSQ's lock the
   bigger cost at high load?
+  → E7 (section 6.20): kairos's select_cpu() takes 363 ns per call
+  (its own idle scan), scx_simple's 247 ns (the kernel's search); all
+  callbacks together 4.1% of a CPU. Skipping the search not tried.
 - (Decide before E1.) How to keep the load generator out of the scheduler's
   way: its own CPU (taskset; server and batch on the other 3), real-time
   priority (chrt; needs root), or run it on the Mac host?
@@ -2011,6 +2352,20 @@ E2a, Azure trace replay (section 6.17):
   less CPU time? Idle kicks don't change it. Next check: count, per CPU,
   time idle while LC_DSQ or BATCH_DSQ holds a task (`ops.update_idle`),
   and preemptions per CPU.
+  → E3-idle (section 6.21): Linux with SCHED_IDLE batch jobs shows the
+  same extra idle (0.38 CPUs, vs 0.31 with SCHED_BATCH), so it comes
+  with preempting batch work on wakeups, not only with KairOS's queues.
+  The per-CPU counts are still to do.
+- (E3-r, E7, E3-idle; improvement directions, in order.) (1) Which
+  wakeups cause kairos's ~8,500 preemptions/s, and how long does the
+  preempting task then run? Guess: many are Go runtime threads that run
+  briefly. (2) Does preempting a borrower only after a woken LC task has
+  waited some time D keep most of the latency at less batch cost (a
+  latency-for-throughput knob)? (3) Do sync wakeups matter beyond the
+  pipe benchmark (Redis)? (4) Is the shared LC queue why kairos beats
+  SCHED_IDLE (per-CPU LC queues as an ablation)? (5) Does the victim
+  choice (CPU 0 first now) matter? (6) On a machine with spare CPUs,
+  does pool sizing matter?
 
 ---
 
@@ -2748,3 +3103,35 @@ threshold, 1,000 pages, is a guess to refine.
 (section 4), so a slow-pool variant of kairos was not tried.
 **Next:** Free the VM's memory (restart the VM, or swapoff/swapon), then
 rerun E3. Then E7 and Redis.
+
+### 2026-11-02 — E3 rerun, E7 overhead, E3-idle; similar systems
+**Did:** Freed the VM's memory without root instead of restarting it: the
+page cache was dropped before the batch and each run's files after it
+(`scripts/evict_cache.py`). Reran E3 (5 reps). Ran E7: batch-only and
+light-load configs, `perf bench sched pipe` on 1 and 2 CPUs, and the BPF
+callback cost with `kernel.bpf_stats_enabled=1` (reset to 0 after);
+`analysis/overhead.py` summarizes it. Read about systems close to the
+split (section 2.11). run.sh can now run the batch jobs as SCHED_IDLE
+(`BATCH_POLICY=idle`, per entry `BATCH_POLICY_<label>`), and E3-idle
+compared Linux with SCHED_IDLE zstd against kairos (3 reps).
+**Found:** Sections 6.19–6.21. kairos's busy p50 is 0.90–0.98 ms at
+every burst length from 10 ms to 10 s, lower than every baseline in 5/5
+paired, at 6–20% less batch throughput. Its LC pool was at 3 CPUs in
+97–98% of seconds, with ~8,500 preemptions/s. Where nothing is preempted
+the overhead is small (batch only within ±3% of scx_simple; callbacks
+4.1% of a CPU), but kairos ignores sync wakeups (pipe on 2 CPUs: 15.2
+vs 1.6 µs per round trip). Linux with SCHED_IDLE batch jobs gets about
+kairos's batch throughput (+2%) at 2–3x its busy median.
+**Interpretation:** Section 7. The batch cost comes with preempting batch
+work on every service wakeup, in Linux too. On 3 CPUs KairOS's value is
+service-first scheduling from one shared queue (guess, not tested), not
+pool sizing.
+**Decisions:** Rep 1 of E7's batch-only runs is left out (my analysis
+disturbed it); analyses run only between batches. Linux with SCHED_IDLE
+batch jobs (eevdfidle) joins the baselines.
+**Problems:** 24 of 25 E3-r runs recorded `git_dirty` (the inactive
+BPF_STATS hook in run.sh). pdftotext isn't installed, so paper bodies
+weren't read (abstracts and web pages instead).
+**Next:** The improvement directions in section 9, in order: what
+triggers the preemptions, delayed preemption, sync wakeups, per-CPU LC
+queues, victim choice. Then Redis, and a machine with more CPUs.

@@ -20,7 +20,8 @@ Median [min-max] over reps; then, against --ref, in how many reps each
 config was better (higher MB/s, lower latency or cost).
 
 Usage: analysis/overhead.py [--batch DIR] [--light DIR] [--pipe DIR]
-       [--bpf DIR] [--ref simple]
+       [--bpf DIR] [--ref simple] [--skip-reps N ...]
+(--skip-reps leaves out whole reps of the --batch, --light and --bpf runs)
 """
 import argparse
 import csv
@@ -102,17 +103,19 @@ def main():
     ap.add_argument("--pipe")
     ap.add_argument("--bpf")
     ap.add_argument("--ref", default="simple")
+    ap.add_argument("--skip-reps", type=int, nargs="+", default=[])
     a = ap.parse_args()
+    by_config = lambda d: sorted(aggregate.runs_by_config(d, a.skip_reps).items())  # noqa: E731
 
     if a.batch:
-        runs = {n: [batch_run(d) for d in ds] for n, ds in sorted(aggregate.runs_by_config(a.batch).items())}
+        runs = {n: [batch_run(d) for d in ds] for n, ds in by_config(a.batch)}
         table(f"batch only ({a.batch}): zstd MB/s, context switches/s, system %, "
               "server CPUs busy (CPUs), VM share", runs, a.ref,
               [("mbs", "MB/s", "{:.0f}"), ("ctxt", "ctx/s", "{:.0f}"), ("sys", "sys %", "{:.1f}"),
                ("busy", "busy CPUs", "{:.2f}"), ("vm", "VM share", "{:.2f}")],
               {"mbs": 1, "ctxt": -1, "sys": -1})
     if a.light:
-        runs = {n: [light_run(d) for d in ds] for n, ds in sorted(aggregate.runs_by_config(a.light).items())}
+        runs = {n: [light_run(d) for d in ds] for n, ds in by_config(a.light)}
         table(f"light load ({a.light}): latency ms, context switches/s, system %, "
               "server CPUs busy, server CPU µs per request, VM share", runs, a.ref,
               [("p50", "p50 ms", "{:.3f}"), ("p99", "p99 ms", "{:.2f}"), ("ctxt", "ctx/s", "{:.0f}"),
@@ -132,7 +135,7 @@ def main():
     if a.bpf:
         print(f"== BPF callbacks ({a.bpf}): calls/s and ns per call (median over reps); "
               "all callbacks as % of one CPU")
-        for n, ds in sorted(aggregate.runs_by_config(a.bpf).items()):
+        for n, ds in by_config(a.bpf):
             got = [r for r in (bpf_run(d) for d in ds) if r]
             if not got:
                 print(f"  {n:10s} no bpf_progs.json with run counts")
