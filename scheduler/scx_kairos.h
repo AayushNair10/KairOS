@@ -34,6 +34,7 @@ enum kairos_stat {
 	STAT_KICK,		/* queued task woke an idle CPU (kick_idle) */
 	STAT_DELAYED,		/* --preempt-wait-us: LC wakeup waited instead of preempting */
 	STAT_LATE_PREEMPT,	/* ... and was still waiting after it: borrower preempted */
+	STAT_SYNC,		/* --wake-sync: woken task queued on the waker's CPU */
 	KAIROS_NR_STATS,	/* not NR_STATS: vmlinux.h has one */
 };
 

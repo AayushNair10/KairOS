@@ -148,6 +148,16 @@ const volatile u32 avg_run_shift = 2;
  */
 const volatile bool kick_idle;
 /*
+ * Sync wakeups (--wake-sync; RESEARCH_LOG section 9, direction 3). With
+ * SCX_WAKE_SYNC the waker says it is about to sleep (e.g. a pipe or
+ * socket write followed by a read). scx_bpf_select_cpu_dfl() then keeps
+ * the wakee on the waker's CPU when that CPU has nothing queued and the
+ * system isn't saturated, instead of waking another, idle CPU; --split's
+ * own CPU choice ignored the flag (E7: 15.2 vs 1.6 us per pipe round trip
+ * on 2 CPUs). Off by default, so earlier configs keep their behaviour.
+ */
+const volatile bool wake_sync;
+/*
  * ML prediction (--ml-model): the loader writes ml_demand and then ml_stamp
  * (= nr_timer_ticks at the time). A prediction at most ml_ttl_ticks old can
  * raise the LC demand the pool is sized from, never lower it. 0 = off.
@@ -170,6 +180,9 @@ UEI_DEFINE(uei);
 #endif
 #ifndef SCHED_IDLE
 #define SCHED_IDLE 5
+#endif
+#ifndef PF_EXITING
+#define PF_EXITING 0x00000004	/* include/linux/sched.h */
 #endif
 
 static u64 vtime_now;
@@ -555,14 +568,69 @@ static s32 split_pick_borrower(struct task_struct *p)
 	return can_lc ? -1 : any;
 }
 
-static s32 split_select_cpu(struct task_struct *p, s32 prev_cpu)
+/* Can idle CPU @cpu be claimed for @p (of class @batch), in @p's pool? */
+static bool claim_in_pool(struct task_struct *p, s32 cpu, bool batch)
+{
+	return cpu >= 0 && bpf_cpumask_test_cpu(cpu, p->cpus_ptr) && lc_cpu(cpu) != batch &&
+	       scx_bpf_test_and_clear_cpu_idle(cpu);
+}
+
+/*
+ * --wake-sync: may @p (of class @batch), woken by a sync wakeup, run on
+ * the waker's CPU @cpu? scx_bpf_select_cpu_dfl()'s rule
+ * (kernel/sched/ext_idle.c): if @p may run there, nothing is queued
+ * there, the waker isn't exiting and some CPU is idle (the system isn't
+ * saturated). Here also only if @cpu is in @p's pool and runs a task of
+ * @p's class, so an LC task doesn't queue behind a borrower.
+ */
+static bool sync_ok(struct task_struct *p, s32 cpu, bool batch)
+{
+	struct task_struct *waker = bpf_get_current_task_btf();
+	const struct cpumask *idle;
+	struct cpu_ctx *cctx;
+	bool any_idle;
+
+	if (!bpf_cpumask_test_cpu(cpu, p->cpus_ptr) || lc_cpu(cpu) == batch ||
+	    (waker->flags & PF_EXITING) || scx_bpf_dsq_nr_queued(SCX_DSQ_LOCAL_ON | cpu))
+		return false;
+	cctx = lookup_cpu_ctx(cpu);
+	if (!cctx || !cctx->running_at || cctx->batch != batch)
+		return false;
+	idle = scx_bpf_get_idle_cpumask();
+	any_idle = !bpf_cpumask_empty(idle);
+	scx_bpf_put_idle_cpumask(idle);
+	return any_idle;
+}
+
+static s32 split_select_cpu(struct task_struct *p, s32 prev_cpu, u64 wake_flags)
 {
 	struct task_ctx *tctx = bpf_task_storage_get(&task_ctxs, p, 0, 0);
 	bool batch = task_batch(p, tctx);
-	s32 cpu = split_pick_idle(p, prev_cpu, batch);
+	s32 cpu;
 
+	/*
+	 * Sync wakeup: as the kernel, @prev_cpu if it is idle, else the
+	 * waker's CPU (busy, so not claimed: @p runs there once the waker
+	 * sleeps), before looking for other idle CPUs. The kernel also
+	 * requires @prev_cpu to share a cache with the waker; all CPUs here
+	 * do.
+	 */
+	if (wake_sync && (wake_flags & SCX_WAKE_SYNC)) {
+		if (claim_in_pool(p, prev_cpu, batch)) {
+			cpu = prev_cpu;
+			goto local;
+		}
+		cpu = bpf_get_smp_processor_id();
+		if (sync_ok(p, cpu, batch)) {
+			stat_inc(STAT_SYNC);
+			scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, split_slice(batch, cpu), 0);
+			return cpu;
+		}
+	}
+	cpu = split_pick_idle(p, prev_cpu, batch);
 	if (cpu < 0)
 		return prev_cpu;	/* enqueue() decides */
+local:
 	stat_inc(STAT_LOCAL);
 	scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, split_slice(batch, cpu), 0);
 	return cpu;
@@ -662,7 +730,7 @@ s32 BPF_STRUCT_OPS(kairos_select_cpu, struct task_struct *p, s32 prev_cpu, u64 w
 	s32 cpu;
 
 	if (split)
-		return split_select_cpu(p, prev_cpu);
+		return split_select_cpu(p, prev_cpu, wake_flags);
 	cpu = scx_bpf_select_cpu_dfl(p, prev_cpu, wake_flags, &is_idle);
 	if (is_idle) {
 		stat_inc(STAT_LOCAL);

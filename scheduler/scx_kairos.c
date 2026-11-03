@@ -66,6 +66,9 @@ const char help_fmt[] =
 "      --kick-idle         wake an idle CPU when a task is queued in a shared\n"
 "                          queue (off by default: no gain measured in E2k)\n"
 "      --no-kick-idle      the default; kept so older configs still run\n"
+"      --wake-sync         --split: on a sync wakeup, put the woken task on the\n"
+"                          waker's CPU as the kernel's default does (if that\n"
+"                          CPU has nothing queued and some CPU is idle)\n"
 "      --ml-trace FILE     --split: every --ml-period-ms, write the LC demand\n"
 "                          sample (training data for ml/train_burst.py)\n"
 "      --ml-model FILE     --split: predict LC demand with this tree (from\n"
@@ -122,6 +125,7 @@ enum {
 	OPT_PREEMPT_MIN_RUN,
 	OPT_KICK_IDLE,
 	OPT_NO_KICK_IDLE,
+	OPT_WAKE_SYNC,
 	OPT_ML_TRACE,
 	OPT_ML_MODEL,
 	OPT_ML_PERIOD,
@@ -158,6 +162,7 @@ static const struct option long_opts[] = {
 	{ "preempt-min-run-us", required_argument, NULL, OPT_PREEMPT_MIN_RUN },
 	{ "kick-idle",       no_argument,       NULL, OPT_KICK_IDLE },
 	{ "no-kick-idle",    no_argument,       NULL, OPT_NO_KICK_IDLE },
+	{ "wake-sync",       no_argument,       NULL, OPT_WAKE_SYNC },
 	{ "ml-trace",        required_argument, NULL, OPT_ML_TRACE },
 	{ "ml-model",        required_argument, NULL, OPT_ML_MODEL },
 	{ "ml-period-ms",    required_argument, NULL, OPT_ML_PERIOD },
@@ -521,7 +526,7 @@ static const char csv_header[] =
 	"fast_load,slow_load,wake_rate,wait_avg_us,wait_max_us,mode,timer_ticks,"
 	"lat_wakeups,lat_late,late_frac,mode_switches,latency_ms,"
 	"nr_lc,lc_cpus,lc_demand,lc_changes,borrow,ml_fresh,ml_raised,kick,"
-	"idle_cpus,idle_queued,preempt_cpus,delayed,late_preempt\n";
+	"idle_cpus,idle_queued,preempt_cpus,delayed,late_preempt,sync\n";
 
 int main(int argc, char **argv)
 {
@@ -664,6 +669,9 @@ restart:
 		case OPT_NO_KICK_IDLE:
 			skel->rodata->kick_idle = false;
 			break;
+		case OPT_WAKE_SYNC:
+			skel->rodata->wake_sync = true;
+			break;
 		case OPT_LC_SHIFT:
 			skel->rodata->lc_shift = parse_num("lc-shift", optarg);
 			break;
@@ -766,6 +774,10 @@ restart:
 				"--preempt-min-run-us needs --preempt-wait-us\n");
 			return 1;
 		}
+		if (skel->rodata->wake_sync && !skel->rodata->split) {
+			fprintf(stderr, "--wake-sync is for --split (the modes use the kernel's rule)\n");
+			return 1;
+		}
 	}
 
 	SCX_OPS_LOAD(skel, kairos_ops, scx_kairos, uei);
@@ -802,7 +814,7 @@ restart:
 	       "fast_shift=%u slow_shift=%u victim=%s batch_min_run_us=%llu "
 	       "lat_target_us=%llu late_max=%.1f%% hold_ms=%llu-%llu signal_cpus=0x%llx "
 	       "split=%d split_cpus=0x%llx lc=%u-%u lc_buffer=%.2f lc_hyst=%.2f borrow_slice_us=%llu "
-	       "borrow_preempt=%d preempt_wait_us=%llu preempt_min_run_us=%llu class=%s kick_idle=%d\n",
+	       "borrow_preempt=%d preempt_wait_us=%llu preempt_min_run_us=%llu class=%s kick_idle=%d wake_sync=%d\n",
 	       skel->rodata->split ? "split" : skel->rodata->adaptive ? "adaptive" :
 	       skel->rodata->forced_mode == MODE_LATENCY ? "latency" : "batch",
 	       (unsigned long long)skel->rodata->lat_slice_ns / 1000,
@@ -822,7 +834,8 @@ restart:
 	       skel->rodata->borrow_preempt,
 	       (unsigned long long)skel->rodata->preempt_wait_ns / 1000,
 	       (unsigned long long)skel->rodata->preempt_min_run_ns / 1000,
-	       skel->rodata->class_policy ? "policy" : "run", skel->rodata->kick_idle);
+	       skel->rodata->class_policy ? "policy" : "run", skel->rodata->kick_idle,
+	       skel->rodata->wake_sync);
 
 	__u64 prev[KAIROS_NR_STATS] = {};
 	struct diag diag_prev, diag_cur;
@@ -923,15 +936,15 @@ restart:
 			       "delayed %llu late_preempt %llu\n",
 			       skel->bss->nr_lc, lc_cpus, lc_demand, lc_ch - prev_lc_ch,
 			       d[STAT_BORROW], d[STAT_DELAYED], d[STAT_LATE_PREEMPT]);
-		printf("  idle cpus %.2f (%.2f with a task queued) preempted per cpu %s\n",
-		       idle_cpus, idle_queued, pre_cpus);
+		printf("  idle cpus %.2f (%.2f with a task queued) preempted per cpu %s sync %llu\n",
+		       idle_cpus, idle_queued, pre_cpus, d[STAT_SYNC]);
 		fflush(stdout);
 
 		if (csv) {
 			clock_gettime(CLOCK_REALTIME, &ts);
 			fprintf(csv, "%.3f,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%lld,%ld,%.3f,%.3f,%llu,"
 				"%.1f,%.1f,%u,%llu,%llu,%llu,%.4f,%llu,%.1f,%u,%.3f,%.3f,%llu,%llu,%llu,%llu,%llu,"
-				"%.3f,%.3f,%s,%llu,%llu\n",
+				"%.3f,%.3f,%s,%llu,%llu,%llu\n",
 				ts.tv_sec + ts.tv_nsec / 1e9, d[STAT_LOCAL], d[STAT_GLOBAL],
 				d[STAT_PREEMPT], d[STAT_PREEMPT_BATCH], d[STAT_NO_VICTIM],
 				d[STAT_TO_BATCH], d[STAT_FROM_BATCH],
@@ -943,7 +956,7 @@ restart:
 				skel->bss->nr_lc, lc_cpus, lc_demand, lc_ch - prev_lc_ch,
 				d[STAT_BORROW], mlf - prev_mlf, mlr - prev_mlr, d[STAT_KICK],
 				idle_cpus, idle_queued, pre_cpus, d[STAT_DELAYED],
-				d[STAT_LATE_PREEMPT]);
+				d[STAT_LATE_PREEMPT], d[STAT_SYNC]);
 			fflush(csv);
 		}
 		if (diag_csv) {
