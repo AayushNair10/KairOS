@@ -11,7 +11,7 @@ USER_HZ = 100  # unit of the CPU times in /proc/stat and /proc/<pid>/stat
 
 # Processes that belong to the experiment itself; everything else counts as
 # "other" CPU use (noise).
-EXPERIMENT_COMMS = {"grpcserver", "loadgen", "zstd", "zstd_loop.sh", "scx_kairos"}
+EXPERIMENT_COMMS = {"grpcserver", "redis-server", "loadgen", "zstd", "zstd_loop.sh", "scx_kairos"}
 
 
 def load_summary(run_dir):
@@ -189,7 +189,8 @@ def sched_stats(run_dir, start_ns, end_ns):
                                  "to_batch", "from_batch", "local", "global",
                                  "no_victim", "lat_wakeups", "lat_late", "late_frac",
                                  "mode_switches", "latency_ms", "lc_cpus", "lc_demand",
-                                 "borrow", "kick") if k in rows[0]}
+                                 "borrow", "kick", "idle_cpus", "idle_queued", "delayed",
+                                 "late_preempt", "sync") if k in rows[0]}
 
 
 def latency_with_failures(run_dir, nphases):

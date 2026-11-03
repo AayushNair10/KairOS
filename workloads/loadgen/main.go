@@ -1,4 +1,5 @@
-// loadgen is an open-loop load generator for grpcserver.
+// loadgen is an open-loop load generator for grpcserver, or for Redis
+// servers with -redis (redis.go).
 //
 // Open loop: requests are sent at times fixed in advance, whether or not
 // earlier requests have been answered. A closed-loop client, which waits
@@ -50,6 +51,8 @@ var (
 	timeout = flag.Duration("timeout", 5*time.Second, "per-request deadline")
 	outPath = flag.String("out", "requests.csv", "per-request CSV output")
 	sumPath = flag.String("summary", "", "per-phase summary JSON output (optional)")
+	redisF  = flag.String("redis", "", "Redis mode: comma-separated server addresses; each request is a GET of a random key, -conns connections per server")
+	keysF   = flag.Int("redis-keys", 10000, "Redis mode: keys are key:0 .. key:N-1")
 )
 
 type phase struct {
@@ -157,17 +160,25 @@ func main() {
 	}
 	offs, phaseOf := schedule(phases, *seed)
 
-	clients := make([]pb.WorkClient, *conns)
-	for i := range clients {
-		cc, err := grpc.NewClient(*addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-		if err != nil {
-			log.Fatal(err)
+	var clients []pb.WorkClient
+	var rc *redisClient
+	if *redisF != "" {
+		if rc, err = newRedisClient(*redisF, *conns, *keysF, *seed); err != nil {
+			log.Fatalf("redis: %v", err)
 		}
-		defer cc.Close()
-		clients[i] = pb.NewWorkClient(cc)
-	}
-	if err := warmup(clients); err != nil {
-		log.Fatalf("server not reachable at %s: %v", *addr, err)
+	} else {
+		clients = make([]pb.WorkClient, *conns)
+		for i := range clients {
+			cc, err := grpc.NewClient(*addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+			if err != nil {
+				log.Fatal(err)
+			}
+			defer cc.Close()
+			clients[i] = pb.NewWorkClient(cc)
+		}
+		if err := warmup(clients); err != nil {
+			log.Fatalf("server not reachable at %s: %v", *addr, err)
+		}
 	}
 
 	// The sender loop runs on its own OS thread, so the blocking
@@ -186,16 +197,26 @@ func main() {
 
 	recs := make([]record, len(offs))
 	var wg sync.WaitGroup
+	if rc != nil {
+		rc.start(t0, recs, &wg, *timeout)
+	}
 	for i, off := range offs {
 		sleepUntil(base + off)
 		recs[i].sentNs = int64(time.Since(t0))
 		wg.Add(1)
+		if rc != nil {
+			rc.send(i) // a write on this thread; the readers call wg.Done
+			continue
+		}
 		go func() {
 			defer wg.Done()
 			send(clients[i%len(clients)], i, t0, &recs[i])
 		}()
 	}
 	wg.Wait()
+	if rc != nil {
+		rc.stop()
+	}
 	runtime.UnlockOSThread()
 	cpuS, wallS := cpuTime()-cpu0, time.Since(t0).Seconds()
 
@@ -203,6 +224,9 @@ func main() {
 		log.Fatal(err)
 	}
 	sum := summarize(phases, offs, phaseOf, recs, t0)
+	if rc != nil {
+		sum.Addr = "redis " + *redisF
+	}
 	sum.Gomaxprocs = runtime.GOMAXPROCS(0)
 	sum.LoadWallS, sum.LoadCPUS = wallS, cpuS
 	printSummary(sum)

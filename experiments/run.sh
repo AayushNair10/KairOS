@@ -13,6 +13,7 @@
 #   loadgen.json, .log   per-phase latency summary
 #   batch_<i>.csv        one row per completed zstd pass, per batch job
 #   server.log           grpcserver output
+#   redis_<i>.log        with SERVICE=redis: each redis-server's output
 #   sched.log            scheduler loader output (sched_ext schedulers only)
 #   proc_stat_before/after  /proc/stat around the load (CPU time, ctx switches)
 #   procs_before/after   every process's /proc/<pid>/stat around the load, to
@@ -30,6 +31,11 @@
 #                        every wait for a CPU and every run by task group
 #                        (scx_kairos --diag); the server then also logs Go's
 #                        goroutine scheduling latencies ("schedlat" lines)
+#
+# SERVICE=redis replaces grpcserver with REDIS_INSTANCES redis-server
+# processes (ports REDIS_PORT, +1, ...), each filled with REDIS_KEYS keys of
+# REDIS_VALUE_BYTES (DEBUG POPULATE); every request is then a GET of a
+# random key (loadgen -redis), CONNS connections per instance.
 #
 # CPU pinning: the server and batch jobs run on SUT_CPUS and the load
 # generator on LOADGEN_CPUS (default 0-2 and 3), so the load generator doesn't
@@ -93,6 +99,15 @@ SERVER_GOMAXPROCS=${SERVER_GOMAXPROCS:-0}
 # comma-separated); empty = off. The server names its worker threads
 # "grpcworker"; its other threads keep "grpcserver".
 DIAG_COMM=${DIAG_COMM:-}
+SERVICE=${SERVICE:-grpc}
+REDIS_INSTANCES=${REDIS_INSTANCES:-3}
+REDIS_PORT=${REDIS_PORT:-6390}
+REDIS_KEYS=${REDIS_KEYS:-10000}
+REDIS_VALUE_BYTES=${REDIS_VALUE_BYTES:-1024}
+case $SERVICE in
+grpc | redis) ;;
+*) echo "SERVICE must be grpc or redis, not '$SERVICE'" >&2; exit 1 ;;
+esac
 # Scheduling policy of the batch jobs: "normal" (SCHED_OTHER), "batch"
 # (SCHED_BATCH) or "idle" (SCHED_IDLE), set with chrt and inherited by zstd.
 # Linux's scheduler and scx_kairos --class policy use it to tell batch work
@@ -124,7 +139,8 @@ LOADGEN_PIN=()
 STATE=/sys/kernel/sched_ext/state
 SCHED_PID=
 SCHED_COMM=	# process name of the running scheduler, for pkill
-SERVER_PID=
+SERVER_PIDS=()
+LOADGEN_TARGET=()	# loadgen options naming the service, set by start_service
 BATCH_PIDS=()
 
 log() { echo "[$(date +%T)] $*" >&2; }
@@ -240,11 +256,44 @@ stop_batch() {
 cleanup() {
 	set +e
 	stop_batch
-	[ -n "$SERVER_PID" ] && stop_pid "$SERVER_PID"
+	for pid in "${SERVER_PIDS[@]}"; do
+		stop_pid "$pid"
+	done
 	stop_sched
 }
 trap cleanup EXIT
 trap 'log "interrupted"; exit 130' INT TERM
+
+# start_service <run-dir>: grpcserver, or the redis-server instances filled
+# with keys; sets SERVER_PIDS and LOADGEN_TARGET.
+start_service() {
+	if [ "$SERVICE" = grpc ]; then
+		GODEBUG=$SERVER_GODEBUG "${SUT_PIN[@]}" "$BIN/grpcserver" -addr "$ADDR" -workers "$WORKERS" \
+			-work-us "$WORK_US" -iters-per-us "$ITERS_PER_US" -gomaxprocs "$SERVER_GOMAXPROCS" \
+			${DIAG_COMM:+-schedlat} > "$1/server.log" 2>&1 &
+		SERVER_PIDS=($!)
+		LOADGEN_TARGET=(-addr "$ADDR" -work-us "$WORK_US")
+		return
+	fi
+	local i port addrs=
+	SERVER_PIDS=()
+	for ((i = 0; i < REDIS_INSTANCES; i++)); do
+		port=$((REDIS_PORT + i))
+		"${SUT_PIN[@]}" redis-server --port "$port" --bind 127.0.0.1 --save '' --appendonly no \
+			--enable-debug-command local > "$1/redis_$i.log" 2>&1 &
+		SERVER_PIDS+=($!)
+		addrs+=${addrs:+,}127.0.0.1:$port
+	done
+	for ((i = 0; i < REDIS_INSTANCES; i++)); do
+		port=$((REDIS_PORT + i))
+		for _ in $(seq 50); do
+			[ "$(redis-cli -p "$port" ping 2> /dev/null)" = PONG ] && break
+			sleep 0.1
+		done
+		redis-cli -p "$port" DEBUG POPULATE "$REDIS_KEYS" key "$REDIS_VALUE_BYTES" > /dev/null
+	done
+	LOADGEN_TARGET=(-redis "$addrs" -redis-keys "$REDIS_KEYS")
+}
 
 # snapshot <run-dir> <before|after>: system-wide and per-process CPU time,
 # and memory counters. (Processes can exit while cat reads /proc, hence the
@@ -281,25 +330,24 @@ run_one() {
 	start_sched "$sched" "$dir"
 	"$ROOT/scripts/meta.sh" "$dir" "$entry" "$WORKLOAD batch_policy=$policy" > /dev/null
 
-	GODEBUG=$SERVER_GODEBUG "${SUT_PIN[@]}" "$BIN/grpcserver" -addr "$ADDR" -workers "$WORKERS" -work-us "$WORK_US" \
-		-iters-per-us "$ITERS_PER_US" -gomaxprocs "$SERVER_GOMAXPROCS" \
-		${DIAG_COMM:+-schedlat} > "$dir/server.log" 2>&1 &
-	SERVER_PID=$!
+	start_service "$dir"
 	start_batch "$dir"
 	sleep "$BATCH_WARMUP_S" # let the batch jobs reach a steady state
 
 	"$ROOT/scripts/vmsample.sh" > "$dir/vmstat_1s.txt" &
 	local vmsample_pid=$!
 	snapshot "$dir" before
-	GOMAXPROCS=$LOADGEN_GOMAXPROCS "${LOADGEN_PIN[@]}" "$BIN/loadgen" -addr "$ADDR" \
-		-phases "$PHASES" -work-us "$WORK_US" -conns "$CONNS" -seed "$SEED" \
+	GOMAXPROCS=$LOADGEN_GOMAXPROCS "${LOADGEN_PIN[@]}" "$BIN/loadgen" "${LOADGEN_TARGET[@]}" \
+		-phases "$PHASES" -conns "$CONNS" -seed "$SEED" \
 		-out "$dir/requests.csv" -summary "$dir/loadgen.json" 2> "$dir/loadgen.log"
 	snapshot "$dir" after
 	kill "$vmsample_pid"
 
 	stop_batch
-	stop_pid "$SERVER_PID"
-	SERVER_PID=
+	for pid in "${SERVER_PIDS[@]}"; do
+		stop_pid "$pid"
+	done
+	SERVER_PIDS=()
 	if [ "${BPF_STATS:-0}" = 1 ] && [ -n "$SCHED_PID" ]; then
 		sudo bpftool prog show --json > "$dir/bpf_progs.json" 2> /dev/null || true
 	fi
@@ -338,7 +386,10 @@ if [ -z "$ITERS_PER_US" ]; then
 		exit 1
 	fi
 fi
-WORKLOAD="workers=$WORKERS work_us=$WORK_US iters_per_us=$ITERS_PER_US phases=$PHASES"
+WORKLOAD="service=$SERVICE workers=$WORKERS work_us=$WORK_US iters_per_us=$ITERS_PER_US phases=$PHASES"
+if [ "$SERVICE" = redis ]; then
+	WORKLOAD+=" redis_instances=$REDIS_INSTANCES redis_keys=$REDIS_KEYS redis_value_bytes=$REDIS_VALUE_BYTES"
+fi
 WORKLOAD+=" conns=$CONNS seed=$SEED batch_jobs=$BATCH_JOBS"
 WORKLOAD+=" batch_input=$(basename "$BATCH_INPUT") zstd_level=$ZSTD_LEVEL"
 WORKLOAD+=" batch_warmup_s=$BATCH_WARMUP_S"

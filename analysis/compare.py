@@ -49,7 +49,9 @@ def main():
             lat = lambda k: [r[k] / 1000 for r in rows]  # noqa: E731
             sched = [r["sched"] for r in rows if r["sched"]]
             load = f"{statistics.median(s['slow_load'] for s in sched):5.2f}" if sched else "    -"
-            pre = f"{statistics.median(s['preempt'] for s in sched):9.0f}" if sched else "        -"
+            # immediate preemptions plus the delayed-preemption timer's
+            pre = (f"{statistics.median(s['preempt'] + s.get('late_preempt', 0) for s in sched):9.0f}"
+                   if sched else "        -")
             print(f"  {n:8} {med_range(lat('all_p50_us')):>18} {med_range(lat('all_p99_us'), '{:.0f}'):>22} "
                   f"{med_range(lat('all_p999_us'), '{:.0f}'):>22} "
                   f"{statistics.median(r['errors'] for r in rows):5.0f} "
@@ -67,8 +69,9 @@ def main():
         sts = [runlib.system_stats(d) for d in groups[n]]
         oth = [runlib.other_cpu(d) for d in groups[n]]
         other = [100 * sum(s for _, s in o) / st["elapsed_s"] for o, st in zip(oth, sts)]
-        server = [100 * runlib.proc_cpu(d, "grpcserver") / st["elapsed_s"]
-                  for d, st in zip(groups[n], sts)]
+        # the service: grpcserver, or the redis-server instances
+        server = [100 * (runlib.proc_cpu(d, "grpcserver") + runlib.proc_cpu(d, "redis-server"))
+                  / st["elapsed_s"] for d, st in zip(groups[n], sts)]
         # Idle time summed over the server's CPUs, in % of one CPU.
         idle = [sum(100 * (1 - st["busy"][f"cpu{c}"]) for c in runlib.sut_cpus(d))
                 for d, st in zip(groups[n], sts)]
