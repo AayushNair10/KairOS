@@ -318,7 +318,9 @@ static const char *ready_names[KAIROS_NR_READY] = {
  * One row per second per group and kind of wait: the number of waits that
  * ended in that second, their total in ms and their count per bucket. One
  * more row per group with kind "run": count = times it started running,
- * ms = CPU time, buckets 0.
+ * ms = CPU time, buckets 0. And one with kind "preempt": runs that began
+ * by preempting a CPU, their total length in ms, and their count per
+ * bucket of run length (same bounds as the waits).
  */
 static void write_diag_header(FILE *f)
 {
@@ -354,6 +356,18 @@ static void write_diag(FILE *f, double t, const struct diag *cur, const struct d
 		for (int b = 0; b < DIAG_BUCKETS; b++)
 			fputs(",0", f);
 		fputc('\n', f);
+		{
+			__u64 cnt = 0;
+
+			for (int b = 0; b < DIAG_BUCKETS; b++)
+				cnt += c->preempt_runs[b] - p->preempt_runs[b];
+			fprintf(f, "%.3f,%s,preempt,%llu,%.3f", t, names[g], (unsigned long long)cnt,
+				(c->preempt_run_ns - p->preempt_run_ns) / 1e6);
+			for (int b = 0; b < DIAG_BUCKETS; b++)
+				fprintf(f, ",%llu", (unsigned long long)(c->preempt_runs[b] -
+									 p->preempt_runs[b]));
+			fputc('\n', f);
+		}
 	}
 	fflush(f);
 }
@@ -496,7 +510,8 @@ static const char csv_header[] =
 	"nr_runnable,procs_running,"
 	"fast_load,slow_load,wake_rate,wait_avg_us,wait_max_us,mode,timer_ticks,"
 	"lat_wakeups,lat_late,late_frac,mode_switches,latency_ms,"
-	"nr_lc,lc_cpus,lc_demand,lc_changes,borrow,ml_fresh,ml_raised,kick\n";
+	"nr_lc,lc_cpus,lc_demand,lc_changes,borrow,ml_fresh,ml_raised,kick,"
+	"idle_cpus,idle_queued,preempt_cpus\n";
 
 int main(int argc, char **argv)
 {
@@ -791,6 +806,13 @@ restart:
 	__u64 prev_sw = skel->bss->nr_mode_switches, prev_lat_ns = skel->bss->mode_ns[MODE_LATENCY];
 	__u64 prev_lc_ns = skel->bss->lc_cpus_ns, prev_lc_ch = skel->bss->nr_lc_changes;
 	__u64 prev_mlf = skel->bss->ml_fresh_ticks, prev_mlr = skel->bss->ml_raised_ticks;
+	__u64 prev_idle_ns = skel->bss->idle_cpus_ns, prev_idleq_ns = skel->bss->idle_queued_ns;
+	__u64 prev_pre_on[KAIROS_MAX_CPUS];
+	int nr_cpu_cols = libbpf_num_possible_cpus();
+
+	if (nr_cpu_cols > KAIROS_MAX_CPUS)
+		nr_cpu_cols = KAIROS_MAX_CPUS;
+	memcpy(prev_pre_on, skel->bss->preempt_on, sizeof(prev_pre_on));
 
 	clock_gettime(CLOCK_MONOTONIC, &ml.start);
 	ml.last = ml.start;
@@ -803,8 +825,11 @@ restart:
 		__u64 stats[KAIROS_NR_STATS], d[KAIROS_NR_STATS];
 		struct timespec ts;
 		double fast, slow, wait_avg_us, wait_max_us, late_frac, lat_ms;
-		double lc_cpus, lc_demand;
-		__u64 lw, ll, sw, lat_ns, lc_ns, lc_ch, mlf, mlr;
+		double lc_cpus, lc_demand, idle_cpus, idle_queued;
+		__u64 lw, ll, sw, lat_ns, lc_ns, lc_ch, mlf, mlr, idle_ns, idleq_ns;
+		/* preemptions per preempted CPU in the last second, "n0;n1;..." */
+		char pre_cpus[KAIROS_MAX_CPUS * 21];
+		size_t pre_len = 0;
 		int i;
 
 		if (ml.trace || ml.model) {
@@ -843,6 +868,19 @@ restart:
 		lc_demand = skel->bss->lc_demand / 1024.0;
 		mlf = skel->bss->ml_fresh_ticks;
 		mlr = skel->bss->ml_raised_ticks;
+		/* CPUs x ns over a second: the average number of CPUs */
+		idle_ns = skel->bss->idle_cpus_ns;
+		idleq_ns = skel->bss->idle_queued_ns;
+		idle_cpus = (idle_ns - prev_idle_ns) / 1e9;
+		idle_queued = (idleq_ns - prev_idleq_ns) / 1e9;
+		pre_cpus[0] = '\0';
+		for (i = 0; i < nr_cpu_cols; i++) {
+			__u64 n = skel->bss->preempt_on[i];
+
+			pre_len += snprintf(pre_cpus + pre_len, sizeof(pre_cpus) - pre_len, "%s%llu",
+					    i ? ";" : "", (unsigned long long)(n - prev_pre_on[i]));
+			prev_pre_on[i] = n;
+		}
 
 		printf("local=%llu global=%llu preempt=%llu (batch %llu) no_victim=%llu "
 		       "class +%llu -%llu runnable=%lld (kernel %ld) load fast=%.2f slow=%.2f "
@@ -859,12 +897,15 @@ restart:
 			printf("  split: lc_cpus now %u, avg %.2f, demand %.2f, changes %llu, borrow %llu\n",
 			       skel->bss->nr_lc, lc_cpus, lc_demand, lc_ch - prev_lc_ch,
 			       d[STAT_BORROW]);
+		printf("  idle cpus %.2f (%.2f with a task queued) preempted per cpu %s\n",
+		       idle_cpus, idle_queued, pre_cpus);
 		fflush(stdout);
 
 		if (csv) {
 			clock_gettime(CLOCK_REALTIME, &ts);
 			fprintf(csv, "%.3f,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%lld,%ld,%.3f,%.3f,%llu,"
-				"%.1f,%.1f,%u,%llu,%llu,%llu,%.4f,%llu,%.1f,%u,%.3f,%.3f,%llu,%llu,%llu,%llu,%llu\n",
+				"%.1f,%.1f,%u,%llu,%llu,%llu,%.4f,%llu,%.1f,%u,%.3f,%.3f,%llu,%llu,%llu,%llu,%llu,"
+				"%.3f,%.3f,%s\n",
 				ts.tv_sec + ts.tv_nsec / 1e9, d[STAT_LOCAL], d[STAT_GLOBAL],
 				d[STAT_PREEMPT], d[STAT_PREEMPT_BATCH], d[STAT_NO_VICTIM],
 				d[STAT_TO_BATCH], d[STAT_FROM_BATCH],
@@ -874,7 +915,8 @@ restart:
 				(unsigned long long)skel->bss->nr_timer_ticks,
 				lw - prev_lw, ll - prev_ll, late_frac, sw - prev_sw, lat_ms,
 				skel->bss->nr_lc, lc_cpus, lc_demand, lc_ch - prev_lc_ch,
-				d[STAT_BORROW], mlf - prev_mlf, mlr - prev_mlr, d[STAT_KICK]);
+				d[STAT_BORROW], mlf - prev_mlf, mlr - prev_mlr, d[STAT_KICK],
+				idle_cpus, idle_queued, pre_cpus);
 			fflush(csv);
 		}
 		if (diag_csv) {
@@ -892,6 +934,8 @@ restart:
 		prev_lc_ch = lc_ch;
 		prev_mlf = mlf;
 		prev_mlr = mlr;
+		prev_idle_ns = idle_ns;
+		prev_idleq_ns = idleq_ns;
 	}
 
 	bpf_link__destroy(link);

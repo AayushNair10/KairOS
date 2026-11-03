@@ -190,6 +190,14 @@ u64 lc_queued_ticks;		/* sum over ticks of LC tasks queued (for ML) */
 u64 ml_demand;			/* CPUs x 1024 */
 u64 ml_stamp;			/* nr_timer_ticks when written; 0 = none yet */
 u64 ml_fresh_ticks, ml_raised_ticks;	/* ticks it was fresh / raised demand */
+/* Preemptions by the CPU that was preempted (atomic adds). */
+u64 preempt_on[KAIROS_MAX_CPUS];
+/*
+ * Sampled by the timer each tick (sample_idle()): idle CPUs among the split
+ * CPUs, and how many of them could have run a task waiting in one of our
+ * queues, both integrated over time (CPUs x ns).
+ */
+u64 idle_cpus_ns, idle_queued_ns;
 
 struct {
 	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
@@ -213,6 +221,7 @@ struct task_ctx {
 	u64 slice_at_run;	/* its slice when it last started running */
 	u8 ready_kind;		/* why it is waiting (enum kairos_ready) */
 	u8 group;		/* diagnostics group, set in running() */
+	u8 preempted_in;	/* --diag: its next run starts by preempting */
 };
 
 struct {
@@ -431,6 +440,21 @@ static struct diag_group *diag_group(u32 g)
 	return &d->g[g];
 }
 
+/*
+ * Count a preemption of @cpu by a woken task (task context @tctx): per
+ * preempted CPU, and with --diag mark the task so that stopping() records
+ * how long the run it preempted for lasted.
+ */
+static void count_preempt(s32 cpu, struct task_ctx *tctx)
+{
+	u64 *cnt = MEMBER_VPTR(preempt_on, [cpu]);
+
+	if (cnt)
+		__sync_fetch_and_add(cnt, 1);
+	if (diag && tctx)
+		tctx->preempted_in = 1;
+}
+
 static void record_wait(u64 ns)
 {
 	__sync_fetch_and_add(&wait_sum_ns, ns);
@@ -546,6 +570,7 @@ static void split_enqueue(struct task_struct *p, u64 enq_flags)
 		if (cpu >= 0) {
 			stat_inc(STAT_PREEMPT);
 			stat_inc(STAT_PREEMPT_BATCH);
+			count_preempt(cpu, tctx);
 			p->scx.dsq_vtime = vtime;
 			scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, lat_slice_ns,
 					   enq_flags | SCX_ENQ_PREEMPT);
@@ -606,6 +631,7 @@ void BPF_STRUCT_OPS(kairos_enqueue, struct task_struct *p, u64 enq_flags)
 			stat_inc(STAT_PREEMPT);
 			if (batch)
 				stat_inc(STAT_PREEMPT_BATCH);
+			count_preempt(cpu, bpf_task_storage_get(&task_ctxs, p, 0, 0));
 			/* the vtime insert below would apply the clamp; do it here */
 			p->scx.dsq_vtime = vtime;
 			scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, cur_slice(),
@@ -761,8 +787,14 @@ void BPF_STRUCT_OPS(kairos_stopping, struct task_struct *p, bool runnable)
 		if (diag) {
 			struct diag_group *dg = diag_group(tctx->group);
 
-			if (dg)
+			if (dg) {
 				dg->run_ns += ran;
+				if (tctx->preempted_in) {
+					dg->preempt_runs[diag_bucket(ran)]++;
+					dg->preempt_run_ns += ran;
+				}
+			}
+			tctx->preempted_in = 0;
 		}
 		/* LC demand for --split: CPU time of LC tasks on split CPUs */
 		if (split && !task_batch(p, tctx)) {
@@ -861,6 +893,56 @@ static void update_split(u64 dt)
 	lc_cpus_ns += nr_lc * dt;
 }
 
+/*
+ * The number of tasks in queue @dsq_id that may run on @cpu. (A loop over
+ * CPUs inside this loop over the queue was too complex for the verifier.)
+ */
+static u32 nr_fitting(u64 dsq_id, s32 cpu)
+{
+	struct task_struct *p;
+	u32 n = 0;
+
+	bpf_for_each(scx_dsq, p, dsq_id, 0) {
+		if (bpf_cpumask_test_cpu(cpu, p->cpus_ptr))
+			n++;
+	}
+	return n;
+}
+
+/*
+ * Each tick, for the idle-time question in RESEARCH_LOG section 9: how many
+ * split CPUs are idle, and how many of them could be running a task that
+ * waits in our queues instead (at most one task per idle CPU). Whether a
+ * task may run there is checked against the first idle split CPU only,
+ * which is exact when, as in our runs, the tasks that may run on one split
+ * CPU may run on all (the server and batch jobs on 0-2, the load generator
+ * only on 3). Sampling keeps the idle path itself untouched; over a minute
+ * it is ~60,000 samples. A CPU just claimed by select_cpu() counts as busy.
+ */
+static void sample_idle(u64 dt)
+{
+	const struct cpumask *idle = scx_bpf_get_idle_cpumask();
+	u32 nr_idle = 0, nr_waiting;
+	s32 cpu, first = -1;
+
+	bpf_for(cpu, 0, nr_cpus) {
+		if (split_rank_of(cpu) >= 0 && bpf_cpumask_test_cpu(cpu, idle)) {
+			if (first < 0)
+				first = cpu;
+			nr_idle++;
+		}
+	}
+	scx_bpf_put_idle_cpumask(idle);
+	if (first < 0)
+		return;
+	idle_cpus_ns += nr_idle * dt;
+	if (split)
+		nr_waiting = nr_fitting(LC_DSQ, first) + nr_fitting(BATCH_DSQ, first);
+	else
+		nr_waiting = nr_fitting(SHARED_DSQ, first);
+	idle_queued_ns += (nr_waiting < nr_idle ? nr_waiting : nr_idle) * dt;
+}
+
 static void set_mode(u32 m, u64 now)
 {
 	mode = m;
@@ -921,6 +1003,7 @@ static int kairos_timerfn(void *map, int *key, struct bpf_timer *timer)
 			update_mode(now);
 		if (split)
 			update_split(dt);
+		sample_idle(dt);
 
 		wake_rate = ewma(wake_rate, (w - last_wakeups) * 1000000000 / dt, fast_shift);
 		if (cnt > last_wait_cnt)

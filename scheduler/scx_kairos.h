@@ -60,6 +60,13 @@ struct diag_group {
 	__u64 wait_ns[KAIROS_NR_READY];
 	__u64 runs;		/* times it started running */
 	__u64 run_ns;		/* CPU time */
+	/*
+	 * Runs that began by preempting a CPU (the task's next run after a
+	 * wakeup that preempted), by how long they lasted, in the wait
+	 * buckets; and their total length.
+	 */
+	__u64 preempt_runs[DIAG_BUCKETS];
+	__u64 preempt_run_ns;
 };
 
 struct diag {
