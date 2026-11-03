@@ -57,6 +57,10 @@ const char help_fmt[] =
 "      --borrow-slice-us N slice of a batch task on an LC CPU (default 3000)\n"
 "      --no-borrow-preempt a woken LC task doesn't preempt a batch task on an\n"
 "                          LC CPU; it waits for the borrow slice instead\n"
+"      --borrower-pick first|prev|longest  which borrower a woken LC task\n"
+"                          preempts: the first LC CPU running one (CPU 0\n"
+"                          first), its previous CPU if that runs one, or the\n"
+"                          one running longest (default first)\n"
 "      --preempt-wait-us N a woken LC task that finds no idle CPU waits up to\n"
 "                          N us for an LC CPU to free up before it preempts a\n"
 "                          borrower (default 0: preempts at once)\n"
@@ -122,6 +126,7 @@ enum {
 	OPT_LC_SHIFT,
 	OPT_NO_BORROW_PREEMPT,
 	OPT_PREEMPT_WAIT,
+	OPT_BORROWER_PICK,
 	OPT_PREEMPT_MIN_RUN,
 	OPT_KICK_IDLE,
 	OPT_NO_KICK_IDLE,
@@ -159,6 +164,7 @@ static const struct option long_opts[] = {
 	{ "lc-shift",        required_argument, NULL, OPT_LC_SHIFT },
 	{ "no-borrow-preempt", no_argument,     NULL, OPT_NO_BORROW_PREEMPT },
 	{ "preempt-wait-us", required_argument, NULL, OPT_PREEMPT_WAIT },
+	{ "borrower-pick",   required_argument, NULL, OPT_BORROWER_PICK },
 	{ "preempt-min-run-us", required_argument, NULL, OPT_PREEMPT_MIN_RUN },
 	{ "kick-idle",       no_argument,       NULL, OPT_KICK_IDLE },
 	{ "no-kick-idle",    no_argument,       NULL, OPT_NO_KICK_IDLE },
@@ -657,6 +663,18 @@ restart:
 		case OPT_NO_BORROW_PREEMPT:
 			skel->rodata->borrow_preempt = false;
 			break;
+		case OPT_BORROWER_PICK:
+			if (!strcmp(optarg, "first")) {
+				skel->rodata->borrower_pick = PICK_FIRST;
+			} else if (!strcmp(optarg, "prev")) {
+				skel->rodata->borrower_pick = PICK_PREV;
+			} else if (!strcmp(optarg, "longest")) {
+				skel->rodata->borrower_pick = PICK_LONGEST;
+			} else {
+				fprintf(stderr, "--borrower-pick must be 'first', 'prev' or 'longest'\n");
+				return 1;
+			}
+			break;
 		case OPT_PREEMPT_WAIT:
 			skel->rodata->preempt_wait_ns = parse_num("preempt-wait-us", optarg) * 1000;
 			break;
@@ -814,7 +832,7 @@ restart:
 	       "fast_shift=%u slow_shift=%u victim=%s batch_min_run_us=%llu "
 	       "lat_target_us=%llu late_max=%.1f%% hold_ms=%llu-%llu signal_cpus=0x%llx "
 	       "split=%d split_cpus=0x%llx lc=%u-%u lc_buffer=%.2f lc_hyst=%.2f borrow_slice_us=%llu "
-	       "borrow_preempt=%d preempt_wait_us=%llu preempt_min_run_us=%llu class=%s kick_idle=%d wake_sync=%d\n",
+	       "borrow_preempt=%d borrower_pick=%s preempt_wait_us=%llu preempt_min_run_us=%llu class=%s kick_idle=%d wake_sync=%d\n",
 	       skel->rodata->split ? "split" : skel->rodata->adaptive ? "adaptive" :
 	       skel->rodata->forced_mode == MODE_LATENCY ? "latency" : "batch",
 	       (unsigned long long)skel->rodata->lat_slice_ns / 1000,
@@ -832,6 +850,8 @@ restart:
 	       skel->rodata->lc_buffer / 1024.0, skel->rodata->lc_hyst / 1024.0,
 	       (unsigned long long)skel->rodata->borrow_slice_ns / 1000,
 	       skel->rodata->borrow_preempt,
+	       skel->rodata->borrower_pick == PICK_PREV ? "prev" :
+	       skel->rodata->borrower_pick == PICK_LONGEST ? "longest" : "first",
 	       (unsigned long long)skel->rodata->preempt_wait_ns / 1000,
 	       (unsigned long long)skel->rodata->preempt_min_run_ns / 1000,
 	       skel->rodata->class_policy ? "policy" : "run", skel->rodata->kick_idle,

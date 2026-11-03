@@ -21,6 +21,13 @@ enum kairos_mode {
 	MODE_LATENCY = 1,	/* a woken task may preempt; short slices */
 };
 
+/* --split: which borrower a woken LC task preempts (--borrower-pick). */
+enum kairos_pick {
+	PICK_FIRST,	/* the first LC CPU in CPU order running one */
+	PICK_PREV,	/* the woken task's previous CPU if it runs one, else first */
+	PICK_LONGEST,	/* the one that has run longest since it started */
+};
+
 /* Event counters in the per-CPU "stats" map; the loader sums the CPUs. */
 enum kairos_stat {
 	STAT_LOCAL,		/* woken task got an idle CPU in select_cpu */

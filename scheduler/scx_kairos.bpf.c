@@ -119,6 +119,14 @@ const volatile u64 borrow_slice_ns = 3000000;	/* batch task on an LC CPU */
 /* A woken LC task may preempt a borrower; else it waits for the borrow slice. */
 const volatile bool borrow_preempt = true;
 /*
+ * Which borrower to preempt (--borrower-pick; RESEARCH_LOG section 9,
+ * direction 5): the first LC CPU in CPU order running one (so CPU 0 is
+ * preempted most), the woken task's previous CPU if it runs one (its
+ * cache may still be warm there), else the first; or the one that has
+ * run longest since it started (closest to the end of its slice).
+ */
+const volatile u32 borrower_pick = PICK_FIRST;	/* enum kairos_pick */
+/*
  * Delayed borrower preemption (--preempt-wait-us; RESEARCH_LOG section 9,
  * direction 2). 0: a woken LC task that finds no idle CPU preempts a
  * borrower at once. Otherwise it waits in LC_DSQ, where an LC CPU that
@@ -537,34 +545,46 @@ static s32 split_pick_idle(struct task_struct *p, s32 prev_cpu, bool batch)
 }
 
 /*
- * --split: a CPU for woken LC task @p to preempt: an LC CPU running a
- * borrowed batch task. If @p can't run on any LC CPU (e.g. a per-CPU
- * kernel thread on a batch CPU), any allowed CPU running a batch task.
- * Returns -1 if there is none.
+ * --split: a CPU to preempt for woken LC task @p: an LC CPU running a
+ * borrowed batch task, chosen by borrower_pick (@prev: @p's previous
+ * CPU). If @p can't run on any LC CPU (e.g. a per-CPU kernel thread on a
+ * batch CPU), any allowed CPU running a batch task. Returns -1 if there
+ * is none. @p may be NULL (the delayed-preemption timer): then any LC CPU.
  */
-static s32 split_pick_borrower(struct task_struct *p)
+static s32 split_pick_borrower(struct task_struct *p, s32 prev)
 {
-	bool pinned_here = is_migration_disabled(p), can_lc = false;
-	s32 cpu, any = -1;
+	bool pinned_here = p && is_migration_disabled(p), can_lc = false;
+	s32 cpu, any = -1, best = -1;
+	u64 best_at = 0;
 
 	bpf_for(cpu, 0, nr_cpus) {
 		struct cpu_ctx *cctx;
 		bool lc;
 
-		if (!bpf_cpumask_test_cpu(cpu, p->cpus_ptr))
+		if (p && !bpf_cpumask_test_cpu(cpu, p->cpus_ptr))
 			continue;
-		if (pinned_here && cpu != scx_bpf_task_cpu(p))
+		if (pinned_here && cpu != prev)
 			continue;
 		lc = lc_cpu(cpu);
 		can_lc |= lc;
 		cctx = lookup_cpu_ctx(cpu);
 		if (!cctx || !cctx->running_at || !cctx->batch)
 			continue;
-		if (lc)
+		if (!lc) {
+			if (any < 0)
+				any = cpu;
+			continue;
+		}
+		if (borrower_pick == PICK_FIRST || (borrower_pick == PICK_PREV && cpu == prev))
 			return cpu;
-		if (any < 0)
-			any = cpu;
+		if (best < 0 || (borrower_pick == PICK_LONGEST &&
+				 time_before(cctx->running_at, best_at))) {
+			best = cpu;
+			best_at = cctx->running_at;
+		}
 	}
+	if (best >= 0)
+		return best;
 	return can_lc ? -1 : any;
 }
 
@@ -690,7 +710,7 @@ static void split_enqueue(struct task_struct *p, u64 enq_flags)
 	u64 vtime = queue_vtime(p);
 
 	if (!batch && borrow_preempt && (enq_flags & SCX_ENQ_WAKEUP)) {
-		s32 cpu = split_pick_borrower(p);
+		s32 cpu = split_pick_borrower(p, scx_bpf_task_cpu(p));
 
 		if (cpu >= 0 && preempt_at_once(tctx)) {
 			stat_inc(STAT_PREEMPT);
@@ -1186,7 +1206,7 @@ static int wait_timerfn(void *map, int *key, struct bpf_timer *timer)
 	u64 now = scx_bpf_now(), next = 0;
 	bool found = false, more = false, kicked = false;
 	struct task_struct *p;
-	s32 cpu;
+	s32 cpu, prev = -1;
 
 	wait_timer_armed = 0;
 	bpf_for_each(scx_dsq, p, LC_DSQ, 0) {
@@ -1201,22 +1221,19 @@ static int wait_timerfn(void *map, int *key, struct bpf_timer *timer)
 				next = preempt_wait_ns - waited;
 		} else if (!found) {
 			tctx->delayed = 0;
+			prev = scx_bpf_task_cpu(p);
 			found = true;
 		} else {
 			more = true;
 		}
 	}
 	if (found) {
-		bpf_for(cpu, 0, nr_cpus) {
-			struct cpu_ctx *cctx = lookup_cpu_ctx(cpu);
-
-			if (cctx && cctx->running_at && cctx->batch && lc_cpu(cpu)) {
-				scx_bpf_kick_cpu(cpu, SCX_KICK_PREEMPT);
-				stat_inc(STAT_LATE_PREEMPT);
-				count_preempt(cpu, NULL);
-				kicked = true;
-				break;
-			}
+		cpu = split_pick_borrower(NULL, prev);
+		if (cpu >= 0) {
+			scx_bpf_kick_cpu(cpu, SCX_KICK_PREEMPT);
+			stat_inc(STAT_LATE_PREEMPT);
+			count_preempt(cpu, NULL);
+			kicked = true;
 		}
 	}
 	/* more overdue tasks and a borrower left to kick: again at once */
