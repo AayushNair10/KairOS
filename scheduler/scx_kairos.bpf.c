@@ -40,7 +40,15 @@
  *   early; it is ignored once older than ml_ttl_ticks.
  * - Diagnostics (--diag): every wait for a CPU, by why the task was waiting
  *   (woken, preempted, slice ran out) and by task group (task-name
- *   prefixes), to see which waits the wakeup-only latency signal misses.
+ *   prefixes), to see which waits the wakeup-only latency signal misses;
+ *   and how long each run that began by preempting lasted.
+ * - Options for the split from the E3/E7 improvement directions
+ *   (RESEARCH_LOG section 9): delayed borrower preemption
+ *   (--preempt-wait-us, --preempt-min-run-us; wait_timerfn()), the
+ *   kernel's rule for sync wakeups (--wake-sync), which borrower to
+ *   preempt (--borrower-pick) and per-CPU LC queues (--lc-queue percpu,
+ *   an ablation). All off by default. Counters for preemptions per CPU and
+ *   for idle CPUs while work waits (sample_idle()).
  *
  * The vtime parts are scx_simple's: Copyright (c) 2022 Meta Platforms, Inc.
  * and affiliates; Tejun Heo <tj@kernel.org>; David Vernet <dvernet@meta.com>.

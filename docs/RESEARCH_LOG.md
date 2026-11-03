@@ -784,6 +784,66 @@ choices. Add as you go.)
   is 1/16 CPU at `--lc-shift 6` (the default), 1/4 CPU at 8 and a whole
   CPU at 10. A slower pool average (e.g. ~1 s for E3) would need more
   fractional bits in the demand first. Found 2026-11-02, not changed.
+- Counters for the improvement directions (d9d208a). `preempt_on[cpu]`
+  counts preemptions by the CPU preempted (sched_stats.csv
+  `preempt_cpus`, "n0;n1;..."). With `--diag`, a task that preempts is
+  marked (`preempted_in`) and `stopping()` records how long that run
+  lasted, per task group, in the wait buckets (diag.csv kind `preempt`;
+  `analysis/diag.py` prints it). The timer samples each tick the idle
+  split CPUs (`scx_bpf_get_idle_cpumask()`) and how many of them a queued
+  task could run on (`bpf_for_each(scx_dsq, ...)`), integrated over time
+  (`idle_cpus`, `idle_queued`). Verifier: a loop over CPUs inside the
+  loop over a queue failed ("The sequence of 8193 jumps is too complex");
+  each task is checked against the first idle CPU only, which is exact
+  here (the tasks that may run on one split CPU may run on all).
+- Delayed borrower preemption (`--preempt-wait-us D`, c366a77). A woken LC
+  task that finds no idle CPU but a borrower it could preempt is queued
+  in LC_DSQ (flag `delayed`) instead, any CPU that has gone idle since
+  `select_cpu()` is kicked, and a one-shot BPF timer (`wait_timer_map`,
+  armed once with a compare-and-swap on `wait_timer_armed`) fires after
+  D. `wait_timerfn()` walks LC_DSQ, takes the first delayed task that has
+  waited D, clears its flag and kicks a borrower with
+  `scx_bpf_kick_cpu(SCX_KICK_PREEMPT)` (the CPU stops its task and runs
+  `dispatch()`, LC_DSQ first). It fires again at once if more are
+  overdue, and is re-armed for the next deadline otherwise. A preemption
+  is avoided when an LC CPU frees up first (its LC task sleeps, or a
+  borrow slice ends). `--preempt-min-run-us N`: tasks whose runs (wake
+  to sleep, EWMA weight 1/4, `avg_run`) average at least N still preempt
+  at once. Verifier, twice: an exact count of overdue tasks used to kick
+  that many CPUs failed with "jumps too complex"; booleans pass (my
+  reading, not checked in the verifier source: a branch decided by a
+  known count marks the count precise, so every value is its own state). The
+  timer's resolution is the host's: hrtimers in this VM, not measured.
+- Sync wakeups (`--wake-sync`, 41b0745). As `scx_bpf_select_cpu_dfl()`
+  (kernel/sched/ext_idle.c): on `SCX_WAKE_SYNC`, `prev_cpu` if idle, else
+  the waker's CPU (`bpf_get_smp_processor_id()`, inserted into
+  `SCX_DSQ_LOCAL` without claiming it) if the wakee may run there, its
+  local DSQ is empty (`scx_bpf_dsq_nr_queued(SCX_DSQ_LOCAL_ON | cpu)`),
+  the waker isn't exiting (`PF_EXITING`) and some CPU is idle; added: the
+  CPU must be in the wakee's pool and run a task of its class. The kernel
+  also requires `cpus_share_cache(prev, waker)`; all 4 vCPUs share one L2
+  here (`/sys/devices/system/cpu/cpu*/cache`). In the gRPC runs the
+  loopback-TCP wakeups come from the load generator's CPU 3, where the
+  server may not run, and Go's futex wakeups aren't sync, so little
+  change is expected there (guess).
+- `--borrower-pick first|prev|longest` (c583c7e): which borrower
+  `split_pick_borrower()` returns; the delayed-preemption timer uses the
+  same rule (with no task, any LC CPU).
+- `--lc-queue percpu` (025d69e): per-CPU DSQs `LC_PCPU_DSQ(cpu)` = 16 +
+  cpu, created in `init()`. A queued LC task goes to its CPU's DSQ (and
+  that CPU gets `SCX_KICK_IDLE`, as only it looks there soon);
+  `dispatch()` serves the CPU's own LC DSQ, then BATCH_DSQ, then other
+  CPUs' LC DSQs. Verifier: a sum over a `bpf_for` loop gets a wider range
+  every iteration, so the loop never converged (iterator depth 8184);
+  masking the sum (`& 0xffffff`) inside the loop fixes its range.
+- Redis mode (8790ee0): `loadgen -redis host:port,...` sends pipelined
+  RESP GETs of random keys on `-conns` connections per server; a lock
+  keeps the write order and the queue of pending ids in step, and a
+  reader per connection matches replies in order. run.sh `SERVICE=redis`
+  starts the redis-server instances pinned to SUT_CPUS (ports 6390+,
+  no persistence) and fills them with `DEBUG POPULATE`. In a test without
+  batch on EEVDF, the load generator kept up at 20k GET/s (send lag p99
+  0.12 ms, 43% of its CPU) but not at 40k/s.
 
 ---
 
@@ -840,6 +900,9 @@ together with `meta.json` (git commit, kernel, VM config, parameters).
 | E8 | ML burst prediction | periodic and random | ML vs persistence vs reactive |
 | E9 | ML classifier (optional) | held-out workloads | learned vs hand-written tree |
 | G | Generality | Redis instead of gRPC | conclusions hold |
+| E10 | Which wakeups preempt (`e10-preempt-diag.conf`, `--diag`) | E3's phases | which threads preempt, how long they then run |
+| E11 | Delayed borrower preemption (`e11-delay.conf`) | E3's phases | latency for batch throughput as the wait D grows |
+| E12 | Ablations (`e12-ablate.conf`, `e7_pipe.sh` with kairossync) | E3's phases; pipe | sync wakeups, shared vs per-CPU LC queue, borrower choice |
 
 **Configurations:** EEVDF, scx_bpfland, scx_lavd, ours forced always-preempt,
 ours forced never-preempt, ours adaptive (± A, B, ML).
@@ -3135,3 +3198,44 @@ weren't read (abstracts and web pages instead).
 **Next:** The improvement directions in section 9, in order: what
 triggers the preemptions, delayed preemption, sync wakeups, per-CPU LC
 queues, victim choice. Then Redis, and a machine with more CPUs.
+
+### 2026-11-03 — Improvement directions implemented; E10–E12 and G ready
+**Did:** Merged the E3-r, E7 and E3-idle write-up into this log (8b574e8).
+Implemented the directions from section 9 in scx_kairos, all off by
+default (section 4): counters for which tasks preempt and how long they
+then run, preemptions per CPU and idle CPUs while work waits; delayed
+borrower preemption (`--preempt-wait-us`, `--preempt-min-run-us`); the
+kernel's rule for sync wakeups (`--wake-sync`); `--borrower-pick`; per-CPU
+LC queues (`--lc-queue percpu`). Added a Redis mode to the load generator
+and run.sh for G. Wrote configs E10 (diag), E11 (delay sweep against
+bpfland and SCHED_IDLE), E12 (ablations), G (Redis) and
+`experiments/e10_g.sh`, which runs them in a row (~3.5 h). Every option
+set in the configs loads; each feature ran in a 10 s smoke test.
+**Found:** Smoke tests only (one 10 s run per config, Claude's session
+using 10–15% of a CPU, not measurements): 94–97% of kairos's preempting
+runs came from the server's non-worker threads ("grpcserver"), mean ~11
+µs, against ~3% from the request workers ("grpcworker", ~0.5 ms); idle
+split CPUs while a task waited were under 0.01 CPUs; preemptions fell
+mostly on CPU 0 with the default borrower choice. Delayed preemption
+(250 µs, workers at once) cut preemptions from ~9,100 to ~1,200/s in the
+busy phase. `--wake-sync` took the 2-CPU pipe round trip from 13.3 to
+1.8 µs. In a Redis smoke run kairos preempted 18k times/s in the busy
+phase.
+**Interpretation:** If E10 confirms the split, most of kairos's
+preemptions buy little: a Go runtime thread runs ~10 µs and goes back to
+sleep, and zstd pays two context switches. Delaying exactly those is the
+cheapest fix to try (E11). The idle-while-queued sample suggests the
+extra idle time is not a work-conservation gap (guess, from smoke runs).
+**Decisions:** New options default off, so earlier configs keep their
+behaviour. Redis requests are 1 KB GETs at up to 20k/s, the most the
+load generator sends on CPU 3 without falling behind, with 3 zstd jobs
+so a woken Redis finds no idle CPU.
+**Problems:** The verifier rejected three first versions (nested loops,
+an exact counter, a sum in a loop; section 4). One `--borrower-pick prev`
+smoke run had a 4 s episode with the server on all 3 CPUs and an 861 ms
+longest wait; it looked like the usual slow episodes, but E12 should
+check. The VM has 603 MB in swap after 4 days up; e10_g.sh drops the
+page cache before each part.
+**Next:** Run `experiments/e10_g.sh` with the machine idle, then analyze
+E10–E12 and G (compare.py, byburst.py --ref kairos, diag.py for E10,
+overhead.py --pipe for the pipe test).

@@ -77,6 +77,10 @@ scripts/        helpers (log_entry.sh, meta.sh)
 - Many-phase patterns: by busy/quiet `./analysis/byrate.py results/<date>-<name> --ref kairos`; by load level and window `./analysis/bylevel.py results/<date>-<name> --ref kairos [--windows N]`
 - Burst-length sweep: phases `./workloads/traces/burst_sweep.py --seed 1`; analysis `./analysis/byburst.py results/<date>-<name> --ref kairos`
 - Azure trace phases: `./workloads/traces/azure_phases.py ~/kairos-data/azure2021/AzureFunctionsInvocationTraceForTwoWeeksJan2021.txt --pick 3 --seed 1 > workloads/traces/<name>.phases`
+- Redis instead of grpcserver: `SERVICE=redis` in a config (see `experiments/configs/g-redis.conf`)
+- Waits and preempting runs per task group (`DIAG_COMM` runs): `./analysis/diag.py results/<date>-<name>`
+- Overhead summary (E7): `./analysis/overhead.py --batch DIR --light DIR --pipe DIR --bpf DIR --ref simple [--skip-reps N]`
+- E10–E12, pipe and G in a row (~3.5 h, machine idle): `./experiments/e10_g.sh`
 - New log entry skeleton: `./scripts/log_entry.sh "<title>"`
 
 ## Coding rules
