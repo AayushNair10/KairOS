@@ -861,6 +861,37 @@ choices. Add as you go.)
   and 6.23.
 - Offline predictability check at 1 s (`ml/azure_predict.py`, 1018388):
   method in section 6.27.
+- Duplicate borrower picks (3067b18), diagnostic only.
+  - A borrower preemption marks its CPU (`cpu_ctx.preempt_pending`). The
+    mark is set by `mark_pending()` before the insert or kick, and cleared
+    when that CPU's current task stops or its next task starts.
+  - Until the kicked CPU switches, it still looks like a borrower
+    (`running_at` set, `batch` true), so a second LC wakeup can pick it
+    again.
+  - `dup_pick` counts preemptions of a marked CPU. `dup_alt` counts those
+    where another candidate of the same kind was unmarked. Both are
+    columns in sched_stats.csv.
+  - `split_pick_borrower()` now scans every CPU to count the unmarked
+    ones, but it makes the same choice as before.
+  - A mark set just after the borrower stopped (a race) can't cause a
+    false count. That CPU has `running_at` = 0, so it isn't a candidate
+    until its next task starts, and that start clears the mark.
+- PSI (3067b18).
+  - run.sh saves /proc/pressure/{cpu,memory,io} as pressure_before and
+    pressure_after.
+  - vmsample.sh adds the stall totals (µs) every second, as
+    psi_<resource>_<some|full>.
+  - `runlib.pressure_stats()` turns them into stall ms per second;
+    summarize_run.py and compare.py print them.
+  - CPU "some" is high in every run by design: there are more runnable
+    threads than CPUs (540–730 ms/s in DS). Memory "some" is the useful
+    health signal.
+- Kernel. Since the VM restart on 2026-11-04 it runs 7.0.0-42-generic.
+  - unattended-upgrade installed it on 2026-11-03 at 06:43, and the
+    restart booted it. 7.0.0-38 is still installed.
+  - Every experiment up to G-nb ran on 7.0.0-38-generic (meta.json); FS
+    and DS ran on -42.
+  - apt-daily-upgrade.timer fires around 06:10–06:45 each morning.
 
 ---
 
@@ -911,6 +942,7 @@ together with `meta.json` (git commit, kernel, VM config, parameters).
 | G-nb | 2026-11-04 | 47801f7 | eevdf, bpfland, kairos | `g-redis-nobatch.conf`: G without batch | 3 | `results/2026-11-04-g-redis-nobatch/` | Clean. p50 0.1–0.2 ms in all three, so G's p50 gap comes from sharing CPUs 0–2 with batch (section 6.25) |
 | FS | 2026-11-04 | 3b943c9 + uncommitted final configs (committed as 671776a) | eevdf, eevdfidle, bpfland, lavd, lavdperf, never3, kairos, pw1000r100 (as `final-burst.conf`) | `final-burst.conf` with a 12 s sweep (`burst_sweep.py --lengths-ms 100,1000 --block-s 4`), cooldown 3 s; VM up 5 min | 1 | `results/2026-11-04-final-smoke/` | Smoke test, not a measurement. All 8 configs load (lavd prints libbpf's "skeleton link is uninitialized" warning, as in every E3-r lavd run); eevdfidle's zstd runs SCHED_IDLE; stats.py and compare.py run on it |
 | AP | 2026-11-04 | 1018388 | offline, no scheduler | `ml/azure_predict.py`: Azure trace at 1 s bins (10x), depth-5 tree vs simple predictors of the next 200 ms's LC demand, pools scored at equal cost; test hours 36, 54, 284 and 12 others | – | `results/2026-11-04-azure-predict/` | The tree is under-provisioned less often than the best simple predictor in 0/3 of E2a's hours and 2/12 others (by ≤ 0.3 points), so the condition for a run with more CPUs is not met (section 6.27) |
+| DS | 2026-11-04 | 3067b18 | kairos, pw1000r100, fixed3 (kairos with `--lc-min=3`) | `final-burst.conf` with 1 rep | 1 | `results/2026-11-04-dup-smoke/` | Not a measurement: the host slowed the VM in all three runs (server CPU per request 910–1,114 µs vs 674–677 in FS and E11; load generator 190–222 vs 137–148 µs; VM share 0.94–0.95); kairos busy p50 5.1 ms, batch 160 MB/s. The new counters work: dup_alt 8.9% of kairos's preemptions, 3.0% of pw1000r100's (section 6.28) |
 
 ### 5.1 Planned experiments
 | # | Experiment | Pattern | Shows |
@@ -928,7 +960,53 @@ together with `meta.json` (git commit, kernel, VM config, parameters).
 | E10 | Which wakeups preempt (`e10-preempt-diag.conf`, `--diag`) | E3's phases | which threads preempt, how long they then run |
 | E11 | Delayed borrower preemption (`e11-delay.conf`) | E3's phases | latency for batch throughput as the wait D grows |
 | E12 | Ablations (`e12-ablate.conf`, `e7_pipe.sh` with kairossync) | E3's phases; pipe | sync wakeups, shared vs per-CPU LC queue, borrower choice |
-| F | Final evaluation (`final-burst.conf`, `final-azure.conf`, `experiments/final.sh`) | E3's phases; E2a's Azure replay | every baseline and both kairos variants (D = 0 and pw1000r100), 10 reps, tested with `analysis/stats.py` |
+| F | Final evaluation (`final-burst.conf`, `final-azure.conf`, `experiments/final.sh`) | E3's phases; E2a's Azure replay | every baseline and both kairos variants (D = 0 and pw1000r100), 10 reps, tested with `analysis/stats.py`; in the burst part also fixed3 (LC pool held at 3 CPUs), a pool-sizing ablation |
+| E13 | Dependency rule for delayed preemption | E3's phases | whether letting short-running LC tasks that recently woke another LC task preempt at once recovers pw1000r100's latency at its batch throughput |
+
+**Rules for F, set on 2026-11-04 before F runs** (Aayush agreed to the
+draft):
+- **Run checks.** summarize_run.py and compare.py report each run's VM
+  time share, other processes' CPU, pages swapped in and direct-reclaim
+  stalls. A run is flagged if any of these holds:
+  - VM share < 0.95;
+  - other processes > 30% of a CPU;
+  - more than 1,000 pages swapped in;
+  - more than 1,000 direct-reclaim stalls.
+
+  The thresholds are first proposals from sections 6.14–6.25, set before
+  F's data exist. run.sh already refuses to start below 950
+  iterations/µs.
+- **Exclusion.** A flagged run's rep is left out for every config
+  (`stats.py --skip-reps`), so every comparison stays paired.
+  - Open, to decide before F runs: whether to drop only the flagged
+    run's pairs instead.
+  - Reason: with two reps left out (n = 8), Holm can't reject anything.
+    The smallest exact p is then 2/256 = 0.0078, above 0.05/8 (the burst
+    part, 8 comparisons per reference) and 0.05/7 (the Azure part).
+- **Primary metrics.**
+  - Burst sweep: busy p50 (all L), busy share over 5 ms (all L),
+    whole-run batch MB/s.
+  - Azure replay: p50, share over 5 ms and batch MB/s over all requests.
+  - Every other metric (per L, per level, p99, p99.9, quiet) is
+    descriptive.
+- **Tests.** `stats.py --ref kairos pw1000r100`: exact Wilcoxon
+  signed-rank paired by rep, Holm within each metric and reference,
+  α = 0.05, bootstrap 95% CIs of the median paired difference.
+- **Main configuration.** pw1000r100 is the main configuration if, on the
+  burst sweep against bpfland, its busy p50 is lower with Holm p < 0.05
+  and its whole-run batch MB/s is not lower with Holm p < 0.05.
+  Otherwise kairos is. The Azure replay is reported alongside.
+- **Duplicate picks (DS).** If `dup_alt` is under 1% of kairos's
+  preemptions on a clean run, F runs with the code as it is. Otherwise a
+  fix is tested on its own first: a per-CPU reservation, so that a second
+  LC wakeup takes another borrower or waits in LC_DSQ.
+- **E13 success** (proposed, for Aayush to confirm). The dependency
+  variant beats pw1000r100 if both hold:
+  - its busy p50 (all L) is lower with Holm p < 0.05;
+  - its median paired whole-run batch MB/s is within 2% of
+    pw1000r100's.
+
+  Fewer preemptions alone is not success.
 
 **Configurations:** EEVDF, scx_bpfland, scx_lavd, ours forced always-preempt,
 ours forced never-preempt, ours adaptive (± A, B, ML).
@@ -2028,6 +2106,42 @@ Results:
 - MAE (CPUs) on E2a's hours: the mean of the last 5 is lowest in 3/3
   (0.065–0.130); the tree's is 0.089–0.152.
 
+### 6.28 Duplicate borrower picks (DS, smoke run with the host slowing the VM; 2026-11-04)
+`results/2026-11-04-dup-smoke/`, 1 rep, commit 3067b18, E3's phases,
+kernel 7.0.0-42. Calibration 1,019 iterations/µs.
+
+Not a measurement of latency or batch: the host slowed the VM during all
+three runs.
+- Server CPU per request: 910–1,114 µs, against 677 in E11 kairos-r1 and
+  674 in FS kairos on the same kernel.
+- Load generator CPU per request: 190–222 µs, against 137–148.
+- VM share: 0.94–0.95.
+- Results: kairos busy p50 5.1 ms (E11: 1.00–1.05); pw1000r100 109 ms;
+  batch 88–160 MB/s.
+
+Counters, per second over the load:
+
+| config | preemptions | dup_pick | dup_alt |
+|---|---|---|---|
+| kairos | 4,081 | 728 (17.8%) | 364 (8.9%) |
+| fixed3 | 3,587 | 591 (16.5%) | 313 (8.7%) |
+| pw1000r100 | 241, + 18 by the timer | 18 (7.0%) | 7.8 (3.0%) |
+
+- **The preemption rate** is half E11's (8,020/s) with the same phases,
+  and so are the LC and batch queue inserts (21k vs 30k per second).
+  Not explained; the slowed host is the likeliest cause (guess).
+- **These shares are probably higher than on a quiet host** (guess). A
+  CPU stays marked from the decision until it switches, which includes
+  the IPI to it, and that takes longer when the host delays vCPUs. A
+  clean rerun decides.
+- **What a duplicate costs.** The second LC task is inserted at the head
+  of the same CPU's local queue (`SCX_ENQ_PREEMPT`). The first task then
+  waits for the second's run, while another borrower keeps running batch
+  work. Most preempting runs last 7–12 µs (E10), so a duplicate likely
+  costs little unless a worker (~0.5 ms runs) is involved (guess).
+- **fixed3 matched kairos:** its LC pool was at 3.00 CPUs, as was
+  kairos's.
+
 ## 7. Explanations and insights
 (The "why" behind each result. This is what the report is graded on.)
 
@@ -2744,6 +2858,18 @@ ML and the Azure replay (sections 6.13, 6.26):
   CPU its send lag p99 is 1–8 ms (G, section 6.25), so G's p99 and p99.9
   are not usable; only medians are. More CPUs for the load generator, or
   a leaner client, would be needed for tail results with Redis.
+- Kernel change. E1 to G-nb ran on 7.0.0-38-generic; F will run on
+  7.0.0-42-generic, which unattended upgrades installed and the
+  2026-11-04 restart booted (section 4).
+  - F's comparisons are within one kernel. Comparing F's numbers with
+    earlier sections crosses kernels.
+  - apt-daily-upgrade runs each morning around 06:10–06:45, so a batch
+    still running then can overlap with package installs. The effect is
+    not measured.
+- Daytime host slowdowns. In DS (13:16–13:24) the host took enough from
+  the VM to raise CPU time per request by 35–65% (section 6.28), with a
+  VM share of only 0.94–0.95. Runs need the Mac idle, plugged in and out
+  of Low Power Mode (section 5.1, Method), not only the VM idle.
 - The offline check at 1 s (6.27) has four limits:
   - It predicts the replayed rate, not the demand the scheduler measures,
     so it has no measurement noise and no queueing.
@@ -3795,3 +3921,57 @@ interpolation at the tree's cost.
 - Then `stats.py --ref kairos pw1000r100` on both parts, plus
   `byburst.py` and `bylevel.py --windows 3`.
 - Choose the main kairos configuration from that data.
+
+### 2026-11-04 — Rules for F, duplicate-pick counters, PSI; smoke run with the host slowed
+**Did:**
+- Discussed an outside review of the architecture with Aayush. My answer
+  checked it against the code and the log. The parts already done or
+  measured:
+  - the deadline timer for delayed preemption;
+  - "every LC task waits" (pw250);
+  - accounting on the direct-dispatch path;
+  - idle CPUs while work is queued (0.004 CPUs in E10).
+- The parts that are new:
+  - the pool formula. `ceil(demand + 1.5)` keeps the pool at 2 CPUs or
+    more, and at 3 above 0.5 CPUs of demand.
+  - duplicate borrower picks;
+  - no batch protection (Feature B was never built);
+  - `GOMAXPROCS=3` as a generality check;
+  - the dependency rule as the one change likely to improve performance.
+- With Aayush's OK I did items 1–3 of the plan:
+  - The rules for F, in section 5.1.
+  - The duplicate-pick counters and PSI (3067b18), described in
+    section 4.
+  - fixed3 in final-burst.conf.
+- Smoke run DS (section 6.28).
+
+**Found:**
+- DS is not usable for latency or batch: the host slowed the VM (CPU per
+  request +35–65% for the server and the load generator together).
+- The counters work. Under that slowdown, 8.9% of kairos's preemptions
+  picked a CPU already being preempted while another borrower was free
+  (3.0% for pw1000r100).
+- Since this morning's restart the VM runs kernel 7.0.0-42. Every earlier
+  experiment ran on -38.
+
+**Interpretation:** The duplicate share is probably inflated by the slow
+host (guess), but it is well above the 1% cut-off set in the rules. The
+kernel change does not affect F's internal comparisons. It does affect
+comparisons with earlier experiments.
+
+**Decisions:**
+- (Aayush) The rules for F in section 5.1.
+- (Aayush) A clean smoke run decides the duplicate question before F
+  runs.
+- Still open: the exclusion granularity (whole rep or single run), and
+  the E13 success criterion.
+
+**Problems:**
+- The host slowed the VM during the smoke run, in daytime.
+- An unattended kernel upgrade took effect at the restart.
+
+**Next:**
+- With the Mac idle and plugged in, rerun DS (~10 min).
+- If dup_alt ≥ 1%: implement the reservation as an option, run its A/B
+  (~2 h), and postpone F by a night. Otherwise run F.
+- Then the dependency rule (E13).
