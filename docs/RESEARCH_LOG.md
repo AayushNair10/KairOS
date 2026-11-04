@@ -892,6 +892,40 @@ choices. Add as you go.)
   - Every experiment up to G-nb ran on 7.0.0-38-generic (meta.json); FS
     and DS ran on -42.
   - apt-daily-upgrade.timer fires around 06:10–06:45 each morning.
+- `--claim-borrower` (e11c590), off by default, so earlier configs keep
+  their meaning.
+  - `split_pick_borrower()` is now two parts:
+    - `scan_borrowers(p, prev, free_only)` makes the old choice, and with
+      `free_only` skips marked CPUs;
+    - a second scan, only when the first choice is marked, gives the same
+      rule's choice among the unmarked CPUs (`alt`).
+  - `mark_pending()` became `claim_victim(cpu, alt)`.
+    - It counts `dup_pick`/`dup_alt` as before: the counters keep their
+      meaning with the option on.
+    - Without the option it marks and returns `cpu`, as before.
+    - With it, a marked `cpu` is replaced by `alt`, or by -1 if there is
+      none. The task then takes the existing no-victim path: it is
+      inserted into LC_DSQ and counted as `no_victim`.
+  - The claim is `__sync_val_compare_and_swap(&preempt_pending, 0, 1)`.
+    Of two wakeups that pick the same CPU at once, only one gets it. A
+    lost race returns -1 and counts as `dup_pick` (once).
+    `preempt_pending` became u32 for this, because BPF's atomics work on
+    32 or 64 bits, not on bool. The plain stores that clear it in
+    running() and stopping() can race with the compare-and-swap. That is
+    harmless: either order leaves the CPU marked for at most one task
+    switch.
+  - Timer path (wait_timerfn()): an overdue task whose claim fails stays
+    in LC_DSQ, no longer marked delayed. That is the same as finding no
+    borrower before the change.
+  - Load test (8 s; 4 SCHED_BATCH spin loops, 3 Python loops sleeping
+    200 µs): loads, unloads cleanly. About 10,300 preemptions/s;
+    `dup_pick` 4,077/s, of which 3,949 went to another borrower and the
+    rest queued.
+- `stats.py --skip-runs RUN ...` (e11c590) drops single runs. Pairing is by
+  rep within each comparison (`set(vals[config]) & set(vals[ref])`), so a
+  skipped run of a config costs only its own pairs. A skipped run of the
+  reference drops that rep from every comparison with it. An unknown
+  run name is an error.
 
 ---
 
@@ -943,6 +977,7 @@ together with `meta.json` (git commit, kernel, VM config, parameters).
 | FS | 2026-11-04 | 3b943c9 + uncommitted final configs (committed as 671776a) | eevdf, eevdfidle, bpfland, lavd, lavdperf, never3, kairos, pw1000r100 (as `final-burst.conf`) | `final-burst.conf` with a 12 s sweep (`burst_sweep.py --lengths-ms 100,1000 --block-s 4`), cooldown 3 s; VM up 5 min | 1 | `results/2026-11-04-final-smoke/` | Smoke test, not a measurement. All 8 configs load (lavd prints libbpf's "skeleton link is uninitialized" warning, as in every E3-r lavd run); eevdfidle's zstd runs SCHED_IDLE; stats.py and compare.py run on it |
 | AP | 2026-11-04 | 1018388 | offline, no scheduler | `ml/azure_predict.py`: Azure trace at 1 s bins (10x), depth-5 tree vs simple predictors of the next 200 ms's LC demand, pools scored at equal cost; test hours 36, 54, 284 and 12 others | – | `results/2026-11-04-azure-predict/` | The tree is under-provisioned less often than the best simple predictor in 0/3 of E2a's hours and 2/12 others (by ≤ 0.3 points), so the condition for a run with more CPUs is not met (section 6.27) |
 | DS | 2026-11-04 | 3067b18 | kairos, pw1000r100, fixed3 (kairos with `--lc-min=3`) | `final-burst.conf` with 1 rep | 1 | `results/2026-11-04-dup-smoke/` | Not a measurement: the host slowed the VM in all three runs (server CPU per request 910–1,114 µs vs 674–677 in FS and E11; load generator 190–222 vs 137–148 µs; VM share 0.94–0.95); kairos busy p50 5.1 ms, batch 160 MB/s. The new counters work: dup_alt 8.9% of kairos's preemptions, 3.0% of pw1000r100's (section 6.28) |
+| DS2 | 2026-11-04 | 60c15d8 | kairos, pw1000r100, fixed3 | DS rerun, Mac idle (`caffeinate`) | 1 | `results/2026-11-04-dup-smoke2/` | Clean (VM share 0.98, server 643–671 µs per request). kairos dup_alt 8.8% of 8,061 preemptions/s, pw1000r100 0.8%, so the fix is tested first: E14 (section 6.29) |
 
 ### 5.1 Planned experiments
 | # | Experiment | Pattern | Shows |
@@ -2168,6 +2203,38 @@ Counters, per second over the load:
   costs little unless a worker (~0.5 ms runs) is involved (guess).
 - **fixed3 matched kairos:** its LC pool was at 3.00 CPUs, as was
   kairos's.
+
+### 6.29 Duplicate borrower picks on a clean run (DS2; 2026-11-04)
+`results/2026-11-04-dup-smoke2/`, 1 rep, commit 60c15d8, E3's phases,
+kernel 7.0.0-42. Mac idle, on `caffeinate`.
+
+The runs are clean:
+- VM share 0.98;
+- server CPU per request 643–671 µs (DS: 910–1,114; FS: 674);
+- other processes 9–13% of a CPU;
+- swap-ins 0–901, direct-reclaim stalls 34–603, all under F's flags.
+
+Counters, per second over the load (`runlib.sched_stats`):
+
+| config | preemptions | dup_pick | dup_alt | no_victim |
+|---|---|---|---|---|
+| kairos | 8,061 | 1,489 (18.5%) | 711 (8.8%) | 19,827 |
+| fixed3 | 8,415 | 1,556 (18.5%) | 735 (8.7%) | 20,105 |
+| pw1000r100 | 901, + 28 by the timer | 30 (3.2%) | 7 (0.8%) | 17,121 |
+
+- **The preemption rate is back to E11's** (8,020/s), so DS's halved rate
+  came from the slow host.
+- **The duplicate shares are not.** kairos's dup_alt is 8.8% here, against
+  8.9% in DS. The guess in 6.28 that the slow host inflated them was
+  wrong: about 1 in 5 of kairos's borrower preemptions picks a CPU that
+  is already being preempted, and in about half of those another
+  borrower was free.
+- **By the rule in 5.1** (dup_alt ≥ 1%), the fix is tested first: E14,
+  `--claim-borrower`.
+- **pw1000r100 is under 1%.** Most of its LC wakeups don't preempt at
+  once.
+- **Latency and batch:** these smoke runs are not analysed yet. Parsing
+  them would have run alongside E14.
 
 ## 7. Explanations and insights
 (The "why" behind each result. This is what the report is graded on.)
