@@ -7,7 +7,8 @@ rate. Phases of that duration at a lower rate are the quiet phases of the
 same block; other phases (the gaps before blocks) are left out. Per length:
 p50, p95, p99 and the share of requests slower than 2/5/10 ms in busy
 phases (failed requests count as infinitely slow), p50 and >5 ms in quiet
-phases, and batch MB/s over the block. Then the same for busy requests by
+phases, and batch MB/s over the block (run_stats also pools every length,
+key L = "all", for stats.py). Then the same for busy requests by
 time since their burst started, and for quiet requests by time since the
 burst ended (a time bin pools the phases that last at least to its end).
 Median over reps; then, against --ref, in how many reps each config was
@@ -61,6 +62,7 @@ def run_stats(run_dir):
             v = int(r["latency_ns"]) / 1e6 if r["code"] == "0" else float("inf")
             kind = "busy" if ph[i]["target_rps"] == busy_rate else "quiet"
             lat.setdefault((kind, L), []).append(v)
+            lat.setdefault((kind, "all"), []).append(v)  # every length together
             # Time since this phase started: since the burst started (busy)
             # or since it ended (quiet); the bin must end within the phase.
             off = int(r["intended_ns"]) / 1e6 - begin[i]

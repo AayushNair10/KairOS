@@ -81,6 +81,8 @@ scripts/        helpers (log_entry.sh, meta.sh)
 - Waits and preempting runs per task group (`DIAG_COMM` runs): `./analysis/diag.py results/<date>-<name>`
 - Overhead summary (E7): `./analysis/overhead.py --batch DIR --light DIR --pipe DIR --bpf DIR --ref simple [--skip-reps N]`
 - E10–E12, pipe and G in a row (~3.5 h, machine idle): `./experiments/e10_g.sh`
+- Final evaluation, burst sweep then Azure replay, 8 configs × 10 reps (~6.5 h, machine idle): `./experiments/final.sh`
+- Statistical tests against a reference (Wilcoxon signed-rank paired by rep, Holm per metric, bootstrap CIs): `./analysis/stats.py results/<date>-<name> --ref kairos [pw1000r100] [--by burst|level] [--csv FILE]`
 - New log entry skeleton: `./scripts/log_entry.sh "<title>"`
 
 ## Coding rules
