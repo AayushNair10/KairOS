@@ -844,6 +844,23 @@ choices. Add as you go.)
   no persistence) and fills them with `DEBUG POPULATE`. In a test without
   batch on EEVDF, the load generator kept up at 20k GET/s (send lag p99
   0.12 ms, 43% of its CPU) but not at 40k/s.
+- Statistics for the final evaluation (`analysis/stats.py`, 671776a).
+  Every metric per run comes from byburst.py's or bylevel.py's run_stats,
+  and each config is paired with the reference by rep. The script gives
+  the median paired difference with a percentile bootstrap 95% CI
+  (10,000 resamples, seeded by metric and config). The test is an exact
+  two-sided Wilcoxon signed-rank test: the rank sum against all 2^n sign
+  patterns, counted with a dynamic program over doubled ranks so ties'
+  average ranks stay integers, with zero differences dropped. I checked it
+  against brute-force enumeration on 300 random cases with ties. Holm's
+  correction runs within each metric. With 10 reps the smallest exact p
+  is 2/1024 = 0.002, so Holm can only reject in families of at most 25
+  tests. A family is therefore one metric (7 comparisons with the
+  reference), where 10/10 passes Holm's first step (0.05/7 = 0.007). On
+  E2a and E11 its medians match bylevel.py, byburst.py and sections 6.17
+  and 6.23.
+- Offline predictability check at 1 s (`ml/azure_predict.py`, 1018388):
+  method in section 6.27.
 
 ---
 
@@ -892,6 +909,8 @@ together with `meta.json` (git commit, kernel, VM config, parameters).
 | E12-pipe | 2026-11-04 | 98f977e | simple, never3, kairos, kairossync (`--wake-sync`) | `experiments/e7_pipe.sh` with `ORDER`, `NAME=e12-pipe` | 5 | `results/2026-11-04-e12-pipe/` | 2 CPUs: kairossync 1.58 µs per round trip vs kairos 14.86, simple 1.45 (section 6.24) |
 | G | 2026-11-04 | 98f977e | eevdf, eevdfidle, bpfland, kairos, pw50, pw200 (`--preempt-wait-us` 50 / 200) | `g-redis.conf`: 3 redis-server, GETs of random 1 KB values, 5 s at 2,000 and 20,000 req/s ×6, 3 zstd | 5 | `results/2026-11-04-g-redis/` | Clean. Redis p50 0.1 ms under kairos vs 0.5 under Linux (both batch policies) and bpfland, at 6% less batch than eevdf. p99s are set by the load generator (send lag p99 1–8 ms) (section 6.25) |
 | G-nb | 2026-11-04 | 47801f7 | eevdf, bpfland, kairos | `g-redis-nobatch.conf`: G without batch | 3 | `results/2026-11-04-g-redis-nobatch/` | Clean. p50 0.1–0.2 ms in all three, so G's p50 gap comes from sharing CPUs 0–2 with batch (section 6.25) |
+| FS | 2026-11-04 | 3b943c9 + uncommitted final configs (committed as 671776a) | eevdf, eevdfidle, bpfland, lavd, lavdperf, never3, kairos, pw1000r100 (as `final-burst.conf`) | `final-burst.conf` with a 12 s sweep (`burst_sweep.py --lengths-ms 100,1000 --block-s 4`), cooldown 3 s; VM up 5 min | 1 | `results/2026-11-04-final-smoke/` | Smoke test, not a measurement. All 8 configs load (lavd prints libbpf's "skeleton link is uninitialized" warning, as in every E3-r lavd run); eevdfidle's zstd runs SCHED_IDLE; stats.py and compare.py run on it |
+| AP | 2026-11-04 | 1018388 | offline, no scheduler | `ml/azure_predict.py`: Azure trace at 1 s bins (10x), depth-5 tree vs simple predictors of the next 200 ms's LC demand, pools scored at equal cost; test hours 36, 54, 284 and 12 others | – | `results/2026-11-04-azure-predict/` | The tree is under-provisioned less often than the best simple predictor in 0/3 of E2a's hours and 2/12 others (by ≤ 0.3 points), so the condition for a run with more CPUs is not met (section 6.27) |
 
 ### 5.1 Planned experiments
 | # | Experiment | Pattern | Shows |
@@ -909,6 +928,7 @@ together with `meta.json` (git commit, kernel, VM config, parameters).
 | E10 | Which wakeups preempt (`e10-preempt-diag.conf`, `--diag`) | E3's phases | which threads preempt, how long they then run |
 | E11 | Delayed borrower preemption (`e11-delay.conf`) | E3's phases | latency for batch throughput as the wait D grows |
 | E12 | Ablations (`e12-ablate.conf`, `e7_pipe.sh` with kairossync) | E3's phases; pipe | sync wakeups, shared vs per-CPU LC queue, borrower choice |
+| F | Final evaluation (`final-burst.conf`, `final-azure.conf`, `experiments/final.sh`) | E3's phases; E2a's Azure replay | every baseline and both kairos variants (D = 0 and pw1000r100), 10 reps, tested with `analysis/stats.py` |
 
 **Configurations:** EEVDF, scx_bpfland, scx_lavd, ours forced always-preempt,
 ours forced never-preempt, ours adaptive (± A, B, ML).
@@ -1948,6 +1968,66 @@ repo).
 - The raw trace has a per-minute pattern (5.7% of arrivals in second :00,
   section 8), but the 10 s bins average it away.
 
+### 6.27 Azure trace at 1 s: does a learned predictor beat simple ones? (offline, 2026-11-04)
+`ml/azure_predict.py` (1018388); outputs and commands in
+`results/2026-11-04-azure-predict/`.
+
+Method:
+- Series: what `azure_phases.py --bin-s 1` would replay at 10x, one
+  100 ms phase per second of trace, each hour scaled so its busiest
+  second is at 3500 req/s, floor 300.
+- LC demand: 1 ms of CPU per request. This comes from a fit on E2a
+  kairos-r2's sched_stats.csv: lc_demand = 0.19 + 0.00104 × rate CPUs,
+  R² 0.26.
+- One sample per phase. History K = 5 phases (500 ms), horizon H = 2
+  (200 ms), period P = 60 (6 s, one minute of trace).
+- The tree is train_burst.py's CART (depth 5, min leaf 50). Its inputs
+  are the last 5 phases, the scheduler's EWMA, and the demand in the
+  target window 1–5 periods earlier. It is trained on 24 random hours
+  (seed 2) with at least the median arrivals, and tested on other hours.
+- Pool = ceil(demand + 0.5) in [1, 8]. "Under" = share of samples whose
+  pool is smaller than the next 200 ms needs.
+- Each simple predictor is compared at the tree's cost: with the extra
+  buffer at which it gives LC as many extra CPUs as max(ewma, tree),
+  interpolated between 0.01 CPU steps.
+
+Results:
+- At 1 s the trace is sparse. The test hours have 1.4–2.2 arrivals per
+  second outside second :00 and 4.2–7.6 at :00. 60–78% of phases are at
+  the floor, and mean demand is 0.35–0.38 CPUs. Autocorrelation at lag 60
+  (one minute) is +0.03 to +0.14.
+
+| test hour | tree: under (at :00) | ewma + buffer | seasonal mean (M = 5) + buffer | best simple predictor at the tree's cost |
+|---|---|---|---|---|
+| 36 | 8.9% (33%) | 10.0% (48%) | 8.9% (17%) | 8.7%, max(ewma, seasonal mean) |
+| 54 | 11.2% (37%) | 10.7% (44%) | 17.9% (17%) | 8.2%, mean of the last 5 |
+| 284 | 7.4% (26%) | 7.1% (31%) | 9.4% (13%) | 7.1%, mean of the last 5 and ewma |
+
+- 12 other test hours (24, 37, 56, 70, 97, 103, 218, 233, 237, 279, 281,
+  321; training hours redrawn without them):
+  - Against the best simple predictor, the tree was lower in 2/12 (237:
+    10.5 vs 10.7%; 321: 4.1 vs 4.4%).
+  - Against ewma + buffer, it was lower in 6/12, equal in 2 and higher
+    in 4.
+  - The mean of the last 5 plus buffer was the best simple predictor in
+    8/12, max(ewma, seasonal mean) in 3/12.
+- Sensitivity, on E2a's hours: train seeds 3 and 4; depths 4 and 6; min
+  leaf 20; M = 10; peak 7000 req/s.
+  - The tree was never lower than the best simple predictor (0 of 21
+    hour-variant pairs, one tie at 7.1%).
+  - `--buffer 1.5` gives the same numbers as 0.5, because a whole CPU of
+    extra buffer moves both pools up by one while they stay under 8 CPUs.
+  - With 3 CPUs instead of 8 the results are the same within 0.1 points.
+- At the :00 onsets (108 of 3,298 samples per hour, 3.3%), the seasonal
+  mean is under-provisioned least.
+  - E2a's hours: 13–17%, against 26–37% for the tree and 31–48% for
+    ewma + buffer at the same cost.
+  - The 12 other hours: 8–29%, against 18–46% (tree) and 21–62% (ewma).
+  - At the other phases the seasonal mean is worse than the reactive
+    predictors.
+- MAE (CPUs) on E2a's hours: the mean of the last 5 is lowest in 3/3
+  (0.065–0.130); the tree's is 0.089–0.152.
+
 ## 7. Explanations and insights
 (The "why" behind each result. This is what the report is graded on.)
 
@@ -2537,6 +2617,18 @@ ML and the Azure replay (sections 6.13, 6.26):
   is mostly the current level, which the EWMA already follows, so the
   tree learns a buffer (guess, consistent with the 94–97% of fresh ticks
   in which it raised the demand, 6.13).
+- At 1 s (6.27) the per-minute spike is there, and a seasonal mean
+  predicts it. But at 1.4–2.2 arrivals per second, most of the change
+  from one second to the next is counting noise (a guess, consistent with
+  lag-1 autocorrelations of 0.04–0.36), and no predictor can foresee
+  noise. The onsets are 3% of samples, so the noise sets how often pools
+  are too small.
+- The tree is fitted to squared error over all samples. It spends its
+  splits on that bulk and uses its seasonal inputs less well than a plain
+  seasonal mean (26–37% vs 13–17% under-provisioned at :00, E2a's hours).
+- Any gain from forecasting would come from a rule, not a model:
+  max(ewma, seasonal mean) was the best simple predictor in 4 of the 15
+  test hours. Whether that matters online is not measured.
 
 ---
 
@@ -2652,6 +2744,14 @@ ML and the Azure replay (sections 6.13, 6.26):
   CPU its send lag p99 is 1–8 ms (G, section 6.25), so G's p99 and p99.9
   are not usable; only medians are. More CPUs for the load generator, or
   a leaner client, would be needed for tail results with Redis.
+- The offline check at 1 s (6.27) has four limits:
+  - It predicts the replayed rate, not the demand the scheduler measures,
+    so it has no measurement noise and no queueing.
+  - It converts rate to demand with a rough 1 ms per request.
+  - It scores pools by how often they are too small, not by latency or
+    batch throughput.
+  - Its load is light (mean 0.35–0.38 CPUs), because each hour is scaled
+    to its busiest second.
 
 ---
 
@@ -2747,6 +2847,12 @@ ML and the Azure replay (sections 6.13, 6.26):
   ago). Next check: offline first (`--ml-trace` on that pattern,
   `ml/train_burst.py`), then a VM with more vCPUs or a cloud ARM64
   machine.
+  → Offline on the replayed rates (6.27): at equal cost the tree did not
+  beat the simple predictors. It was lower than the best one in 0/3 of
+  E2a's hours and 2/12 others, by ≤ 0.3 points. So there is no run with
+  more CPUs: Aayush's order makes that run conditional on the model
+  winning offline. Still open: whether a seasonal rule (max(ewma,
+  seasonal mean), no learning) helps online on a machine with spare CPUs.
 
 ---
 
@@ -3632,3 +3738,60 @@ on restart.
 **Next:** After the restart: write the final-evaluation configs and
 `analysis/stats.py`, smoke-test them, run overnight with the machine
 idle.
+
+### 2026-11-04 — Final-evaluation configs and tests; ML offline check at 1 s
+**Did:**
+- Restarted the VM (no swap in use, 2.4 GB available).
+- Wrote the final-evaluation configs (671776a):
+  - `final-burst.conf` (E3's phases) and `final-azure.conf` (E2a's
+    replay), with eevdf, eevdfidle, bpfland, lavd, lavdperf, never3,
+    kairos and pw1000r100, 10 reps each.
+  - `experiments/final.sh` runs both, ~6.4 h.
+- Wrote `analysis/stats.py`, which has one change in byburst.py.
+  Checked its Wilcoxon test against brute-force enumeration, and its
+  medians against E2a's and E11's published numbers.
+- Smoke-tested all 8 configs (FS).
+- Then step 2 of Aayush's order: `ml/azure_predict.py` (1018388), the
+  offline check of the Azure trace at 1 s (AP, section 6.27).
+
+**Found:**
+- stats.py reproduces 6.17 and 6.23 (E2a all p50: kairos 0.80, bpfland
+  1.04; E11 whole-run MB/s: kairos 376, pw1000r100 399, bpfland 394).
+- With 5 reps the smallest exact p is 0.0625, so nothing in E2a or E11
+  is significant on its own. With 10 reps it is 0.002.
+- Offline check, at equal cost:
+  - The tree was lower than the best simple predictor in 0/3 of E2a's
+    hours and 2/12 others, by ≤ 0.3 points.
+  - The mean of the last 5 phases plus buffer was best in 10 of 15
+    hours.
+  - A seasonal mean foresees the :00 spikes (13–17% of onsets
+    under-sized, against 31–48% for ewma + buffer), but onsets are only
+    3% of samples.
+
+**Interpretation:** At 1 s the trace is mostly counting noise around a
+per-minute spike. A learned model gains nothing over simple predictors
+there, so this check gives no reason for the run with more CPUs
+(section 7).
+
+**Decisions:**
+- (Aayush) Order: the final evaluation first, then the 1 s offline
+  check, then a run with more CPUs only if the model beats the simple
+  predictors offline. It didn't, so that run is not planned.
+- (Aayush) lavdperf stays in the final batch, since CLAUDE.md asks for
+  both lavd modes.
+- (Aayush) The offline check ran first; the batch runs tonight.
+- Holm families are one metric each (7 comparisons). With 10 reps, a
+  family of more than 25 tests could never reject.
+
+**Problems:** My first matched-cost comparison stepped the extra buffer
+by 0.05 CPU. Because pools are whole CPUs, that overshot the tree's cost
+by up to 5x (ewma, hour 54: 0.71 vs 0.15 extra CPUs). I replaced it with
+interpolation at the tree's cost.
+
+**Next:**
+- Run `experiments/final.sh` tonight, with the Mac plugged in,
+  caffeinate on and the IDE idle.
+- Check every run: VM share, other processes, swap-ins, reclaim stalls.
+- Then `stats.py --ref kairos pw1000r100` on both parts, plus
+  `byburst.py` and `bylevel.py --windows 3`.
+- Choose the main kairos configuration from that data.
