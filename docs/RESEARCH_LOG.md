@@ -1926,6 +1926,28 @@ runs are short, so every wakeup waits). 5 reps. G-nb:
 - G-nb: p50 0.2 ms at 2,000/s and 0.1 ms at 20,000/s for all three.
   Redis CPU 0.22 (eevdf), 0.24 (bpfland), 0.37 (kairos).
 
+### 6.26 Azure replay: structure at the predictor's timescale? (offline, 2026-11-04)
+Autocorrelation of the E2a replay rates
+(`workloads/traces/azure2021-pick3-seed1.phases`, one rate per 100 ms
+phase = 10 s of trace), and the mean absolute error (req/s) of three
+predictors of the next 200 ms's maximum rate, the predictor's horizon.
+Script: `~/kairos-data/scratchpad-2026-11-04/azure_acf.py` (not in the
+repo).
+
+| hour | mean req/s | acf lag 1 | acf lag 6 (1 min of trace) | MAE: persistence / mean of last 5 / one minute earlier |
+|---|---|---|---|---|
+| 36 | 1,014 | +0.00 | +0.14 | 316 / 228 / 241 |
+| 54 | 1,148 | +0.58 | +0.13 | 463 / 485 / 608 |
+| 284 | 372 | +0.32 | +0.04 | 85 / 89 / 121 |
+
+- Apart from hour 54's lags 1–3 (its sustained busy stretch) and hour
+  284's lag 1, every autocorrelation at lags 1–12 is between −0.12 and
+  +0.25.
+- "The same phase one minute of trace earlier" is worse than persistence
+  in 3/3 hours.
+- The raw trace has a per-minute pattern (5.7% of arrivals in second :00,
+  section 8), but the 10 s bins average it away.
+
 ## 7. Explanations and insights
 (The "why" behind each result. This is what the report is graded on.)
 
@@ -2501,6 +2523,21 @@ E10–E12 and G (sections 6.22–6.25):
   handled per wakeup when Redis is served at once, doesn't explain the
   no-batch case, where every scheduler finds idle CPUs.
 
+ML and the Azure replay (sections 6.13, 6.26):
+- The predictor can only raise the demand the pool is sized from, and on
+  3 CPUs the buffer already fills the pool, so a better forecast has
+  nothing to change. With spare CPUs it could matter: a tighter pool
+  would keep some CPUs for batch alone, and a forecast would grow the
+  pool before a burst instead of after it (guess, not measured). The
+  gain would be bounded by what batch loses on borrowed CPUs, which
+  delayed preemption already reduces (E11).
+- Its inputs cover the last 500 ms. The training patterns have random
+  onsets (`ml/patterns.py random`), and the Azure replay's 10 s bins
+  average away the trace's per-minute spikes. What remains at 0.05–0.5 s
+  is mostly the current level, which the EWMA already follows, so the
+  tree learns a buffer (guess, consistent with the 94–97% of fresh ticks
+  in which it raised the demand, 6.13).
+
 ---
 
 ## 8. Limitations
@@ -2701,6 +2738,15 @@ E10–E12 and G (sections 6.22–6.25):
 - (E10.) Do workers preempt more with delayed preemption because they
   lose the CPUs the short threads used to open for them (guess in
   section 7)?
+- (ML, 2026-11-04.) Can a predictor beat the EWMA plus a fixed buffer
+  when (a) there are CPUs to spare beyond the service's peak, so a
+  smaller pool frees CPUs for batch alone, and (b) burst onsets follow
+  from history? Candidate pattern: the Azure trace at 1 s bins (10x
+  compression), where the timer-triggered spikes at second :00 come every
+  6 s of replay. It must also beat a seasonal baseline (demand one period
+  ago). Next check: offline first (`--ml-trace` on that pattern,
+  `ml/train_burst.py`), then a VM with more vCPUs or a cloud ARM64
+  machine.
 
 ---
 
@@ -3549,3 +3595,40 @@ episode in E10 (kpw-r2, 5 s) not caused by memory.
 configuration; restart the VM before the next long batch; the open
 questions in section 9 (SCHED_IDLE's added latency, Redis's CPU under
 kairos); a machine with spare CPUs for pool sizing.
+
+### 2026-11-04 — Reviewer feedback, why ML gives no gain, plan before the VM restart
+**Did:** Recorded the proposal reviewer's comment. Discussed with Aayush
+why the ML predictor gives no gain and where ML could help. Checked
+offline whether the E2a Azure replay has structure the predictor could
+use (section 6.26). Copied this session's scratch files (analysis
+helpers such as `health.py` and `wholerun.py`, run logs) from /tmp, a
+tmpfs, to `~/kairos-data/scratchpad-2026-11-04/` before the restart.
+**Found:** Reviewer: the evaluation plan (at least 10 interleaved runs,
+medians and ranges, ablations against EEVDF, bpfland and lavd) is
+rigorous; present it with statistical tests; treat the user-space
+prediction daemon strictly as a stretch goal. Azure replay: little
+structure at the predictor's timescale (lag-6 autocorrelation
+0.04–0.14; a one-minute-earlier predictor worse than persistence in 3/3
+hours).
+**Interpretation:** Two reasons compound (section 7): on 3 CPUs the
+right pool is all 3 CPUs, and the predictor can only raise the demand,
+so it acts as a buffer; and the patterns it saw have unpredictable
+onsets. A gain would need both spare CPUs and predictable onsets
+(guess).
+**Decisions:** (Aayush) The final evaluation comes first, then ML as a
+stretch goal. The VM is restarted before the final runs (section 8,
+memory after days of uptime). Proposed, to confirm when the configs are
+written: 10 interleaved reps of the burst sweep and the Azure replay
+with eevdf, eevdfidle, bpfland, lavd, never3, kairos and kairos
+`--preempt-wait-us=1000 --preempt-min-run-us=100` in one batch, so the
+main kairos configuration is chosen from the same data; tests: Wilcoxon
+signed-rank paired by rep, Holm correction, bootstrap 95% CIs of median
+differences. ML afterwards, if time allows: (1) the offline check in
+section 9 against the EWMA plus buffer and a seasonal baseline; (2) only
+if it wins there, a run with more CPUs. Another ML target is the
+preemption wait D (a user-space tuner) rather than the pool size.
+**Problems:** /tmp is a tmpfs, so the scratch files would have been lost
+on restart.
+**Next:** After the restart: write the final-evaluation configs and
+`analysis/stats.py`, smoke-test them, run overnight with the machine
+idle.
