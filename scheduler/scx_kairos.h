@@ -42,6 +42,8 @@ enum kairos_stat {
 	STAT_DELAYED,		/* --preempt-wait-us: LC wakeup waited instead of preempting */
 	STAT_LATE_PREEMPT,	/* ... and was still waiting after it: borrower preempted */
 	STAT_SYNC,		/* --wake-sync: woken task queued on the waker's CPU */
+	STAT_DUP_PICK,		/* --split: borrower preempted whose CPU had a preemption pending */
+	STAT_DUP_ALT,		/* ... while another borrower without one was there to take */
 	KAIROS_NR_STATS,	/* not NR_STATS: vmlinux.h has one */
 };
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # The final evaluation in a row, for one long session with the machine
-# otherwise idle (8 configs x 10 reps each):
-#   final-burst  burst-length sweep (E3's phases)        ~3.7 h
-#   final-azure  Azure Functions 2021 replay (E2a's)     ~2.7 h
+# otherwise idle (10 reps each):
+#   final-burst  burst-length sweep (E3's phases), 9 configs  ~4.2 h
+#   final-azure  Azure Functions 2021 replay (E2a's), 8       ~2.7 h
 # Before each part the page-cache copies of earlier results and of the big
 # source trees are dropped (scripts/evict_cache.py, no root), as in
 # e10_g.sh. A part that fails doesn't stop the other.

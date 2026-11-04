@@ -19,8 +19,10 @@
 #   procs_before/after   every process's /proc/<pid>/stat around the load, to
 #                        see what else used CPU (e.g. the VS Code server)
 #   vmstat_before/after  /proc/vmstat around the load (swapping, reclaim)
-#   vmstat_1s.txt        the same counters once a second during the load
-#                        (scripts/vmsample.sh)
+#   vmstat_1s.txt        the same counters once a second during the load,
+#                        and the PSI totals (scripts/vmsample.sh)
+#   pressure_before/after  /proc/pressure/{cpu,memory,io} around the load:
+#                        total time tasks were stalled on each (PSI)
 #   bpf_progs.json       with BPF_STATS=1, sched_ext schedulers only:
 #                        `bpftool prog show` just before unloading; with
 #                        kernel.bpf_stats_enabled=1 it holds each program's
@@ -296,11 +298,15 @@ start_service() {
 }
 
 # snapshot <run-dir> <before|after>: system-wide and per-process CPU time,
-# and memory counters. (Processes can exit while cat reads /proc, hence the
-# || true.)
+# memory counters and pressure stall totals, one "<resource> some|full
+# avg10=... total=<us>" line each. (Processes can exit while cat reads
+# /proc, hence the || true.)
 snapshot() {
 	cp /proc/stat "$1/proc_stat_$2"
 	cp /proc/vmstat "$1/vmstat_$2"
+	for r in cpu memory io; do
+		sed "s/^/$r /" "/proc/pressure/$r"
+	done > "$1/pressure_$2" 2> /dev/null || true
 	cat /proc/[0-9]*/stat > "$1/procs_$2" 2> /dev/null || true
 }
 

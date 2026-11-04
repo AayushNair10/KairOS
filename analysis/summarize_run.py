@@ -53,6 +53,10 @@ def main():
         print(f"memory: {mem['swap_in']} pages swapped in, {mem['swap_out']} out, "
               f"{mem['major_faults']} major faults, {mem['reclaim_stalls']} direct-reclaim "
               f"stalls, {mem['compact_stalls']} compaction stalls{warn}")
+    psi = runlib.pressure_stats(run_dir)
+    if psi is not None:
+        print("pressure stalls (ms per s): " + ", ".join(
+            f"{k.replace('_', ' ')} {v:.1f}" for k, v in psi.items()))
     other = runlib.other_cpu(run_dir)
     if other is not None:
         top = ", ".join(f"{c} {s / st['elapsed_s'] * 100:.1f}%" for c, s in other[:5])

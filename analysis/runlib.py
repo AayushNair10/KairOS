@@ -104,6 +104,31 @@ def memory_stats(run_dir):
     }
 
 
+def pressure_stats(run_dir):
+    """Pressure stall time (PSI) between pressure_before and _after, in ms
+    per second of wall time: {"cpu_some", "memory_some", "memory_full",
+    "io_some", "io_full"}. "some" = at least one task was stalled on the
+    resource, "full" = all non-idle tasks were (cpu full is 0 system-wide).
+    None for runs from before these files existed."""
+    paths = [os.path.join(run_dir, f"pressure_{w}") for w in ("before", "after")]
+    if not all(os.path.exists(p) for p in paths):
+        return None
+    vals = []
+    for path in paths:
+        d = {}
+        with open(path) as f:
+            for line in f:  # "<resource> some|full avg10=... total=<us>"
+                r, kind, *fields = line.split()
+                d[f"{r}_{kind}"] = int(fields[-1].split("=")[1])
+        vals.append(d)
+    # wall time between the snapshots from the files' modification times,
+    # as in system_stats()
+    wall = (os.stat(paths[1]).st_mtime_ns - os.stat(paths[0]).st_mtime_ns) / 1e9 or float("nan")
+    a, b = vals
+    return {k: (b[k] - a[k]) / 1000 / wall for k in
+            ("cpu_some", "memory_some", "memory_full", "io_some", "io_full") if k in a and k in b}
+
+
 def _read_procs(path):
     """{pid: (comm, utime + stime in ticks, start time in ticks since boot)}
     from concatenated /proc/<pid>/stat."""
@@ -190,7 +215,7 @@ def sched_stats(run_dir, start_ns, end_ns):
                                  "no_victim", "lat_wakeups", "lat_late", "late_frac",
                                  "mode_switches", "latency_ms", "lc_cpus", "lc_demand",
                                  "borrow", "kick", "idle_cpus", "idle_queued", "delayed",
-                                 "late_preempt", "sync") if k in rows[0]}
+                                 "late_preempt", "sync", "dup_pick", "dup_alt") if k in rows[0]}
 
 
 def latency_with_failures(run_dir, nphases):

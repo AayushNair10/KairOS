@@ -84,6 +84,10 @@ def main():
         if all(m is not None for m in mem):
             print(f"  {'':8} pages swapped in {med_range([m['swap_in'] for m in mem], '{:.0f}')}, "
                   f"direct-reclaim stalls {med_range([m['reclaim_stalls'] for m in mem], '{:.0f}')}")
+        psi = [runlib.pressure_stats(d) for d in groups[n]]
+        if all(p is not None for p in psi):
+            print(f"  {'':8} memory pressure ms/s some {med_range([p['memory_some'] for p in psi])}, "
+                  f"io some {med_range([p['io_some'] for p in psi])}")
 
 
 if __name__ == "__main__":

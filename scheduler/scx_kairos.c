@@ -538,7 +538,7 @@ static const char csv_header[] =
 	"fast_load,slow_load,wake_rate,wait_avg_us,wait_max_us,mode,timer_ticks,"
 	"lat_wakeups,lat_late,late_frac,mode_switches,latency_ms,"
 	"nr_lc,lc_cpus,lc_demand,lc_changes,borrow,ml_fresh,ml_raised,kick,"
-	"idle_cpus,idle_queued,preempt_cpus,delayed,late_preempt,sync\n";
+	"idle_cpus,idle_queued,preempt_cpus,delayed,late_preempt,sync,dup_pick,dup_alt\n";
 
 int main(int argc, char **argv)
 {
@@ -977,15 +977,17 @@ restart:
 			       "delayed %llu late_preempt %llu\n",
 			       skel->bss->nr_lc, lc_cpus, lc_demand, lc_ch - prev_lc_ch,
 			       d[STAT_BORROW], d[STAT_DELAYED], d[STAT_LATE_PREEMPT]);
-		printf("  idle cpus %.2f (%.2f with a task queued) preempted per cpu %s sync %llu\n",
-		       idle_cpus, idle_queued, pre_cpus, d[STAT_SYNC]);
+		printf("  idle cpus %.2f (%.2f with a task queued) preempted per cpu %s sync %llu "
+		       "dup_pick %llu (alt %llu)\n",
+		       idle_cpus, idle_queued, pre_cpus, d[STAT_SYNC], d[STAT_DUP_PICK],
+		       d[STAT_DUP_ALT]);
 		fflush(stdout);
 
 		if (csv) {
 			clock_gettime(CLOCK_REALTIME, &ts);
 			fprintf(csv, "%.3f,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%lld,%ld,%.3f,%.3f,%llu,"
 				"%.1f,%.1f,%u,%llu,%llu,%llu,%.4f,%llu,%.1f,%u,%.3f,%.3f,%llu,%llu,%llu,%llu,%llu,"
-				"%.3f,%.3f,%s,%llu,%llu,%llu\n",
+				"%.3f,%.3f,%s,%llu,%llu,%llu,%llu,%llu\n",
 				ts.tv_sec + ts.tv_nsec / 1e9, d[STAT_LOCAL], d[STAT_GLOBAL],
 				d[STAT_PREEMPT], d[STAT_PREEMPT_BATCH], d[STAT_NO_VICTIM],
 				d[STAT_TO_BATCH], d[STAT_FROM_BATCH],
@@ -997,7 +999,8 @@ restart:
 				skel->bss->nr_lc, lc_cpus, lc_demand, lc_ch - prev_lc_ch,
 				d[STAT_BORROW], mlf - prev_mlf, mlr - prev_mlr, d[STAT_KICK],
 				idle_cpus, idle_queued, pre_cpus, d[STAT_DELAYED],
-				d[STAT_LATE_PREEMPT], d[STAT_SYNC]);
+				d[STAT_LATE_PREEMPT], d[STAT_SYNC], d[STAT_DUP_PICK],
+				d[STAT_DUP_ALT]);
 			fflush(csv);
 		}
 		if (diag_csv) {
