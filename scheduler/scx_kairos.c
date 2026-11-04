@@ -61,6 +61,9 @@ const char help_fmt[] =
 "                          preempts: the first LC CPU running one (CPU 0\n"
 "                          first), its previous CPU if that runs one, or the\n"
 "                          one running longest (default first)\n"
+"      --claim-borrower    --split: one preemption per borrower at a time; a\n"
+"                          second LC wakeup takes another borrower or queues\n"
+"                          (off by default)\n"
 "      --lc-queue shared|percpu  queued LC tasks wait in one queue that\n"
 "                          every LC CPU serves first (shared), or in their\n"
 "                          CPU's own queue, which other CPUs serve only when\n"
@@ -136,6 +139,7 @@ enum {
 	OPT_KICK_IDLE,
 	OPT_NO_KICK_IDLE,
 	OPT_WAKE_SYNC,
+	OPT_CLAIM_BORROWER,
 	OPT_ML_TRACE,
 	OPT_ML_MODEL,
 	OPT_ML_PERIOD,
@@ -175,6 +179,7 @@ static const struct option long_opts[] = {
 	{ "kick-idle",       no_argument,       NULL, OPT_KICK_IDLE },
 	{ "no-kick-idle",    no_argument,       NULL, OPT_NO_KICK_IDLE },
 	{ "wake-sync",       no_argument,       NULL, OPT_WAKE_SYNC },
+	{ "claim-borrower",  no_argument,       NULL, OPT_CLAIM_BORROWER },
 	{ "ml-trace",        required_argument, NULL, OPT_ML_TRACE },
 	{ "ml-model",        required_argument, NULL, OPT_ML_MODEL },
 	{ "ml-period-ms",    required_argument, NULL, OPT_ML_PERIOD },
@@ -706,6 +711,9 @@ restart:
 		case OPT_WAKE_SYNC:
 			skel->rodata->wake_sync = true;
 			break;
+		case OPT_CLAIM_BORROWER:
+			skel->rodata->claim_borrower = true;
+			break;
 		case OPT_LC_SHIFT:
 			skel->rodata->lc_shift = parse_num("lc-shift", optarg);
 			break;
@@ -817,6 +825,11 @@ restart:
 			fprintf(stderr, "--wake-sync is for --split (the modes use the kernel's rule)\n");
 			return 1;
 		}
+		if (skel->rodata->claim_borrower &&
+		    (!skel->rodata->split || !skel->rodata->borrow_preempt)) {
+			fprintf(stderr, "--claim-borrower needs --split and borrower preemption\n");
+			return 1;
+		}
 	}
 
 	SCX_OPS_LOAD(skel, kairos_ops, scx_kairos, uei);
@@ -853,7 +866,7 @@ restart:
 	       "fast_shift=%u slow_shift=%u victim=%s batch_min_run_us=%llu "
 	       "lat_target_us=%llu late_max=%.1f%% hold_ms=%llu-%llu signal_cpus=0x%llx "
 	       "split=%d split_cpus=0x%llx lc=%u-%u lc_buffer=%.2f lc_hyst=%.2f borrow_slice_us=%llu "
-	       "borrow_preempt=%d borrower_pick=%s preempt_wait_us=%llu preempt_min_run_us=%llu class=%s kick_idle=%d wake_sync=%d lc_queue=%s\n",
+	       "borrow_preempt=%d borrower_pick=%s preempt_wait_us=%llu preempt_min_run_us=%llu class=%s kick_idle=%d wake_sync=%d lc_queue=%s claim_borrower=%d\n",
 	       skel->rodata->split ? "split" : skel->rodata->adaptive ? "adaptive" :
 	       skel->rodata->forced_mode == MODE_LATENCY ? "latency" : "batch",
 	       (unsigned long long)skel->rodata->lat_slice_ns / 1000,
@@ -876,7 +889,8 @@ restart:
 	       (unsigned long long)skel->rodata->preempt_wait_ns / 1000,
 	       (unsigned long long)skel->rodata->preempt_min_run_ns / 1000,
 	       skel->rodata->class_policy ? "policy" : "run", skel->rodata->kick_idle,
-	       skel->rodata->wake_sync, skel->rodata->lc_percpu ? "percpu" : "shared");
+	       skel->rodata->wake_sync, skel->rodata->lc_percpu ? "percpu" : "shared",
+	       skel->rodata->claim_borrower);
 
 	__u64 prev[KAIROS_NR_STATS] = {};
 	struct diag diag_prev, diag_cur;

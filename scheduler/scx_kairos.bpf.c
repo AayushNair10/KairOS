@@ -46,10 +46,11 @@
  *   (RESEARCH_LOG section 9): delayed borrower preemption
  *   (--preempt-wait-us, --preempt-min-run-us; wait_timerfn()), the
  *   kernel's rule for sync wakeups (--wake-sync), which borrower to
- *   preempt (--borrower-pick) and per-CPU LC queues (--lc-queue percpu,
- *   an ablation). All off by default. Counters for preemptions per CPU,
- *   for idle CPUs while work waits (sample_idle()) and for preemptions of
- *   a CPU that already had one pending (mark_pending()).
+ *   preempt (--borrower-pick), per-CPU LC queues (--lc-queue percpu,
+ *   an ablation) and one preemption per borrower at a time
+ *   (--claim-borrower; claim_victim()). All off by default. Counters for
+ *   preemptions per CPU, for idle CPUs while work waits (sample_idle())
+ *   and for preemptions of a CPU that already had one pending.
  *
  * The vtime parts are scx_simple's: Copyright (c) 2022 Meta Platforms, Inc.
  * and affiliates; Tejun Heo <tj@kernel.org>; David Vernet <dvernet@meta.com>.
@@ -135,6 +136,16 @@ const volatile bool borrow_preempt = true;
  * run longest since it started (closest to the end of its slice).
  */
 const volatile u32 borrower_pick = PICK_FIRST;	/* enum kairos_pick */
+/*
+ * One borrower preemption per CPU at a time (--claim-borrower). Until a
+ * kicked CPU has switched tasks, it still looks like it runs a borrower,
+ * so a second LC wakeup can pick it again: its task goes to the head of
+ * that CPU's local queue, ahead of the first one, while another borrower
+ * may be running on another LC CPU. With claim_borrower a wakeup claims
+ * the CPU it preempts, and later ones take an unclaimed borrower or, if
+ * there is none, wait in LC_DSQ like a task with nothing to preempt.
+ */
+const volatile bool claim_borrower;
 /*
  * Per-CPU LC queues (--lc-queue percpu; RESEARCH_LOG section 9, direction
  * 4), an ablation of the shared LC_DSQ. A queued LC task (no idle CPU, no
@@ -305,11 +316,12 @@ struct cpu_ctx {
 	bool batch;		/* current task's class, when it started */
 	/*
 	 * --split: a borrower preemption of this CPU was decided and its
-	 * current task hasn't stopped yet (set by mark_pending(), cleared in
+	 * current task hasn't stopped yet (set by claim_victim(), cleared in
 	 * running() and stopping()). Until the kicked CPU switches, it still
 	 * looks like a borrower, so a second LC wakeup can pick it again.
+	 * u32, not bool: BPF's compare-and-swap works on 32 or 64 bits.
 	 */
-	bool preempt_pending;
+	u32 preempt_pending;
 };
 
 struct {
@@ -577,19 +589,14 @@ static s32 split_pick_idle(struct task_struct *p, s32 prev_cpu, bool batch)
  * CPU). If @p can't run on any LC CPU (e.g. a per-CPU kernel thread on a
  * batch CPU), any allowed CPU running a batch task. Returns -1 if there
  * is none. @p may be NULL (the delayed-preemption timer): then any LC CPU.
- * *@alt: some other candidate of the same kind (LC CPU or not) has no
- * preemption pending, for mark_pending()'s count of lost choices. The
- * loop goes on past the chosen CPU only to count; the choice is the same
- * as without the count.
+ * @free_only: only CPUs without a preemption pending.
  */
-static s32 split_pick_borrower(struct task_struct *p, s32 prev, bool *alt)
+static s32 scan_borrowers(struct task_struct *p, s32 prev, bool free_only)
 {
 	bool pinned_here = p && is_migration_disabled(p), can_lc = false;
 	s32 cpu, any = -1, best = -1, pick = -1;
-	u32 free_lc = 0, free_any = 0;	/* candidates without a pending preemption */
 	u64 best_at = 0;
 
-	*alt = false;
 	bpf_for(cpu, 0, nr_cpus) {
 		struct cpu_ctx *cctx;
 		bool lc;
@@ -601,17 +608,14 @@ static s32 split_pick_borrower(struct task_struct *p, s32 prev, bool *alt)
 		lc = lc_cpu(cpu);
 		can_lc |= lc;
 		cctx = lookup_cpu_ctx(cpu);
-		if (!cctx || !cctx->running_at || !cctx->batch)
+		if (!cctx || !cctx->running_at || !cctx->batch ||
+		    (free_only && cctx->preempt_pending))
 			continue;
 		if (!lc) {
-			if (!cctx->preempt_pending)
-				free_any++;
 			if (any < 0)
 				any = cpu;
 			continue;
 		}
-		if (!cctx->preempt_pending)
-			free_lc++;
 		if (pick >= 0)
 			continue;
 		if (borrower_pick == PICK_FIRST || (borrower_pick == PICK_PREV && cpu == prev)) {
@@ -626,36 +630,70 @@ static s32 split_pick_borrower(struct task_struct *p, s32 prev, bool *alt)
 	}
 	if (pick < 0)
 		pick = best;
-	if (pick >= 0) {
-		/* only read when @pick is pending, so the count excludes it */
-		*alt = free_lc > 0;
+	if (pick >= 0)
 		return pick;
-	}
-	if (can_lc)
-		return -1;
-	*alt = free_any > 0;
-	return any;
+	return can_lc ? -1 : any;
 }
 
 /*
- * --split: a borrower preemption of @cpu is decided (@alt from
- * split_pick_borrower()). Diagnostic only: count it if @cpu already has
- * one pending, and if another borrower without one was there to take;
- * then mark @cpu. Called before the insert or kick, so the kicked CPU
- * can't stop its task (and clear the mark) before it is set.
+ * --split: the borrower to preempt for @p (scan_borrowers()), and in
+ * *@alt the same choice among the CPUs without a preemption pending:
+ * equal to the result unless that CPU has one, else another CPU or -1.
  */
-static void mark_pending(s32 cpu, bool alt)
+static s32 split_pick_borrower(struct task_struct *p, s32 prev, s32 *alt)
+{
+	s32 cpu = scan_borrowers(p, prev, false);
+	struct cpu_ctx *cctx;
+
+	*alt = cpu;
+	if (cpu < 0)
+		return cpu;
+	cctx = lookup_cpu_ctx(cpu);
+	if (cctx && cctx->preempt_pending)
+		*alt = scan_borrowers(p, prev, true);
+	return cpu;
+}
+
+/*
+ * --split: preempting a borrower is decided; @cpu and @alt are from
+ * split_pick_borrower(). If @cpu has a preemption pending, count it
+ * (dup_pick) and whether another borrower without one was there to take
+ * (dup_alt). Without claim_borrower @cpu is preempted anyway; with it,
+ * @alt, or none. The CPU is then marked; with claim_borrower by a
+ * compare-and-swap of 0 -> 1, so of two wakeups that pick the same CPU at
+ * the same time only one gets it (a lost race counts as dup_pick too).
+ * Returns the CPU to preempt, or -1: no borrower left, @p waits in LC_DSQ.
+ * Called before the insert or kick, so the kicked CPU can't stop its task
+ * (and clear the mark) before it is set.
+ */
+static s32 claim_victim(s32 cpu, s32 alt)
 {
 	struct cpu_ctx *cctx = lookup_cpu_ctx(cpu);
+	bool dup = false;
 
 	if (!cctx)
-		return;
+		return cpu;
 	if (cctx->preempt_pending) {
+		dup = true;
 		stat_inc(STAT_DUP_PICK);
-		if (alt)
+		if (alt >= 0 && alt != cpu)
 			stat_inc(STAT_DUP_ALT);
+		if (claim_borrower) {
+			if (alt < 0 || !(cctx = lookup_cpu_ctx(alt)))
+				return -1;
+			cpu = alt;
+		}
 	}
-	cctx->preempt_pending = true;
+	if (!claim_borrower) {
+		cctx->preempt_pending = 1;
+		return cpu;
+	}
+	if (__sync_val_compare_and_swap(&cctx->preempt_pending, 0, 1)) {
+		if (!dup)
+			stat_inc(STAT_DUP_PICK);
+		return -1;
+	}
+	return cpu;
 }
 
 /* Can idle CPU @cpu be claimed for @p (of class @batch), in @p's pool? */
@@ -780,20 +818,21 @@ static void split_enqueue(struct task_struct *p, u64 enq_flags)
 	u64 vtime = queue_vtime(p);
 
 	if (!batch && borrow_preempt && (enq_flags & SCX_ENQ_WAKEUP)) {
-		bool alt;
-		s32 cpu = split_pick_borrower(p, scx_bpf_task_cpu(p), &alt);
+		s32 alt, cpu = split_pick_borrower(p, scx_bpf_task_cpu(p), &alt);
 
 		if (cpu >= 0 && preempt_at_once(tctx)) {
-			stat_inc(STAT_PREEMPT);
-			stat_inc(STAT_PREEMPT_BATCH);
-			count_preempt(cpu, tctx);
-			mark_pending(cpu, alt);
-			p->scx.dsq_vtime = vtime;
-			scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, lat_slice_ns,
-					   enq_flags | SCX_ENQ_PREEMPT);
-			return;
-		}
-		if (cpu >= 0) {
+			/* claim_borrower: -1 if every borrower is claimed; queue */
+			cpu = claim_victim(cpu, alt);
+			if (cpu >= 0) {
+				stat_inc(STAT_PREEMPT);
+				stat_inc(STAT_PREEMPT_BATCH);
+				count_preempt(cpu, tctx);
+				p->scx.dsq_vtime = vtime;
+				scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu, lat_slice_ns,
+						   enq_flags | SCX_ENQ_PREEMPT);
+				return;
+			}
+		} else if (cpu >= 0) {
 			/*
 			 * Delayed: wait in LC_DSQ like a task with nothing to
 			 * preempt, but with the timer as a deadline. A CPU may
@@ -1005,7 +1044,7 @@ void BPF_STRUCT_OPS(kairos_running, struct task_struct *p)
 		cctx->run_since_sleep = tctx ? tctx->run_since_sleep : 0;
 		cctx->batch = task_batch(p, tctx);
 		cctx->running_at = now;
-		cctx->preempt_pending = false;
+		cctx->preempt_pending = 0;
 	}
 	/*
 	 * --split: a batch task taken from the batch queue by an LC CPU got a
@@ -1089,7 +1128,7 @@ void BPF_STRUCT_OPS(kairos_stopping, struct task_struct *p, bool runnable)
 	cctx = lookup_cpu_ctx(scx_bpf_task_cpu(p));
 	if (cctx) {
 		cctx->running_at = 0;
-		cctx->preempt_pending = false;
+		cctx->preempt_pending = 0;
 	}
 }
 
@@ -1344,9 +1383,9 @@ static int kairos_timerfn(void *map, int *key, struct bpf_timer *timer)
 static int wait_timerfn(void *map, int *key, struct bpf_timer *timer)
 {
 	u64 now = scx_bpf_now(), next = 0;
-	bool found = false, more = false, kicked = false, alt;
+	bool found = false, more = false, kicked = false;
 	struct task_struct *p;
-	s32 cpu, prev = -1;
+	s32 cpu, alt, prev = -1;
 
 	wait_timer_armed = 0;
 	bpf_for_each(scx_dsq, p, LC_DSQ, 0) {
@@ -1369,8 +1408,9 @@ static int wait_timerfn(void *map, int *key, struct bpf_timer *timer)
 	}
 	if (found) {
 		cpu = split_pick_borrower(NULL, prev, &alt);
+		if (cpu >= 0)
+			cpu = claim_victim(cpu, alt);
 		if (cpu >= 0) {
-			mark_pending(cpu, alt);
 			scx_bpf_kick_cpu(cpu, SCX_KICK_PREEMPT);
 			stat_inc(STAT_LATE_PREEMPT);
 			count_preempt(cpu, NULL);

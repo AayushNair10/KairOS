@@ -962,6 +962,7 @@ together with `meta.json` (git commit, kernel, VM config, parameters).
 | E12 | Ablations (`e12-ablate.conf`, `e7_pipe.sh` with kairossync) | E3's phases; pipe | sync wakeups, shared vs per-CPU LC queue, borrower choice |
 | F | Final evaluation (`final-burst.conf`, `final-azure.conf`, `experiments/final.sh`) | E3's phases; E2a's Azure replay | every baseline and both kairos variants (D = 0 and pw1000r100), 10 reps, tested with `analysis/stats.py`; in the burst part also fixed3 (LC pool held at 3 CPUs), a pool-sizing ablation |
 | E13 | Dependency rule for delayed preemption | E3's phases | whether letting short-running LC tasks that recently woke another LC task preempt at once recovers pw1000r100's latency at its batch throughput |
+| E14 | One borrower preemption per CPU at a time (`claim-burst.conf`, `claim-azure.conf`) | E3's phases; E2a's Azure replay | whether `--claim-borrower` (a second LC wakeup takes another borrower or queues, instead of re-picking a CPU already being preempted) changes latency or batch throughput, for kairos and pw1000r100 |
 
 **Rules for F, set on 2026-11-04 before F runs** (Aayush agreed to the
 draft):
@@ -1007,6 +1008,32 @@ draft):
     pw1000r100's.
 
   Fewer preemptions alone is not success.
+
+**Added on 2026-11-04 (evening), before E14 and F run:**
+- **Exclusion, decided** (Aayush chose this over the whole-rep rule
+  above). Only the flagged run's pairs are left out: `stats.py
+  --skip-runs <config>-r<rep>`. If the flagged run is a reference (kairos
+  or pw1000r100), that rep drops out of every comparison with that
+  reference. A flagged run of another config costs one pair, so the other
+  comparisons keep n = 10.
+- **Duplicate picks, outcome.** In DS2, a clean run, kairos's dup_alt was
+  8.8% of its preemptions (section 6.28). That is above the 1%, so the fix
+  (`--claim-borrower`) is tested on its own first, in E14.
+- **E14 adoption rule.** `--claim-borrower` is adopted for kairos (and
+  separately for pw1000r100) if, against the same config without it, it
+  is not worse with p < 0.05 on any of the three primary metrics:
+  - on the burst sweep: busy p50, busy share over 5 ms, whole-run batch
+    MB/s;
+  - on the Azure replay: p50, share over 5 ms, batch MB/s.
+
+  Each pair is its own decision: `stats.py --ref kairos --configs kairos
+  kclaim`, one comparison per metric, so no Holm. Runs are checked with
+  F's flags.
+
+  Reason: the option removes a known misbehaviour, so it is kept unless
+  it costs something measurable. Whether it also helps is reported
+  either way. An adopted fix then runs in F under the same config names,
+  with `--claim-borrower` added; F's config.conf records it.
 
 **Configurations:** EEVDF, scx_bpfland, scx_lavd, ours forced always-preempt,
 ours forced never-preempt, ours adaptive (± A, B, ML).

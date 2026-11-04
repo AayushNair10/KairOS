@@ -37,9 +37,12 @@ one family.
 
 Usage: analysis/stats.py results/<date>-<name> --ref CONFIG [CONFIG ...]
        [--by burst|level] [--levels 1000,2000] [--configs C ...]
-       [--skip-reps N ...] [--csv FILE]
+       [--skip-reps N ...] [--skip-runs RUN ...] [--csv FILE]
 (several --ref configs print one section each; --configs picks and orders
-the configurations; --csv writes every comparison as one row)
+the configurations; --skip-reps leaves out whole reps; --skip-runs leaves
+out single runs such as bpfland-r3, i.e. only the pairs they are in: a
+skipped run of a reference drops that rep from every comparison with that
+reference; --csv writes every comparison as one row)
 """
 import argparse
 import csv
@@ -155,9 +158,13 @@ def main():
     ap.add_argument("--levels", default="1000,2000")
     ap.add_argument("--configs", nargs="+")
     ap.add_argument("--skip-reps", type=int, nargs="+", default=[])
+    ap.add_argument("--skip-runs", nargs="+", default=[])
     ap.add_argument("--csv")
     a = ap.parse_args()
     runs = aggregate.runs_by_config(a.dir, a.skip_reps)
+    unknown = set(a.skip_runs) - {os.path.basename(d) for v in runs.values() for d in v}
+    if unknown:
+        raise SystemExit(f"--skip-runs: no such run in {a.dir}: {', '.join(sorted(unknown))}")
     names = a.configs or sorted(runs)
     for r in a.ref:
         if r not in runs:
@@ -173,6 +180,8 @@ def main():
     for n in set(names) | set(a.ref):
         vals[n] = {}
         for d in runs[n]:
+            if os.path.basename(d) in a.skip_runs:
+                continue
             rep = int(re.fullmatch(r".+-r(\d+)", os.path.basename(d)).group(1))
             ms = burst_metrics(d) if by == "burst" else level_metrics(d, levels)
             meta = meta or [(m, u, h) for m, u, h, _ in ms]
