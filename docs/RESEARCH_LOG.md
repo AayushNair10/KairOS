@@ -886,6 +886,12 @@ together with `meta.json` (git commit, kernel, VM config, parameters).
 | E3-r | 2026-11-02 | 91c348a (run.sh at abdb4ec; `git_dirty` true, section 6.19) | as E3 | as E3; page cache dropped before the batch and after each run (`scripts/evict_cache.py`); 1 s memory counters | 5 | `results/2026-11-02-e3-burst-171449/` | Clean apart from rep 1 (lavd-r1 swapped 34k pages; bpfland-r1 VM share 0.93); no reclaim stalls. kairos busy p50 0.90–0.98 ms at every L, lower than every baseline in 5/5 paired; 6–20% less batch MB/s (section 6.19) |
 | E7 | 2026-11-02 | 91c348a | eevdf, simple, bpfland, lavd, never3, kairos (bpfstats without eevdf) | `e7-batch.conf` (3 zstd, 10 req/s), `e7-light.conf` (500 req/s, no batch), `experiments/e7_pipe.sh` (perf bench sched pipe, 1 and 2 CPUs), `e7-bpfstats.conf` (kernel.bpf_stats_enabled=1) | 5 (bpfstats 2) | `results/2026-11-02-e7-{batch,light,pipe,bpfstats}/` | Batch only: all within ±3% of simple (rep 1 left out, disturbed by my analysis). Light load: kairos lowest p50 (1.04 ms). Pipe on 2 CPUs: kairos 15.2 µs per round trip vs simple 1.6 (ignores sync wakeups). Callbacks 4.1% of a CPU (simple 1.5, bpfland 5.5, lavd 7.3) (section 6.20) |
 | E3-idle | 2026-11-02 | 8086c1f | eevdfidle (Linux, zstd SCHED_IDLE), kairos (zstd SCHED_BATCH, as E3) | `e3-idle.conf`: E3's phases | 3 | `results/2026-11-02-e3-idle/` | All clean. kairos busy p50 0.89-1.05 ms vs 1.8-3.0 for eevdfidle, better in 3/3 at every L; eevdfidle 2% more batch over the whole run (section 6.21) |
+| E10 | 2026-11-04 | 98f977e | kairos (as E3), kpw (`--preempt-wait-us=250 --preempt-min-run-us=100`); `--diag` with groups grpcworker, grpcserver, zstd | `e10-preempt-diag.conf`: E3's phases | 3 | `results/2026-11-04-e10-diag/` (a first start on 2026-11-03 was stopped after one run because the IDE was in use: `results/2026-11-03-e10-diag-aborted/`) | Clean apart from steady direct-reclaim and compaction stalls (no swapping). 94–96% of kairos's preempting runs are the server's non-worker threads, mean 7–12 µs; the request workers 2–5%, ~0.5 ms. kpw cut preemptions from 8,740 to 1,384/s (section 6.22) |
+| E11 | 2026-11-04 | 98f977e | kairos, pw100r100 / pw250r100 / pw1000r100 (`--preempt-wait-us` 100 / 250 / 1000, `--preempt-min-run-us=100`), pw250 (D 250 µs, every LC task waits), bpfland, eevdfidle | `e11-delay.conf`: E3's phases | 5 | `results/2026-11-04-e11-delay/` | Clean (VM share 0.98–1.00, other processes ≤ 7%); fewer reclaim stalls than E10. pw1000r100: 90% fewer preemptions, 6% more batch than kairos (5/5 reps) and as much as bpfland (399 vs 394 MB/s); busy p50 1.21–1.45 ms vs 0.94–1.10 (kairos) and 1.55–1.69 (bpfland, lower in 4–5/5 at every L) (section 6.23) |
+| E12 | 2026-11-04 | 98f977e | kairos, sync (`--wake-sync`), percpu (`--lc-queue percpu`), longest / prev (`--borrower-pick`), eevdfidle | `e12-ablate.conf`: E3's phases | 3 | `results/2026-11-04-e12-ablate/` | Clean. Per-CPU LC queues raise busy p50 from 0.86–1.04 to 1.46–1.71 ms (eevdfidle 1.99–2.99): the shared queue is a large part of kairos's lead. sync, longest, prev: no clear change (section 6.24) |
+| E12-pipe | 2026-11-04 | 98f977e | simple, never3, kairos, kairossync (`--wake-sync`) | `experiments/e7_pipe.sh` with `ORDER`, `NAME=e12-pipe` | 5 | `results/2026-11-04-e12-pipe/` | 2 CPUs: kairossync 1.58 µs per round trip vs kairos 14.86, simple 1.45 (section 6.24) |
+| G | 2026-11-04 | 98f977e | eevdf, eevdfidle, bpfland, kairos, pw50, pw200 (`--preempt-wait-us` 50 / 200) | `g-redis.conf`: 3 redis-server, GETs of random 1 KB values, 5 s at 2,000 and 20,000 req/s ×6, 3 zstd | 5 | `results/2026-11-04-g-redis/` | Clean. Redis p50 0.1 ms under kairos vs 0.5 under Linux (both batch policies) and bpfland, at 6% less batch than eevdf. p99s are set by the load generator (send lag p99 1–8 ms) (section 6.25) |
+| G-nb | 2026-11-04 | 47801f7 | eevdf, bpfland, kairos | `g-redis-nobatch.conf`: G without batch | 3 | `results/2026-11-04-g-redis-nobatch/` | Clean. p50 0.1–0.2 ms in all three, so G's p50 gap comes from sharing CPUs 0–2 with batch (section 6.25) |
 
 ### 5.1 Planned experiments
 | # | Experiment | Pattern | Shows |
@@ -1751,6 +1757,175 @@ in E3 (zstd SCHED_BATCH); E3's phases; 3 reps. All runs clean: VM share
   its batch from 412–448 to 378–416 MB/s, and raised its idle time on
   CPUs 0–2 from 0.31 to 0.38 CPUs.
 
+### 6.22 E10: which wakeups preempt (2026-11-04)
+`results/2026-11-04-e10-diag/`, 6 runs, 03:30–03:46, commit 98f977e
+(clean). kairos as in E3; kpw = kairos with `--preempt-wait-us=250
+--preempt-min-run-us=100` (an LC task whose runs average under 100 µs
+waits up to 250 µs for a CPU before a borrower is preempted). `--diag`
+groups: grpcworker (the request workers), grpcserver (the server's other
+threads: Go runtime threads, netpoller, gRPC transport), zstd, other.
+E3's phases, 3 reps. Calibration 1,024.
+- Checks: VM share 0.98–0.99, other processes 4–13% of a CPU, swap-ins
+  ≤ 14 pages. But 6,700–12,000 direct-reclaim stalls and 19–35k
+  compaction stalls per run (about 50–80 and 150–250 per second, with
+  kswapd not scanning). E3-r and E3-idle had none. kairos's latency and
+  batch match E3-r and E3-idle (below), so I use the runs (section 8).
+- Preempting runs (runs that began by preempting a borrower), per
+  second, median over reps:
+
+| group | quiet (500/s) kairos | kpw | busy (3500/s) kairos | kpw |
+|---|---|---|---|---|
+| grpcserver | 6,576, mean 7 µs | 3 | 9,470, mean 12 µs | 19 |
+| grpcworker | 164, mean 532 µs | 461 | 460, mean 425 µs | 1,192 |
+| other | 136, mean 71 µs | 29 | 86, mean 56 µs | 17 |
+
+  98–99% of grpcserver's preempting runs were under 50 µs. So 94–96% of
+  kairos's preemptions hand a CPU to a thread that runs ~10 µs and
+  sleeps again; the workers that serve requests cause 2–5%.
+- Per request, zstd was preempted 4.35 times (quiet) and 0.76 (busy)
+  under kairos, 0.73 and 0.19 under kpw. grpcserver threads waited 0.18
+  → 0.45 ms per request (quiet) and 0.24 → 0.35 ms (busy) with kpw.
+- Whole run, kairos / kpw: preemptions 8,740 / 1,384 per second (587 of
+  them by the wait timer); kairos per CPU 3,793 / 2,932 / 2,015 on CPUs
+  0–2. Batch 409 / 421 MB/s (per rep 395, 409, 411 / 430, 421, 409).
+  Context switches 46.9k / 37.2k per second; idle on CPUs 0–2 0.37 /
+  0.34 CPUs. Idle CPUs while a task was queued: 0.004 / 0.0008 CPUs.
+- Latency: kairos busy p50 0.88–0.95 ms at every L (E3-r 0.90–0.98),
+  kpw 1.07–1.10; kairos lower in 3/3 reps at every L. Block batch: kpw
+  higher in 2–3/3 at every L.
+- kpw-r2 had a 5 s overload episode from t ≈ 2.5 s: 18–29 runnable
+  tasks, the longest wait of any task 1.9 s, batch 23 MB/s, busy p50 up
+  to 21 ms, load generator send lag p99 5–8 ms. Reclaim stalls fell to
+  1–8 per second during the episode (55–95 before and after it), so as
+  far as these counters show, memory was not the trigger. Guess: the
+  stalls come with zstd's allocations, which stopped while batch was
+  starved. It looks like the slow episodes seen before (sections 6.1,
+  6.16).
+
+### 6.23 E11: delayed borrower preemption (2026-11-04)
+`results/2026-11-04-e11-delay/`, 35 runs, 03:46–05:24, commit 98f977e
+(clean). pwDrN = kairos with `--preempt-wait-us=D
+--preempt-min-run-us=N`: an LC task whose runs average under N µs waits
+up to D µs for a CPU, then the timer preempts a borrower; the others
+preempt at once. pw250 = D 250 µs with every LC task waiting. bpfland;
+eevdfidle = Linux with zstd SCHED_IDLE. E3's phases, 5 reps.
+Calibration 1,031.
+- Checks: VM share 0.98–1.00, other processes 4–7%, swap-ins 0 (one run
+  339). Direct-reclaim stalls 88–3,900 per run in every config (medians
+  1,055–2,051), fewer than in E10.
+- Medians over 5 reps; ranges over the 7 burst lengths; whole-run
+  columns are medians over reps (preempt/s includes the timer's):
+
+| config | busy p50 (ms) | busy >5 ms (%) | quiet p50 | MB/s | preempt/s | ctx k/s | idle CPUs 0–2 |
+|---|---|---|---|---|---|---|---|
+| kairos | 0.94–1.10 | 2.0–7.7 | 0.81–0.90 | 376 | 8,020 | 45.5 | 0.37 |
+| pw100r100 | 1.00–1.18 | 2.4–8.6 | 0.85–0.94 | 380 | 2,025 | 38.6 | 0.35 |
+| pw250r100 | 1.20–1.25 | 2.4–8.9 | 0.88–0.95 | 392 | 1,318 | 36.5 | 0.34 |
+| pw1000r100 | 1.21–1.45 | 3.7–9.5 | 0.88–0.98 | 399 | 841 | 34.1 | 0.33 |
+| pw250 | 1.38–1.55 | 6.0–10.9 | 0.90–0.98 | 395 | 839 | 34.4 | 0.33 |
+| bpfland | 1.55–1.69 | 14.8–18.1 | 0.93–1.09 | 394 | – | 38.2 | 0.30 |
+| eevdfidle | 2.06–3.20 | 18.3–34.3 | 1.14–1.35 | 376 | – | 44.4 | 0.37 |
+
+- Delayed LC wakeups: 6,170–6,880 per second in every pw config. The
+  timer had to preempt for 1,330 of them per second with D 100 µs, 578
+  with D 250 µs and 11 with D 1 ms; the others got a CPU without a
+  preemption first. pw250: all 839 preemptions/s by the timer.
+- Paired with kairos (same rep): kairos had the lower busy p50 in 5/5
+  reps at every L against pw250r100, pw1000r100 and pw250, and in 3–5/5
+  against pw100r100. Whole-run batch per rep: kairos 387, 367, 380, 364,
+  376; pw1000r100 407, 395, 399, 377, 402 (higher in 5/5); pw250r100
+  5/5; pw250 5/5; pw100r100 2/5 (one tie).
+- Paired with bpfland: pw1000r100 had the lower busy p50 in 4–5/5 and
+  fewer busy requests over 5 ms in 4–5/5 at every L; block batch higher
+  in 17 of 35 block-rep pairs; whole run 399 vs 394 MB/s (bpfland per
+  rep 387, 400, 394, 392, 398; pw1000r100 higher in 3/5). pw250r100:
+  4–5/5, 4–5/5, 16 of 35. kairos: 5/5, 5/5, 4 of 35.
+- Episodes with requests over 50 ms (episodes.py), per run: kairos 0–7
+  (median 3), pw1000r100 1–5 (4), pw100r100 3–8 (5), pw250 4–8 (6),
+  pw250r100 3–11 (8), eevdfidle 9–14 (11), bpfland 10–18 (15).
+
+### 6.24 E12: ablations, and the pipe test with sync wakeups (2026-11-04)
+`results/2026-11-04-e12-ablate/`, 18 runs, 05:24–06:14, commit 98f977e
+(clean). Each config is kairos (as in E3) with one option: sync =
+`--wake-sync`; percpu = `--lc-queue percpu`; longest, prev =
+`--borrower-pick longest`, `prev` (default `first`, the lowest-numbered
+borrower CPU). eevdfidle as in E11. E3's phases, 3 reps. Calibration
+995 (E10, E11: 1,024–1,031; the fastest of three tries is kept, so the
+host was ~3% slower at the start of E12).
+- Checks: VM share 0.98–0.99, other processes ≤ 6%, swap-ins ≤ 20.
+  Reclaim stalls only in rep 3 (14–253 per run).
+- Medians over 3 reps, ranges over the 7 burst lengths:
+
+| config | busy p50 (ms) | busy >5 ms (%) | quiet p50 | MB/s | preempt/s on CPUs 0 / 1 / 2 | ctx k/s |
+|---|---|---|---|---|---|---|
+| kairos | 0.86–1.04 | 1.8–6.5 | 0.79–0.86 | 389 | 3,253 / 2,494 / 1,697 | 46.3 |
+| sync | 0.84–1.04 | 1.3–10.6 | 0.79–0.87 | 380 | 3,352 / 2,630 / 1,805 | 46.4 |
+| percpu | 1.46–1.71 | 8.7–13.7 | 0.85–0.94 | 377 | 5,187 / 2,148 / 1,219 | 43.5 |
+| longest | 0.87–1.01 | 1.0–3.6 | 0.78–0.88 | 381 | 2,829 / 2,857 / 2,831 | 46.6 |
+| prev | 0.85–1.00 | 1.3–5.8 | 0.79–0.86 | 385 | 3,223 / 2,964 / 2,460 | 47.0 |
+| eevdfidle | 1.99–2.99 | 17.1–32.0 | 1.11–1.30 | 401 | – | 44.9 |
+
+- percpu: kairos had the lower busy p50 in 3/3 reps at 6 of 7 L (2/3 at
+  300 ms) and fewer busy requests over 5 ms in 3/3 at 5 of 7. percpu
+  had more system time (11.6% vs 9.4%), more server CPU (1.32 vs 1.25
+  CPUs), more runnable tasks on average (11.1 vs 9.1) and less idle
+  (0.34 vs 0.38 CPUs). Batch per rep 383, 377, 373 (kairos 334, 389,
+  393). percpu's busy p50 is still below eevdfidle's at every L.
+- sync: 6 sync wakeups per second took the waker's CPU; no consistent
+  change (paired 1–3/3 at every L).
+- longest spread preemptions evenly over CPUs 0–2; prev partly. Neither
+  changed latency or batch consistently (paired 1–3/3).
+- prev had no overload like the one in its smoke run (section 10,
+  2026-11-03): 1–6 episodes over 50 ms per run, the worst 237–274 ms
+  (kairos 1–7, worst 129–640 ms).
+- kairos-r1's batch (334 MB/s) is low: that run had 7 slow episodes,
+  the worst 640 ms.
+- Pipe (`results/2026-11-04-e12-pipe/`, 06:14–06:16, 5 reps): µs per
+  round trip, median [min–max]:
+
+| CPUs | simple | never3 | kairos | kairossync |
+|---|---|---|---|---|
+| 0 | 1.57 [1.46–1.66] | 1.60 [1.57–1.70] | 1.65 [1.63–1.70] | 1.65 [1.64–1.71] |
+| 0,1 | 1.45 [1.41–1.60] | 1.54 [1.52–1.75] | 14.86 [12.94–15.19] | 1.58 [1.57–1.63] |
+
+### 6.25 G: Redis, and G-nb without batch (2026-11-04)
+`results/2026-11-04-g-redis/`, 30 runs, 06:16–06:53, commit 98f977e
+(clean). Three single-threaded redis-server instances on CPUs 0–2
+(10,000 keys of 1 KB); the load generator on CPU 3 sends pipelined GETs
+of random keys (4 connections per instance); 5 s at 2,000 and 20,000
+GETs/s, 6 times; 3 zstd jobs (SCHED_BATCH; eevdfidle SCHED_IDLE).
+kairos as in E3; pw50, pw200 = `--preempt-wait-us` 50, 200 (Redis's
+runs are short, so every wakeup waits). 5 reps. G-nb:
+`results/2026-11-04-g-redis-nobatch/`, 9 runs, 07:02–07:14, commit
+47801f7: eevdf, bpfland, kairos, no batch, 3 reps.
+- Checks: VM share 0.96 (eevdf, eevdfidle, bpfland) and 0.98–0.99
+  (kairos, pw*); in G-nb 0.96–1.00. Other processes ≤ 12%, no swapping,
+  no reclaim stalls.
+- The load generator falls behind: its send lag p99 was 1–8 ms in most
+  phases, with single phases at 30–440 ms, in every config (G-nb: mostly
+  0.1–1.6 ms, single phases 7–43 ms). Latency counts from the intended
+  send time, so p99 and p99.9 measure the load generator as much as
+  Redis. I compare medians only.
+- Medians over reps; latency ranges over the 6 phases of each rate
+  (compare.py prints p50 to 0.1 ms); whole-run batch and CPU:
+
+| config | p50 2,000/s (ms) | p50 20,000/s | p99 20,000/s | MB/s | preempt/s | Redis CPU | system time |
+|---|---|---|---|---|---|---|---|
+| eevdf | 0.5–0.6 | 0.5 | 3–4 | 755 | – | 0.11 | 9.8% |
+| eevdfidle | 0.5 | 0.5 | 2–4 | 740 | – | 0.11 | 10.1% |
+| bpfland | 0.6 | 0.5 | 5–27 | 746 | – | 0.12 | 9.1% |
+| kairos | 0.1 | 0.1–0.2 | 3–7 | 707 | 11,190 | 0.27 | 19.3% |
+| pw50 | 0.2 | 0.3–0.4 | 7–37 | 717 | 4,217 | 0.17 | 18.7% |
+| pw200 | 0.3–0.4 | 0.3 | 3–6 | 732 | 2,420 | 0.14 | 17.0% |
+
+- Batch per rep: eevdf 820, 746, 735, 756, 755; kairos 649, 653, 707,
+  707, 711. p99: eevdf below kairos in 1–4/5 reps per phase (no
+  consistent order).
+- kairos's preemptions fell on CPU 0 for 92% (10,293 of 11,190 per
+  second) with the default borrower choice.
+- G-nb: p50 0.2 ms at 2,000/s and 0.1 ms at 20,000/s for all three.
+  Redis CPU 0.22 (eevdf), 0.24 (bpfland), 0.37 (kairos).
+
 ## 7. Explanations and insights
 (The "why" behind each result. This is what the report is graded on.)
 
@@ -2258,6 +2433,74 @@ E3-idle, Linux with SCHED_IDLE batch jobs (section 6.21):
   Linux's built-in option for this at the same batch throughput, and ~1.5x
   lower than bpfland at 6–13% less batch.
 
+E10–E12 and G (sections 6.22–6.25):
+- Where kairos's preemptions come from. 94–96% of its ~8,500
+  preemptions/s hand a CPU to one of the Go server's non-worker threads,
+  which runs 7–12 µs and sleeps again. The request workers, whose runs
+  are ~0.5 ms, cause 2–5%. For each of these zstd pays a context switch
+  and a colder cache to give a thread ~10 µs. Guess (not measured per
+  thread): mostly Go's idle Ms waking to look for work ("spinning") and
+  the netpoller handing requests to workers.
+- Delayed preemption. If such short-running threads wait for a CPU
+  instead of preempting, they almost always get one soon without a
+  preemption: with D = 1 ms the timer had to preempt for 11 of ~6,200
+  delayed wakeups/s. Preemptions fall 90%, context switches 25%, idle on
+  CPUs 0–2 0.37 → 0.33 CPUs, and batch rises 6% (5/5 reps), to
+  bpfland's level. The cost is +0.25–0.35 ms on the busy median: these
+  threads are on the request path (E10: their waits per request rose
+  0.1–0.27 ms with D = 250 µs), so delaying them delays requests. The
+  tail moves less (busy >5 ms 2.0–7.7% → 3.7–9.5%), since a wait of at
+  most 1 ms is small against 5 ms.
+- Exempting the workers matters: pw250, where every LC task waits, has
+  a higher busy p50 (1.38–1.55 ms) and more busy requests over 5 ms
+  (6.0–10.9%) than pw250r100 (1.20–1.25 ms; 2.4–8.9%) at about the same
+  batch (395 vs 392 MB/s). Preempting only for tasks whose runs are long
+  enough to be worth it is a simple form of the classification idea
+  (Feature A, section 3), keyed on the average run length.
+- So D is a latency-for-throughput knob, and D = 1 ms with workers
+  exempt gives a point that beats bpfland: the same batch (399 vs 394
+  MB/s) with a busy median lower in 4–5/5 reps at every burst length
+  (1.21–1.45 vs 1.55–1.69 ms) and 2–4x fewer busy requests over 5 ms.
+  D = 100 µs keeps kairos's latency (p50 +0.05–0.1 ms), but its batch
+  gain is not consistent (2/5 reps).
+- Workers preempt more when the short threads wait (E10, busy: 460 →
+  1,192/s). Guess: under kairos, a worker woken behind a short thread is
+  often given the CPU that thread took by preemption once it sleeps
+  ~10 µs later, so the worker gets a CPU without preempting; when the
+  short threads wait, a woken worker finds only borrowers.
+- The shared LC queue. With per-CPU LC queues, kairos's busy median
+  rises from 0.86–1.04 to 1.46–1.71 ms and its busy share over 5 ms
+  2–5x, with more system time and more runnable tasks and no batch
+  gain. This supports the guess in the E3-idle explanation: much of
+  kairos's lead over Linux with SCHED_IDLE (1.99–2.99 ms) comes from one
+  shared queue for the service (the M/M/3 vs 3×M/M/1 effect). The rest
+  (percpu still has a 1.3–1.8x lower median than eevdfidle) would come
+  from the other differences (guess): LC tasks never wait behind batch
+  on their CPU, a woken LC task looks at all 3 CPUs, and LC tasks run
+  FIFO with 3 ms slices instead of sharing CPUs fairly among 16 Go
+  threads.
+- Sync wakeups fix the pipe case (2-CPU round trip 14.9 → 1.6 µs,
+  simple's 1.5) but the gRPC workload has only ~6 per second (the load
+  generator's wakeups come from CPU 3, outside the pool), so they change
+  nothing there, as expected.
+- Victim choice. `longest` spreads preemptions evenly across CPUs 0–2
+  but changes neither latency nor batch measurably with 3 reps; CPU 0
+  taking more preemptions costs nothing visible here.
+- Redis (G). The colocation result holds for a very different service.
+  A GET takes ~10 µs, so Redis needs ~0.1 CPU, but every request is a
+  wakeup. Linux (with zstd SCHED_BATCH or SCHED_IDLE) and bpfland raise
+  Redis's median from its no-batch 0.1–0.2 ms to 0.5 ms; kairos keeps
+  0.1 ms, at 6% less batch than eevdf, twice the system time (19% vs
+  10%) and 11k preemptions/s. Delayed preemption (D = 200 µs) halves the
+  batch loss (732 vs 707 and 755 MB/s) and keeps a 0.3 ms median. Why
+  Linux with SCHED_IDLE batch still adds ~0.3 ms, when a woken Redis
+  should preempt a SCHED_IDLE task at once, is not known. The same was
+  seen for gRPC in E3-idle (1.8–3.0 ms against ~1 ms).
+- Redis used 2.5x the CPU under kairos (0.27 vs 0.11 CPUs; without
+  batch 0.37 vs 0.22). Cause not measured. A first guess, fewer requests
+  handled per wakeup when Redis is served at once, doesn't explain the
+  no-batch case, where every scheduler finds idle CPUs.
+
 ---
 
 ## 8. Limitations
@@ -2360,6 +2603,18 @@ E3-idle, Linux with SCHED_IDLE batch jobs (section 6.21):
 - Three CPUs for service and batch. In E3 KairOS's LC pool was at all 3
   CPUs in 97–98% of seconds, so pool sizing (reactive or predicted) was
   never exercised. A machine with spare CPUs is needed to test it.
+- Memory after days of uptime. After 5 days up, E10 and E11 had steady
+  direct-reclaim and compaction stalls (in E10 about 50–80 and 150–250
+  per second) without swapping, and they faded during the night (E12
+  almost none, G none). They fell to almost none while batch was
+  starved in E10's kpw-r2, so they seem to come with zstd's allocations
+  (guess). kairos's E10 and E11 numbers match E3-r and E3-idle, so I
+  kept the runs. Restarting the VM before a long batch should avoid
+  this (not tested).
+- The load generator limits Redis tails. At 20,000 GETs/s on its one
+  CPU its send lag p99 is 1–8 ms (G, section 6.25), so G's p99 and p99.9
+  are not usable; only medians are. More CPUs for the load generator, or
+  a leaner client, would be needed for tail results with Redis.
 
 ---
 
@@ -2429,6 +2684,23 @@ E3-idle, Linux with SCHED_IDLE batch jobs (section 6.21):
   SCHED_IDLE (per-CPU LC queues as an ablation)? (5) Does the victim
   choice (CPU 0 first now) matter? (6) On a machine with spare CPUs,
   does pool sizing matter?
+  → E10–E12, G (sections 6.22–6.25): (1) the server's non-worker
+  threads, 94–96% of preempting runs, 7–12 µs each; (2) yes: D = 1 ms
+  with the workers preempting at once gives bpfland's batch at a lower
+  latency than bpfland, +0.25–0.35 ms on kairos's busy median; (3) not
+  for gRPC (6 sync wakeups/s); they fix the pipe test; not tried with
+  Redis; (4) yes, in large part; (5) no visible effect; (6) still open.
+- (E11, G.) Why does Linux with SCHED_IDLE batch jobs still raise the
+  service's median (Redis 0.1–0.2 → 0.5 ms, gRPC ~1 → 1.8–3.0 ms), when
+  a woken service task should preempt a SCHED_IDLE task at once? Which
+  hop waits (the wakeup, softirq or ksoftirqd, the reply's path)? Next
+  check: trace one request's wakeups under eevdfidle.
+- (G.) Why does Redis use 2.5x the CPU under kairos, also without batch?
+  Next check: perf stat on redis-server (cycles, syscalls per request)
+  under eevdf and kairos.
+- (E10.) Do workers preempt more with delayed preemption because they
+  lose the CPUs the short threads used to open for them (guess in
+  section 7)?
 
 ---
 
@@ -3239,3 +3511,41 @@ page cache before each part.
 **Next:** Run `experiments/e10_g.sh` with the machine idle, then analyze
 E10–E12 and G (compare.py, byburst.py --ref kairos, diag.py for E10,
 overhead.py --pipe for the pipe test).
+
+### 2026-11-04 — E10–E12, pipe test, G and G-nb
+**Did:** Ran `experiments/e10_g.sh` overnight with the Mac plugged in
+under `caffeinate` and the IDE idle (03:30–06:53; a first start at
+20:00 the day before was stopped after one run because the IDE was in
+use, and its data moved to `results/2026-11-03-e10-diag-aborted/`).
+Checked every run (VM share, other processes, swap-ins, reclaim stalls),
+then analysed with compare.py, byburst.py (--ref kairos and bpfland),
+diag.py, episodes.py and overhead.py --pipe. G's load generator lag
+raised the question whether the Redis p50 gap was real, so I added and
+ran G-nb (`g-redis-nobatch.conf`, 07:02–07:14).
+**Found:** E10: 94–96% of kairos's preemptions are for the server's
+non-worker threads (7–12 µs runs). E11: delaying them (D = 1 ms, workers
+exempt) removes 90% of preemptions and gives 6% more batch (5/5), as
+much as bpfland, at +0.25–0.35 ms busy median; still lower than
+bpfland's in 4–5/5 at every L. E12: per-CPU LC queues raise the busy
+median from ~0.95 to ~1.6 ms; sync wakeups, `longest` and `prev` change
+nothing measurable; sync wakeups fix the pipe test (14.9 → 1.6 µs). G:
+Redis median 0.1 ms under kairos vs 0.5 under Linux and bpfland, at 6%
+less batch; G-nb shows all three at 0.1–0.2 ms without batch.
+**Interpretation:** Most of kairos's batch cost was preemptions for
+threads that would have found a CPU within a millisecond anyway; the
+latency it buys comes mainly from the shared LC queue and from
+preempting for the workers. The result generalizes to Redis for
+medians. Details in sections 6.22–6.25 and 7.
+**Decisions:** Defaults unchanged (the new options stay off, so earlier
+configs keep their meaning). `--preempt-wait-us=1000
+--preempt-min-run-us=100` is the candidate for the main configuration
+in later experiments; to decide with Aayush. Redis tails are not
+reported (section 8).
+**Problems:** Steady reclaim and compaction stalls in E10 and E11
+after 5 days of uptime (section 8). G's load generator lags 1–8 ms at
+the p99 at 20,000 GETs/s. E12 calibrated ~3% low (995). One overload
+episode in E10 (kpw-r2, 5 s) not caused by memory.
+**Next:** Decide whether pw1000r100 becomes the main kairos
+configuration; restart the VM before the next long batch; the open
+questions in section 9 (SCHED_IDLE's added latency, Redis's CPU under
+kairos); a machine with spare CPUs for pool sizing.
