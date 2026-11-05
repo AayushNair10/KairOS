@@ -4768,4 +4768,13 @@ comparisons with earlier experiments.
 - **Final goal.** An OS built around this scheduler.
 - **Focus (later the same day).** Aayush: finish this scheduler project
   first. An OS built around it is a separate project, for after this one.
+- **ML closed (E8).** Aayush: no further ML work, since it shows no
+  significant gain. Both results stay in the log as negative results:
+  - online (MLte, 6.13): the model behaved like a 1.5-CPU buffer;
+  - offline (AP, 6.27): a tree didn't beat simple predictors at equal
+    cost.
+
+  Reason, from the same data: on 3 CPUs with borrowing, the pool is at
+  3 CPUs nearly all the time, so a prediction has almost nothing left to
+  decide.
 
