@@ -4527,9 +4527,9 @@ comparisons with earlier experiments.
   - batch 355 vs 360 MB/s (p = 0.92).
 - On the Azure replay, pw1000r100's p50 is 12% below bpfland's (Holm
   0.014), at the same batch (p = 0.70).
-- kairos has the lowest latency of all configs on both workloads (busy
-  p50 1.10 ms; Azure p50 0.87). It has 9% (7%) less batch than
-  pw1000r100.
+- kairos has the lowest latency on both workloads (busy p50 1.10 ms;
+  Azure p50 0.87), tied with fixed3 on the burst sweep (1.08, p = 0.77).
+  It has 9% (7%) less batch than pw1000r100.
 - fixed3 doesn't differ from kairos: kairos's pool held 3 CPUs all the
   time.
 - Two things the flags don't catch:
