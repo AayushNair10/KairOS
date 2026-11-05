@@ -48,7 +48,9 @@
  *   kernel's rule for sync wakeups (--wake-sync), which borrower to
  *   preempt (--borrower-pick), per-CPU LC queues (--lc-queue percpu,
  *   an ablation) and one preemption per borrower at a time
- *   (--claim-borrower; claim_victim()). All off by default. Counters for
+ *   (--claim-borrower; claim_victim()) and a dependency rule for the
+ *   delay (--preempt-dep-us; note_lc_waker()). All off by default.
+ *   Counters for
  *   preemptions per CPU, for idle CPUs while work waits (sample_idle())
  *   and for preemptions of a CPU that already had one pending.
  * - Starvation guard for the split (--max-wait-ms; run_overdue()): a task
@@ -184,6 +186,15 @@ const volatile u64 preempt_wait_ns;
  * most preemptions in a smoke test, against 500 us request handlers.
  */
 const volatile u64 preempt_min_run_ns;
+/*
+ * Dependency rule (--preempt-dep-us; E13), with preempt_wait_ns: a short
+ * LC task that woke another LC task within the last preempt_dep_ns also
+ * preempts at once. E10 found that most short LC runs are the server's
+ * helper threads (netpoller, gRPC transport); one that hands a request to
+ * a worker is on the request's path, so delaying it delays the request.
+ * The waker is recorded in select_cpu() (woke_lc_at). 0: off.
+ */
+const volatile u64 preempt_dep_ns;
 /* avg_run's EWMA weight per run: 1/2^avg_run_shift. */
 const volatile u32 avg_run_shift = 2;
 /*
@@ -306,6 +317,7 @@ struct task_ctx {
 	u8 preempted_in;	/* --diag: its next run starts by preempting */
 	u8 delayed;		/* waits in LC_DSQ for preempt_wait_ns (STAT_DELAYED) */
 	u64 avg_run;		/* EWMA of CPU time from waking to sleeping */
+	u64 woke_lc_at;		/* --preempt-dep-us: when it last woke an LC task */
 };
 
 struct {
@@ -742,11 +754,51 @@ static bool sync_ok(struct task_struct *p, s32 cpu, bool batch)
 	return any_idle;
 }
 
+/*
+ * Is the current context a task, not an interrupt? A wakeup from a hard
+ * IRQ, NMI or softirq runs on top of whatever task was interrupted, so the
+ * current task isn't the waker then. The bits of the preempt count say
+ * (masks from include/linux/preempt.h: NMI 0xf00000, hard IRQ 0xf0000,
+ * serving a softirq 0x100; a task with softirqs merely disabled counts as
+ * a task, as in scx_lavd). arm64 keeps the count in thread_info, as the
+ * BPF selftests' bpf_experimental.h reads it. Elsewhere: unknown, so no.
+ */
+static bool in_task_context(void)
+{
+#if defined(__TARGET_ARCH_arm64)
+	u32 pc = bpf_get_current_task_btf()->thread_info.preempt.count;
+
+	return !(pc & (0xf00000 | 0xf0000 | 0x100));
+#else
+	return false;
+#endif
+}
+
+/* --preempt-dep-us: LC task @p is being woken; if an LC task woke it, note when. */
+static void note_lc_waker(struct task_struct *p)
+{
+	struct task_struct *waker;
+	struct task_ctx *wctx;
+
+	if (!in_task_context())
+		return;
+	waker = bpf_get_current_task_btf();
+	if (waker == p)
+		return;
+	wctx = bpf_task_storage_get(&task_ctxs, waker, 0, 0);
+	if (wctx && !task_batch(waker, wctx))
+		wctx->woke_lc_at = scx_bpf_now();
+}
+
 static s32 split_select_cpu(struct task_struct *p, s32 prev_cpu, u64 wake_flags)
 {
 	struct task_ctx *tctx = bpf_task_storage_get(&task_ctxs, p, 0, 0);
 	bool batch = task_batch(p, tctx);
 	s32 cpu;
+
+	/* select_cpu() runs in the waker's context (try_to_wake_up()) */
+	if (preempt_dep_ns && !batch)
+		note_lc_waker(p);
 
 	/*
 	 * Sync wakeup: as the kernel, @prev_cpu if it is idle, else the
@@ -804,7 +856,17 @@ static bool preempt_at_once(const struct task_ctx *tctx)
 {
 	if (!preempt_wait_ns)
 		return true;
-	return preempt_min_run_ns && tctx && tctx->avg_run >= preempt_min_run_ns;
+	if (!tctx)
+		return false;
+	if (preempt_min_run_ns && tctx->avg_run >= preempt_min_run_ns)
+		return true;
+	/* --preempt-dep-us: it woke another LC task recently */
+	if (preempt_dep_ns && tctx->woke_lc_at &&
+	    time_before(scx_bpf_now(), tctx->woke_lc_at + preempt_dep_ns)) {
+		stat_inc(STAT_DEP);
+		return true;
+	}
+	return false;
 }
 
 /*
