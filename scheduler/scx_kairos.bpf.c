@@ -51,6 +51,9 @@
  *   (--claim-borrower; claim_victim()). All off by default. Counters for
  *   preemptions per CPU, for idle CPUs while work waits (sample_idle())
  *   and for preemptions of a CPU that already had one pending.
+ * - Starvation guard for the split (--max-wait-ms; run_overdue()): a task
+ *   of the other pool that has waited longer than the limit runs before a
+ *   CPU's own queue. Off by default.
  *
  * The vtime parts are scx_simple's: Copyright (c) 2022 Meta Platforms, Inc.
  * and affiliates; Tejun Heo <tj@kernel.org>; David Vernet <dvernet@meta.com>.
@@ -146,6 +149,15 @@ const volatile u32 borrower_pick = PICK_FIRST;	/* enum kairos_pick */
  * there is none, wait in LC_DSQ like a task with nothing to preempt.
  */
 const volatile bool claim_borrower;
+/*
+ * Starvation guard (--max-wait-ms; a minimal Feature B). LC tasks have
+ * strict priority on LC CPUs, so batch only gets what they leave idle; if
+ * LC work fills every LC CPU, batch waits indefinitely, and the kernel's
+ * watchdog unloads the scheduler once any task waits 30 s. With
+ * max_wait_ns, a CPU about to serve its own pool's queue first runs the
+ * other pool's first task if that one has waited longer. 0: off.
+ */
+const volatile u64 max_wait_ns;
 /*
  * Per-CPU LC queues (--lc-queue percpu; RESEARCH_LOG section 9, direction
  * 4), an ablation of the shared LC_DSQ. A queued LC task (no idle CPU, no
@@ -925,6 +937,44 @@ void BPF_STRUCT_OPS(kairos_enqueue, struct task_struct *p, u64 enq_flags)
 	kick_idle_cpu(p);
 }
 
+/* @p (may be NULL) is queued and has waited longer than max_wait_ns. */
+static bool overdue(struct task_struct *p, u64 now)
+{
+	struct task_ctx *tctx;
+
+	if (!p)
+		return false;
+	tctx = bpf_task_storage_get(&task_ctxs, p, 0, 0);
+	/* ready_at: set in runnable() and stopping(), cleared in running() */
+	return tctx && tctx->ready_at && time_after(now, tctx->ready_at + max_wait_ns);
+}
+
+/*
+ * --max-wait-ms: run the first task of @dsq_id on @cpu if it is overdue.
+ * Only the first task (lowest vtime) is checked: the guard is against one
+ * pool starving the other; within a queue, vtime order moves every task
+ * forward. The peek is lockless and cheap; the move needs an iterator,
+ * which is only built when the head is overdue (rarely, if ever). The
+ * head may change in between, so the move checks again.
+ */
+static bool run_overdue(u64 dsq_id, s32 cpu)
+{
+	struct task_struct *p;
+	u64 now = scx_bpf_now();
+
+	if (!overdue(__COMPAT_scx_bpf_dsq_peek(dsq_id), now))
+		return false;
+	bpf_for_each(scx_dsq, p, dsq_id, 0) {
+		if (!overdue(p, now) || !bpf_cpumask_test_cpu(cpu, p->cpus_ptr))
+			return false;
+		if (!scx_bpf_dsq_move(BPF_FOR_EACH_ITER, p, SCX_DSQ_LOCAL, 0))
+			return false;
+		stat_inc(STAT_OVERDUE);
+		return true;
+	}
+	return false;
+}
+
 void BPF_STRUCT_OPS(kairos_dispatch, s32 cpu, struct task_struct *prev)
 {
 	s32 c;
@@ -953,11 +1003,18 @@ void BPF_STRUCT_OPS(kairos_dispatch, s32 cpu, struct task_struct *prev)
 		}
 		return;
 	}
-	/* own pool's queue first, then lend the CPU to the other pool */
+	/*
+	 * Own pool's queue first, then lend the CPU to the other pool; with
+	 * max_wait_ns, the other pool's first task first if it is overdue.
+	 */
 	if (lc_cpu(cpu)) {
+		if (max_wait_ns && run_overdue(BATCH_DSQ, cpu))
+			return;
 		if (!scx_bpf_dsq_move_to_local(LC_DSQ))
 			scx_bpf_dsq_move_to_local(BATCH_DSQ);
 	} else {
+		if (max_wait_ns && run_overdue(LC_DSQ, cpu))
+			return;
 		if (!scx_bpf_dsq_move_to_local(BATCH_DSQ))
 			scx_bpf_dsq_move_to_local(LC_DSQ);
 	}

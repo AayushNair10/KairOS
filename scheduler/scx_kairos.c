@@ -64,6 +64,10 @@ const char help_fmt[] =
 "      --claim-borrower    --split: one preemption per borrower at a time; a\n"
 "                          second LC wakeup takes another borrower or queues\n"
 "                          (off by default)\n"
+"      --max-wait-ms N     --split, shared LC queue: a CPU runs the other\n"
+"                          pool's first task before its own queue's once that\n"
+"                          task has waited N ms (default 0: off; the kernel\n"
+"                          unloads the scheduler after a 30 s wait)\n"
 "      --lc-queue shared|percpu  queued LC tasks wait in one queue that\n"
 "                          every LC CPU serves first (shared), or in their\n"
 "                          CPU's own queue, which other CPUs serve only when\n"
@@ -140,6 +144,7 @@ enum {
 	OPT_NO_KICK_IDLE,
 	OPT_WAKE_SYNC,
 	OPT_CLAIM_BORROWER,
+	OPT_MAX_WAIT,
 	OPT_ML_TRACE,
 	OPT_ML_MODEL,
 	OPT_ML_PERIOD,
@@ -180,6 +185,7 @@ static const struct option long_opts[] = {
 	{ "no-kick-idle",    no_argument,       NULL, OPT_NO_KICK_IDLE },
 	{ "wake-sync",       no_argument,       NULL, OPT_WAKE_SYNC },
 	{ "claim-borrower",  no_argument,       NULL, OPT_CLAIM_BORROWER },
+	{ "max-wait-ms",     required_argument, NULL, OPT_MAX_WAIT },
 	{ "ml-trace",        required_argument, NULL, OPT_ML_TRACE },
 	{ "ml-model",        required_argument, NULL, OPT_ML_MODEL },
 	{ "ml-period-ms",    required_argument, NULL, OPT_ML_PERIOD },
@@ -543,7 +549,7 @@ static const char csv_header[] =
 	"fast_load,slow_load,wake_rate,wait_avg_us,wait_max_us,mode,timer_ticks,"
 	"lat_wakeups,lat_late,late_frac,mode_switches,latency_ms,"
 	"nr_lc,lc_cpus,lc_demand,lc_changes,borrow,ml_fresh,ml_raised,kick,"
-	"idle_cpus,idle_queued,preempt_cpus,delayed,late_preempt,sync,dup_pick,dup_alt\n";
+	"idle_cpus,idle_queued,preempt_cpus,delayed,late_preempt,sync,dup_pick,dup_alt,overdue\n";
 
 int main(int argc, char **argv)
 {
@@ -714,6 +720,9 @@ restart:
 		case OPT_CLAIM_BORROWER:
 			skel->rodata->claim_borrower = true;
 			break;
+		case OPT_MAX_WAIT:
+			skel->rodata->max_wait_ns = parse_num("max-wait-ms", optarg) * 1000000;
+			break;
 		case OPT_LC_SHIFT:
 			skel->rodata->lc_shift = parse_num("lc-shift", optarg);
 			break;
@@ -830,6 +839,11 @@ restart:
 			fprintf(stderr, "--claim-borrower needs --split and borrower preemption\n");
 			return 1;
 		}
+		if (skel->rodata->max_wait_ns &&
+		    (!skel->rodata->split || skel->rodata->lc_percpu)) {
+			fprintf(stderr, "--max-wait-ms needs --split and the shared LC queue\n");
+			return 1;
+		}
 	}
 
 	SCX_OPS_LOAD(skel, kairos_ops, scx_kairos, uei);
@@ -866,7 +880,7 @@ restart:
 	       "fast_shift=%u slow_shift=%u victim=%s batch_min_run_us=%llu "
 	       "lat_target_us=%llu late_max=%.1f%% hold_ms=%llu-%llu signal_cpus=0x%llx "
 	       "split=%d split_cpus=0x%llx lc=%u-%u lc_buffer=%.2f lc_hyst=%.2f borrow_slice_us=%llu "
-	       "borrow_preempt=%d borrower_pick=%s preempt_wait_us=%llu preempt_min_run_us=%llu class=%s kick_idle=%d wake_sync=%d lc_queue=%s claim_borrower=%d\n",
+	       "borrow_preempt=%d borrower_pick=%s preempt_wait_us=%llu preempt_min_run_us=%llu class=%s kick_idle=%d wake_sync=%d lc_queue=%s claim_borrower=%d max_wait_ms=%llu\n",
 	       skel->rodata->split ? "split" : skel->rodata->adaptive ? "adaptive" :
 	       skel->rodata->forced_mode == MODE_LATENCY ? "latency" : "batch",
 	       (unsigned long long)skel->rodata->lat_slice_ns / 1000,
@@ -890,7 +904,8 @@ restart:
 	       (unsigned long long)skel->rodata->preempt_min_run_ns / 1000,
 	       skel->rodata->class_policy ? "policy" : "run", skel->rodata->kick_idle,
 	       skel->rodata->wake_sync, skel->rodata->lc_percpu ? "percpu" : "shared",
-	       skel->rodata->claim_borrower);
+	       skel->rodata->claim_borrower,
+	       (unsigned long long)skel->rodata->max_wait_ns / 1000000);
 
 	__u64 prev[KAIROS_NR_STATS] = {};
 	struct diag diag_prev, diag_cur;
@@ -992,16 +1007,16 @@ restart:
 			       skel->bss->nr_lc, lc_cpus, lc_demand, lc_ch - prev_lc_ch,
 			       d[STAT_BORROW], d[STAT_DELAYED], d[STAT_LATE_PREEMPT]);
 		printf("  idle cpus %.2f (%.2f with a task queued) preempted per cpu %s sync %llu "
-		       "dup_pick %llu (alt %llu)\n",
+		       "dup_pick %llu (alt %llu) overdue %llu\n",
 		       idle_cpus, idle_queued, pre_cpus, d[STAT_SYNC], d[STAT_DUP_PICK],
-		       d[STAT_DUP_ALT]);
+		       d[STAT_DUP_ALT], d[STAT_OVERDUE]);
 		fflush(stdout);
 
 		if (csv) {
 			clock_gettime(CLOCK_REALTIME, &ts);
 			fprintf(csv, "%.3f,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%lld,%ld,%.3f,%.3f,%llu,"
 				"%.1f,%.1f,%u,%llu,%llu,%llu,%.4f,%llu,%.1f,%u,%.3f,%.3f,%llu,%llu,%llu,%llu,%llu,"
-				"%.3f,%.3f,%s,%llu,%llu,%llu,%llu,%llu\n",
+				"%.3f,%.3f,%s,%llu,%llu,%llu,%llu,%llu,%llu\n",
 				ts.tv_sec + ts.tv_nsec / 1e9, d[STAT_LOCAL], d[STAT_GLOBAL],
 				d[STAT_PREEMPT], d[STAT_PREEMPT_BATCH], d[STAT_NO_VICTIM],
 				d[STAT_TO_BATCH], d[STAT_FROM_BATCH],
@@ -1014,7 +1029,7 @@ restart:
 				d[STAT_BORROW], mlf - prev_mlf, mlr - prev_mlr, d[STAT_KICK],
 				idle_cpus, idle_queued, pre_cpus, d[STAT_DELAYED],
 				d[STAT_LATE_PREEMPT], d[STAT_SYNC], d[STAT_DUP_PICK],
-				d[STAT_DUP_ALT]);
+				d[STAT_DUP_ALT], d[STAT_OVERDUE]);
 			fflush(csv);
 		}
 		if (diag_csv) {

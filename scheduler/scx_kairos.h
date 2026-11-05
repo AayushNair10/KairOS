@@ -44,6 +44,7 @@ enum kairos_stat {
 	STAT_SYNC,		/* --wake-sync: woken task queued on the waker's CPU */
 	STAT_DUP_PICK,		/* --split: borrower preempted whose CPU had a preemption pending */
 	STAT_DUP_ALT,		/* ... while another borrower without one was there to take */
+	STAT_OVERDUE,		/* --max-wait-ms: a task past the limit ran before the CPU's own queue */
 	KAIROS_NR_STATS,	/* not NR_STATS: vmlinux.h has one */
 };
 
