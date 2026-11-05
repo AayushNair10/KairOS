@@ -962,6 +962,33 @@ choices. Add as you go.)
     in running(). A task that never runs adds nothing to it, so a
     starved task is invisible there (6.33). The `overdue` counter is the
     signal for waits past the limit.
+- **`--preempt-dep-us N`** (36d7a7b), off by default and only with
+  `--preempt-wait-us`: the dependency rule for E13. A short LC task that
+  woke another LC task within the last N µs preempts a borrower at once
+  instead of waiting.
+  - **Recording the waker.** In `split_select_cpu()`, for an LC wakee,
+    the current task is the waker: select_cpu runs inside
+    try_to_wake_up() on the waker's CPU. If the waker is LC, its
+    `tctx->woke_lc_at` is set to now (`note_lc_waker()`).
+  - **Interrupt wakeups are skipped.** A wakeup from a hard IRQ, NMI or
+    softirq runs on top of whichever task was interrupted, so the
+    current task isn't the waker.
+    - `in_task_context()` reads the preempt count from
+      `thread_info.preempt.count`, the arm64 layout, as in the BPF
+      selftests' `bpf_experimental.h`.
+    - It rejects the NMI (0xf00000), hard-IRQ (0xf0000) and
+      serving-softirq (0x100) bits, the masks of
+      `include/linux/preempt.h`.
+    - A task with softirqs only disabled still counts as a task, as in
+      scx_lavd.
+    - On other architectures it says no, so the rule never fires there.
+  - **Where it acts.** `preempt_at_once()` adds the rule after the
+    min-run test. Counter `STAT_DEP`, stats CSV column `dep`.
+  - **`dep` can exceed `preempt`.** With `--claim-borrower` a rule hit
+    can still find every borrower claimed and queue.
+  - **What it can't see** (section 4, 2026-10-29 notes): a handoff
+    inside Go with no kernel wakeup, i.e. a goroutine readied on a busy
+    P. Only futex wakeups between threads count.
 
 ---
 
@@ -1033,6 +1060,7 @@ result directories and the rows below keep the labels they ran under
 | F | 2026-11-05 | b10fe6d | eevdf, eevdfidle, bpfland, lavd, lavdperf, never3, kairos, pw1000r100, and fixed3 in the burst part only; kairos, pw1000r100 and fixed3 with `--claim-borrower` | `final-burst.conf` (E3's phases), `final-azure.conf` (E2a's replay); `experiments/final.sh`, 02:30–09:25, apt timers stopped | 10 | `results/2026-11-05-final-burst/`, `results/2026-11-05-final-azure/` | No run flagged. pw1000r100 is the main configuration by the rule in 5.1. Every run also had my wait process using 3.5–8% of a CPU, and the server's CPU per request was ~10% above E14's all night (section 8). Section 6.32 |
 | GT | 2026-11-05 | 726ab2a's code (run before the commit, which only added a comment) | kairos's main config without and with `--max-wait-ms=2000` | starvation test: 4, then 8 SCHED_NORMAL busy loops and 1 SCHED_BATCH busy loop on CPUs 0–2, 10 s each (`guard-test.sh`) | 1 | scratchpad only (copied to `~/kairos-data/scratchpad-2026-11-05/`) | 8 loops: without the guard the batch loop ran 0 ms in 10 s, with it 13 ms (the guard fired about every 2 s; longest wait 2.004 s). 4 loops starve nothing (section 6.33) |
 | GS | 2026-11-05 | 726ab2a (binary rebuilt during the run; only a comment changed) | kairos-guard, kairos-pw1000r100-guard (`--max-wait-ms=2000`) | `final-burst.conf` with 1 rep | 1 | `results/2026-11-05-guard-smoke/` | Smoke check. The guard fired 0 times in both runs; longest waits 362 and 537 ms; no failed requests (section 6.33) |
+| DPS | 2026-11-05 | 36d7a7b's code (run just before the commit) | kairos-pw1000r100 and with `--preempt-dep-us` 1,000 and 10,000 | `final-burst.conf` with 1 rep | 1 | `results/2026-11-05-dep-smoke/` | Smoke run, Mac in use. The rule fired 3,029/s (1 ms) and 5,840/s (10 ms); preemptions 794 → 3,056 → 5,261/s. The 1 ms run was disturbed (VM share 0.95, server 758 µs per request), so its latency and batch are unusable (section 6.34) |
 
 ### 5.1 Planned experiments
 | # | Experiment | Pattern | Shows |
@@ -1098,6 +1126,21 @@ draft):
     pw1000r100's.
 
   Fewer preemptions alone is not success.
+
+  **Added 2026-11-05, before E13 runs (proposed; Aayush to confirm):**
+  - **Configs** (`e13-dep.conf`, burst sweep, 10 reps):
+    - kairos and kairos-pw1000r100;
+    - kairos-pw1000r100 with `--preempt-dep-us` 1,000, 3,000 and 10,000.
+  - **Tests:** `stats.py --ref kairos-pw1000r100`, Holm within each metric
+    over its 4 comparisons. Run checks and exclusions as in F.
+  - **A window passes** if both hold against kairos-pw1000r100:
+    - busy p50 lower, Holm p < 0.05;
+    - median paired whole-run batch no more than 2% lower.
+  - **Choice:**
+    - Among the passing windows, the one with the lowest median busy
+      p50 replaces kairos-pw1000r100 as the main configuration.
+    - If none passes, kairos-pw1000r100 stays.
+    - kairos is a reference point; it can't be chosen here.
 
 **Added on 2026-11-04 (evening), before E14 and F run:**
 - **Exclusion, decided** (Aayush chose this over the whole-rep rule
@@ -2555,6 +2598,28 @@ both runs (longest waits 362 and 537 ms).
 - What it gives a starved task is one borrow slice (≤ 3 ms) every 2 s,
   about 0.15% of a CPU. That keeps the watchdog's 30 s limit away; it is
   not a share of the CPU.
+
+### 6.34 Dependency rule, smoke run (DPS; 2026-11-05)
+`results/2026-11-05-dep-smoke/`, 1 rep, 18:08–18:18, Mac in use. Per
+second over the load:
+
+| config | preempt | rule hits (`dep`) | still delayed | late preempt | busy p50 (ms) | busy >5 ms | batch (MB/s) |
+|---|---|---|---|---|---|---|---|
+| kairos-pw1000r100 | 794 | 0 | 6,132 | 17 | 1.27 | 17.3% | 408 |
+| …-dep1000 | 3,056 | 3,029 | 2,609 | 11 | (1.25) | (22.5%) | (314) |
+| …-dep10000 | 5,261 | 5,840 | 1,511 | 6 | 0.96 | 9.8% | 392 |
+
+- **The 1 ms run was disturbed:** VM share 0.95, other processes 19% of
+  a CPU, server 758 µs per request (652–670 in the others). Its latency
+  and batch are in brackets and not usable.
+- **The rule fires often.** Delayed wakeups:
+  - 1 ms window: 6,132 → 2,609 per second, under half;
+  - 10 ms window: about a quarter.
+
+  So most short LC wakeups come from tasks that woke another LC task
+  shortly before.
+- **One rep decides nothing.** At 10 ms the busy p50 is near kairos's
+  (F: 1.10 ms), for 4% less batch than kairos-pw1000r100 here.
 
 ## 7. Explanations and insights
 (The "why" behind each result. This is what the report is graded on.)
