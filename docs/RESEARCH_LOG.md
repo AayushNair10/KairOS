@@ -4312,6 +4312,16 @@ comparisons with earlier experiments.
 - (by the pre-set rule) `--claim-borrower` adopted for kairos and
   pw1000r100. F's kairos, pw1000r100 and fixed3 now pass it. Aayush can
   still keep pw1000r100 without it before F runs.
+- (Aayush, 2026-11-05 00:35) Stop apt-daily.timer and apt-daily-upgrade.timer
+  for F's night and start F at 02:30. Stopped at 00:36 with `systemctl
+  stop` (they stay enabled, so a reboot brings them back). A wrapper waits
+  for 02:30 by the wall clock, runs `experiments/final.sh` and starts the
+  timers again when it ends (scratchpad night.sh, copy in
+  ~/kairos-data/scratchpad-2026-11-05/). Aayush didn't ask to drop the fix
+  from pw1000r100, so it stays, as the rule says. Before scheduling,
+  fixed3's options were loaded for 3 s: they pass the loader's check
+  (`claim_borrower=1`, `lc=3-3`). man-db.timer is listed for 03:45, inside
+  F's window, and was not stopped.
 
 **Problems:**
 - I chose 6 reps for GMP3 without counting Holm's 3 comparisons. n = 6
