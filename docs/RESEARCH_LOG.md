@@ -926,6 +926,42 @@ choices. Add as you go.)
   skipped run of a config costs only its own pairs. A skipped run of the
   reference drops that rep from every comparison with it. An unknown
   run name is an error.
+- **`--max-wait-ms N`** (726ab2a), off by default: a minimal starvation
+  guard (Feature B) for the split with the shared LC queue. Aayush chose
+  2,000 ms, above F's longest measured wait (949 ms) and below the
+  watchdog's 30 s.
+  - **Where it acts.** In `kairos_dispatch()`, before a CPU serves its
+    own pool's queue, `run_overdue()` checks the other pool's first task:
+    BATCH_DSQ on an LC CPU, LC_DSQ on a batch CPU. If that task has
+    waited longer than `max_wait_ns`, the CPU runs it first.
+  - **How long a task has waited** comes from `tctx->ready_at`:
+    - set in runnable() (it became runnable) and in stopping() (still
+      runnable after its slice or a preemption);
+    - cleared in running().
+  - **Kfuncs.**
+    - `scx_bpf_dsq_peek()` (kernel v6.19+, through
+      `__COMPAT_scx_bpf_dsq_peek()`) reads the head without a lock. This
+      is the cheap check on every dispatch.
+    - Only when the head is overdue does it build a DSQ iterator
+      (`bpf_for_each(scx_dsq, ...)`).
+    - It then moves that task with `scx_bpf_dsq_move(BPF_FOR_EACH_ITER,
+      p, SCX_DSQ_LOCAL, 0)`, after checking again that it is overdue (the
+      head can change in between) and that it may run on this CPU
+      (`bpf_cpumask_test_cpu`).
+    - The verifier accepted task-storage lookups on both the peeked and
+      the iterated pointer.
+  - **Why only the head.** The guard is against one pool starving the
+    other. Within a queue, vtime order moves every task forward.
+  - **When it fires.** Dispatch runs at least once per slice on a busy
+    CPU (3 ms for LC), so an overdue task runs within about one slice.
+  - **Slice.** A batch task run this way on an LC CPU gets the borrow
+    slice (3 ms) from running(), like any borrower.
+  - **Counter:** `STAT_OVERDUE`, stats CSV column `overdue` (appended at
+    the end, so readers by column name are unaffected).
+  - **`wait_max_us` only records waits that ended:** record_wait() runs
+    in running(). A task that never runs adds nothing to it, so a
+    starved task is invisible there (6.33). The `overdue` counter is the
+    signal for waits past the limit.
 
 ---
 
@@ -995,6 +1031,8 @@ result directories and the rows below keep the labels they ran under
 | E14 | 2026-11-04 | e11c590 | kairos, kclaim, pw1000r100, pwclaim (`--claim-borrower`) | `claim-burst.conf` (E3's phases), `claim-azure.conf` (E2a's replay); `experiments/e14_claim.sh` | 10 | `results/2026-11-04-claim-burst/`, `results/2026-11-04-claim-azure/` | All 80 runs at VM share 0.98. Flagged (swap-ins > 1,000): claim-burst kairos-r1 (1,593), claim-azure pw1000r100-r7 (1,874); their pairs were dropped. kclaim: busy p50 −2% (p = 0.008), nothing worse. pwclaim: no primary metric differs at p < 0.05. Adopted for both by the rule in 5.1 (section 6.30) |
 | GMP3 | 2026-11-04 | 6fefc35 | eevdf, bpfland, kairos, pw1000r100 (both with `--claim-borrower`) | `gmp3-burst.conf`: E3's phases with the server at GOMAXPROCS 3 | 6 | `results/2026-11-04-gmp3-burst/` | Clean (VM share 0.98–1.00, none flagged). kairos's ordering holds: in 6/6 reps the lowest busy p50 (0.82 ms; pw1000r100 1.13, bpfland 1.56) and the least batch (411 MB/s; 429, 443). EEVDF is overloaded: busy p50 227 ms, growing with burst length. Holm can't reject at n = 6 with 3 comparisons (section 6.31) |
 | F | 2026-11-05 | b10fe6d | eevdf, eevdfidle, bpfland, lavd, lavdperf, never3, kairos, pw1000r100, and fixed3 in the burst part only; kairos, pw1000r100 and fixed3 with `--claim-borrower` | `final-burst.conf` (E3's phases), `final-azure.conf` (E2a's replay); `experiments/final.sh`, 02:30–09:25, apt timers stopped | 10 | `results/2026-11-05-final-burst/`, `results/2026-11-05-final-azure/` | No run flagged. pw1000r100 is the main configuration by the rule in 5.1. Every run also had my wait process using 3.5–8% of a CPU, and the server's CPU per request was ~10% above E14's all night (section 8). Section 6.32 |
+| GT | 2026-11-05 | 726ab2a's code (run before the commit, which only added a comment) | kairos's main config without and with `--max-wait-ms=2000` | starvation test: 4, then 8 SCHED_NORMAL busy loops and 1 SCHED_BATCH busy loop on CPUs 0–2, 10 s each (`guard-test.sh`) | 1 | scratchpad only (copied to `~/kairos-data/scratchpad-2026-11-05/`) | 8 loops: without the guard the batch loop ran 0 ms in 10 s, with it 13 ms (the guard fired about every 2 s; longest wait 2.004 s). 4 loops starve nothing (section 6.33) |
+| GS | 2026-11-05 | 726ab2a (binary rebuilt during the run; only a comment changed) | kairos-guard, kairos-pw1000r100-guard (`--max-wait-ms=2000`) | `final-burst.conf` with 1 rep | 1 | `results/2026-11-05-guard-smoke/` | Smoke check. The guard fired 0 times in both runs; longest waits 362 and 537 ms; no failed requests (section 6.33) |
 
 ### 5.1 Planned experiments
 | # | Experiment | Pattern | Shows |
@@ -2489,6 +2527,35 @@ reps:
 - kairos: p50 −0.14 ms (Holm 0.014), >5 ms −0.5 points (Holm 0.074),
   batch −33 MB/s (Holm 0.014).
 
+### 6.33 Starvation guard (GT, GS; 2026-11-05)
+`--max-wait-ms` (section 4).
+
+**GT**, kairos's main config, 10 s each. The batch loop's CPU time is
+from `/proc/<pid>/schedstat`:
+- **4 busy loops: nothing is starved.** The batch loop ran 1,383 ms
+  without the guard and 1,237 ms with it. LC_DSQ is often empty when a
+  CPU dispatches:
+  - each LC CPU takes the one waiting LC task;
+  - the task it stopped is only put back after that;
+  - batch borrows in between, 14–57 borrow starts per second.
+- **8 busy loops:**
+  - Without the guard the batch loop ran 0 ms.
+  - With it the loop ran 13 ms. The guard fired 5 times in 9 s, and the
+    longest wait was 2,004 ms.
+- **`wait_max_us` missed the starvation.** Without the guard it stayed
+  ≤ 58 ms while the batch loop waited all 10 s, because waits are only
+  recorded when they end.
+
+**GS**, the burst sweep with the guard on, 1 rep: it fired 0 times in
+both runs (longest waits 362 and 537 ms).
+
+**Interpretation:**
+- At 2,000 ms the guard leaves the measured workloads unchanged, and it
+  bounds a starved task's wait at about 2 s.
+- What it gives a starved task is one borrow slice (≤ 3 ms) every 2 s,
+  about 0.15% of a CPU. That keeps the watchdog's 30 s limit away; it is
+  not a share of the CPU.
+
 ## 7. Explanations and insights
 (The "why" behind each result. This is what the report is graded on.)
 
@@ -3378,6 +3445,11 @@ GOMAXPROCS 3 (section 6.31):
     idle it used 0.1% of a CPU.
   - **Next time:** no extra process during runs, or a loop that checks
     once a minute.
+- **Longest waits count only waits that ended.** record_wait() runs when
+  a task starts running. A task still waiting at the end of a run, or
+  starved, adds nothing (6.33). So F's longest waits (≤ 949 ms) are
+  lower bounds. With `--max-wait-ms`, the `overdue` counter shows waits
+  past the limit.
 - **fixed3 doesn't test pool sizing on the burst sweep.** kairos's LC pool
   held 3 CPUs in every 1 s sample, so fixed3 ran the same pool (6.32). F
   has no pool-sizing ablation, and the Azure part has no fixed3.
@@ -4629,4 +4701,6 @@ comparisons with earlier experiments.
 - **Dates.** Aayush plans to finish long before the deadlines, so work
   is not ordered by them.
 - **Final goal.** An OS built around this scheduler.
+- **Focus (later the same day).** Aayush: finish this scheduler project
+  first. An OS built around it is a separate project, for after this one.
 
