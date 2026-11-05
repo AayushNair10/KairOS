@@ -2419,8 +2419,10 @@ The checks don't flag two things (section 8):
 - kairos's LC pool held 3 CPUs in every 1 s sample of every run
   (`nr_lc`), so the two configs ran the same pool.
 - In kairos-r1 the LC demand estimate did fall in quiet phases: 1 s
-  samples p10 0.70, median 3.4 CPUs. The pool didn't shrink anyway. Why
-  is not investigated.
+  samples p10 0.70, median 3.4 CPUs. The pool didn't shrink anyway (why:
+  section 7).
+- On the Azure replay too, kairos's and pw1000r100's pools held 3 CPUs
+  in every 1 s sample of every run.
 
 **Against pw1000r100:**
 - bpfland:
@@ -3151,6 +3153,20 @@ GOMAXPROCS 3 (section 6.31):
     moves the median.
   - The wait is bounded, so it rarely pushes a request past 5 ms. The
     tail comes mostly from waits that D doesn't touch.
+- **Why the LC pool never shrinks in F** (from update_split(); the
+  demand numbers are from 6.32):
+  - The pool is ceil(demand + buffer) CPUs. It shrinks only if it would
+    also with 0.25 CPU more demand (`--lc-hyst-pct`).
+  - With `--lc-buffer-pct=150` (1.5 CPUs), going from 3 CPUs to 2 needs
+    a demand of at most 0.25 CPU.
+  - kairos-r1's demand rarely fell below 0.70 CPU (1 s p10), so the pool
+    stayed at 3. The demand counts every LC-class task: the server, the
+    load generator (about 27% of a CPU) and, in F, my wait process.
+  - So in F's main configs, kairos's split was a fixed 3-CPU
+    reservation. Their gains over the baselines come from the
+    reservation, strict LC priority and how borrowers are preempted.
+    They don't come from sizing the pool to the load. With this buffer,
+    F doesn't test pool sizing.
 
 ---
 
@@ -4531,7 +4547,8 @@ comparisons with earlier experiments.
   Azure p50 0.87), tied with fixed3 on the burst sweep (1.08, p = 0.77).
   It has 9% (7%) less batch than pw1000r100.
 - fixed3 doesn't differ from kairos: kairos's pool held 3 CPUs all the
-  time.
+  time, on both workloads. With a 1.5-CPU buffer it can only shrink below
+  0.25 CPU of LC demand (section 7). F doesn't test pool sizing.
 - Two things the flags don't catch:
   - The server's CPU per request was ~10% above E14's all night, and
     batch 11–19% lower.
