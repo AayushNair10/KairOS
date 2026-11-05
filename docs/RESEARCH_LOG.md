@@ -980,6 +980,7 @@ together with `meta.json` (git commit, kernel, VM config, parameters).
 | DS2 | 2026-11-04 | 60c15d8 | kairos, pw1000r100, fixed3 | DS rerun, Mac idle (`caffeinate`) | 1 | `results/2026-11-04-dup-smoke2/` | Clean (VM share 0.98, server 643–671 µs per request). kairos dup_alt 8.8% of 8,061 preemptions/s, pw1000r100 0.8%, so the fix is tested first: E14 (section 6.29) |
 | E14 | 2026-11-04 | e11c590 | kairos, kclaim, pw1000r100, pwclaim (`--claim-borrower`) | `claim-burst.conf` (E3's phases), `claim-azure.conf` (E2a's replay); `experiments/e14_claim.sh` | 10 | `results/2026-11-04-claim-burst/`, `results/2026-11-04-claim-azure/` | All 80 runs at VM share 0.98. Flagged (swap-ins > 1,000): claim-burst kairos-r1 (1,593), claim-azure pw1000r100-r7 (1,874); their pairs were dropped. kclaim: busy p50 −2% (p = 0.008), nothing worse. pwclaim: no primary metric differs at p < 0.05. Adopted for both by the rule in 5.1 (section 6.30) |
 | GMP3 | 2026-11-04 | 6fefc35 | eevdf, bpfland, kairos, pw1000r100 (both with `--claim-borrower`) | `gmp3-burst.conf`: E3's phases with the server at GOMAXPROCS 3 | 6 | `results/2026-11-04-gmp3-burst/` | Clean (VM share 0.98–1.00, none flagged). kairos's ordering holds: in 6/6 reps the lowest busy p50 (0.82 ms; pw1000r100 1.13, bpfland 1.56) and the least batch (411 MB/s; 429, 443). EEVDF is overloaded: busy p50 227 ms, growing with burst length. Holm can't reject at n = 6 with 3 comparisons (section 6.31) |
+| F | 2026-11-05 | b10fe6d | eevdf, eevdfidle, bpfland, lavd, lavdperf, never3, kairos, pw1000r100, and fixed3 in the burst part only; kairos, pw1000r100 and fixed3 with `--claim-borrower` | `final-burst.conf` (E3's phases), `final-azure.conf` (E2a's replay); `experiments/final.sh`, 02:30–09:25, apt timers stopped | 10 | `results/2026-11-05-final-burst/`, `results/2026-11-05-final-azure/` | No run flagged. pw1000r100 is the main configuration by the rule in 5.1. Every run also had my wait process using 3.5–8% of a CPU, and the server's CPU per request was ~10% above E14's all night (section 8). Section 6.32 |
 
 ### 5.1 Planned experiments
 | # | Experiment | Pattern | Shows |
@@ -2360,6 +2361,118 @@ request in rep 1: 596–640 µs (claim-burst kairos-r2: 648).
   redirected by the fix); pw1000r100 891/s. LC pool at 3.00 CPUs in
   both.
 
+### 6.32 Final evaluation (F; 2026-11-05)
+`results/2026-11-05-final-burst/` (9 configs) and
+`results/2026-11-05-final-azure/` (8 configs), 10 reps each, commit
+b10fe6d, kernel 7.0.0-42. It ran 02:30–09:25 with the Mac on
+`caffeinate` and both apt timers stopped. kairos, pw1000r100 and fixed3
+run with `--claim-borrower`. Tests: `stats.py --ref kairos pw1000r100`
+(rules in 5.1). Holm is applied within each metric and reference, over
+8 comparisons on the burst sweep and 7 on the Azure replay.
+
+**Run checks** (rules in 5.1): no run flagged, so none is left out.
+VM share ≥ 0.97, other processes ≤ 14% (burst) and ≤ 17% (Azure) of a
+CPU, swap-ins ≤ 81, direct-reclaim stalls ≤ 54.
+
+The checks don't flag two things (section 8):
+- **My wait process** (`tail --pid`, started to notice the end of the
+  run) ran in every run. Config medians: 3.5–4.5% of a CPU under EEVDF,
+  5.6–8.3% under the sched_ext schedulers.
+- **The server used more CPU per request than in E14**, the day before,
+  with the same configs:
+  - config medians 666–729 µs on the burst sweep (E14: 637–664) and
+    763–835 on the Azure replay (E14: 705–763);
+  - rep medians 670–733 µs all night on the burst sweep, with no trend.
+
+  Batch was lower too:
+  - kairos 324 MB/s against kclaim's 402 in E14 (−19%);
+  - pw1000r100 355 against pwclaim's 431 (−18%);
+  - on the Azure replay −12% and −11%.
+
+**Burst sweep**, primary metrics, medians over 10 reps:
+
+| config | busy p50 (ms) | busy >5 ms (%) | batch, whole load (MB/s) |
+|---|---|---|---|
+| kairos | 1.10 | 7.6 | 324 |
+| fixed3 | 1.08 | 7.9 | 326 |
+| pw1000r100 | 1.41 | 9.2 | 355 |
+| bpfland | 1.58 | 16.2 | 360 |
+| eevdfidle | 2.37 | 24.0 | 341 |
+| never3 | 3.58 | 34.8 | 374 |
+| eevdf | 4.11 | 43.3 | 365 |
+| lavdperf | 8.52 | 72.2 | 388 |
+| lavd | 8.62 | 73.4 | 386 |
+
+**Against kairos:**
+- Busy p50: every baseline and pw1000r100 is higher in 10/10 reps (Holm
+  p = 0.016 each, the smallest possible with 8 comparisons).
+- Busy >5 ms: every baseline is higher (Holm 0.016). pw1000r100 is +2.5
+  points and worse in 7/10 (p = 0.027, Holm 0.055).
+- Batch is higher, all with Holm ≤ 0.03, for:
+  - bpfland +31 MB/s (+10%);
+  - eevdf +37, lavd +54, lavdperf +53, never3 +50;
+  - pw1000r100 +31 (10/10).
+
+  eevdfidle: +11 (Holm 0.17).
+
+**fixed3 matches kairos.** No primary metric differs (p ≥ 0.43).
+- kairos's LC pool held 3 CPUs in every 1 s sample of every run
+  (`nr_lc`), so the two configs ran the same pool.
+- In kairos-r1 the LC demand estimate did fall in quiet phases: 1 s
+  samples p10 0.70, median 3.4 CPUs. The pool didn't shrink anyway. Why
+  is not investigated.
+
+**Against pw1000r100:**
+- bpfland:
+  - busy p50 +0.17 ms (+12%), higher in 10/10 (Holm 0.016);
+  - busy >5 ms +7.7 points (Holm 0.016);
+  - batch −0 MB/s [−9, +13], 5/10, p = 0.92.
+- kairos and fixed3: 9% less batch (−31 and −30 MB/s, 0/10, Holm 0.016).
+- lavd (+25) and never3 (+13): more batch (Holm ≤ 0.03). lavdperf +30
+  (Holm 0.055).
+
+**Main configuration** (rule in 5.1): on the burst sweep against
+bpfland, pw1000r100's busy p50 is lower (Holm p = 0.016) and its batch
+is not lower (p = 0.92). **pw1000r100 is the main configuration.**
+
+**Per burst length** (byburst.py; descriptive):
+- kairos or fixed3 has the lowest busy p50 at every L (kairos 1.00–1.20
+  ms).
+- pw1000r100 is below bpfland at every L: 1.34–1.49 ms against
+  1.43–1.92.
+- kairos's worst L is 30 ms: busy >5 ms 8.1% (2.8–11.6 over reps),
+  median p99 194 ms. pw1000r100 has 6.4% there. Not explained;
+  episodes.py was not run.
+
+**Azure replay**, primary metrics (p99 descriptive), medians over 10
+reps:
+
+| config | p50 (ms) | >5 ms (%) | batch (MB/s) | p99 (ms) |
+|---|---|---|---|---|
+| kairos | 0.87 | 1.9 | 456 | 8.3 |
+| pw1000r100 | 1.02 | 2.6 | 487 | 11.1 |
+| bpfland | 1.14 | 3.7 | 476 | 15.1 |
+| eevdfidle | 1.44 | 5.9 | 433 | 21.4 |
+| never3 | 1.52 | 10.6 | 508 | 25.4 |
+| lavdperf | 1.55 | 16.9 | 493 | 90.2 |
+| lavd | 1.58 | 18.3 | 486 | 84.6 |
+| eevdf | 1.66 | 13.5 | 452 | 50.5 |
+
+**Against kairos:**
+- Every config has a higher p50 and >5 ms share (Holm ≤ 0.037).
+  pw1000r100's >5 ms is +0.5 points, better in 1/10.
+- Batch is higher, all with Holm 0.014, for bpfland (+26), lavd (+40),
+  lavdperf (+51), never3 (+53) and pw1000r100 (+33).
+- eevdf (+12) and eevdfidle (−11) don't differ.
+
+**Against pw1000r100:**
+- bpfland:
+  - p50 +0.12 ms (+12%), better in 0/10 (Holm 0.014);
+  - >5 ms +1.2 points, better in 2/10 (p = 0.16);
+  - batch −3 MB/s (p = 0.70).
+- kairos: p50 −0.14 ms (Holm 0.014), >5 ms −0.5 points (Holm 0.074),
+  batch −33 MB/s (Holm 0.014).
+
 ## 7. Explanations and insights
 (The "why" behind each result. This is what the report is graded on.)
 
@@ -3015,6 +3128,30 @@ GOMAXPROCS 3 (section 6.31):
   sleep often (interactive) over CPU-bound ones (guess, not checked in
   its source).
 
+**F (6.32): what the delay buys.**
+- **The trade-off.** kairos (D = 0) and pw1000r100 (D = 1 ms) are two
+  points on one latency–throughput trade-off:
+  - pw1000r100 has 10% more batch than kairos on the burst sweep (7% on
+    the Azure replay);
+  - it has 29% (16%) higher busy p50.
+- **Where pw1000r100 lands against bpfland.** At D = 1 ms it reaches
+  bpfland's batch throughput. Neither workload shows a difference: −0
+  and −3 MB/s.
+- **How much of kairos's lead it keeps** (from the config medians, not
+  paired):
+  - On the burst sweep: 0.17 of the 0.48 ms between kairos's and
+    bpfland's busy p50 (35%), but 7.0 of the 8.6 points of busy share
+    over 5 ms (81%).
+  - On the Azure replay: 0.12 of 0.27 ms of p50 (44%) and 1.1 of 1.8
+    points over 5 ms (61%).
+- **Why the delay costs more at the median than in the tail** (a guess
+  from the design, not measured per request):
+  - A woken LC task that finds no free LC CPU waits up to D before it
+    preempts a borrower. That adds up to 1 ms to many requests, which
+    moves the median.
+  - The wait is bounded, so it rarely pushes a request past 5 ms. The
+    tail comes mostly from waits that D doesn't touch.
+
 ---
 
 ## 8. Limitations
@@ -3170,6 +3307,36 @@ GOMAXPROCS 3 (section 6.31):
     snapshots, so the run checks can't see such a job.
   - It was small here. apt-daily-upgrade, which can install packages, is
     the larger risk. Stopping both timers during F is the reliable way.
+- **F's absolute numbers come from a slower night than E14's** (6.32).
+  - All night, the server needed about 10% more CPU per request, and
+    batch was 11–19% lower for the same configs.
+  - The run checks don't catch this: VM share was 0.97, and calibration
+    at the start of each part read 993–1,037 iterations/µs.
+  - Possible causes, guesses not separated by any measurement:
+    - my wait process (next item);
+    - the host giving the VM slower or busier cores (the P/E-core and
+      throttling limits above).
+  - **Relative results match E14 where they overlap.** pw1000r100's busy
+    p50 is 29% above kairos's in both (E14 without the fix: 1.20 vs 0.93
+    ms). Its batch is 10% above kairos's (E14: 8%).
+  - **Rerun?** The pre-set rules don't call for one. Whether to rerun F
+    on a quieter night is Aayush's decision.
+- **My wait process ran during every F run.**
+  - **What it was.** `tail --pid=<wrapper> -f /dev/null` (uutils
+    coreutils 0.10.0), started from the Claude Code session to report
+    when F ended.
+  - **Its CPU differed by scheduler,** so it isn't a neutral load:
+    3.5–4.5% of a CPU under EEVDF, 5.6–8.3% under the sched_ext
+    schedulers (config medians).
+  - **Its class under kairos.** It is SCHED_NORMAL, so under `--class=policy`
+    presumably LC (not checked).
+  - **Why it cost so much is unknown.** In a 10 s test with the machine
+    idle it used 0.1% of a CPU.
+  - **Next time:** no extra process during runs, or a loop that checks
+    once a minute.
+- **fixed3 doesn't test pool sizing on the burst sweep.** kairos's LC pool
+  held 3 CPUs in every 1 s sample, so fixed3 ran the same pool (6.32). F
+  has no pool-sizing ablation, and the Azure part has no fixed3.
 
 ---
 
@@ -4338,3 +4505,59 @@ comparisons with earlier experiments.
     for the night (sudo), or a start time that avoids them.
 - Aayush to confirm or change the E13 success criterion (5.1).
 - Then E13, the dependency rule.
+
+### 2026-11-05 — Final evaluation (F)
+**Did:**
+- Stopped apt-daily.timer and apt-daily-upgrade.timer at 00:36 (Aayush's
+  OK). A wrapper started `experiments/final.sh` at 02:30 and started the
+  timers again when it ended at 09:25.
+- Loaded fixed3's options for 3 s first: they pass the loader's check
+  with `--claim-borrower`.
+- Checked all 170 runs with F's flags.
+- Ran `stats.py --ref kairos pw1000r100` on both parts, then byburst.py
+  and `bylevel.py --windows 3`. Outputs are in the scratchpad, copied to
+  ~/kairos-data/scratchpad-2026-11-05/.
+- Compared server CPU per request and batch with E14.
+
+**Found:**
+- No run flagged, so all pairs have n = 10.
+- **pw1000r100 is the main configuration** by the rule in 5.1. Against
+  bpfland on the burst sweep:
+  - busy p50 1.41 vs 1.58 ms, lower in 10/10 (Holm 0.016);
+  - batch 355 vs 360 MB/s (p = 0.92).
+- On the Azure replay, pw1000r100's p50 is 12% below bpfland's (Holm
+  0.014), at the same batch (p = 0.70).
+- kairos has the lowest latency of all configs on both workloads (busy
+  p50 1.10 ms; Azure p50 0.87). It has 9% (7%) less batch than
+  pw1000r100.
+- fixed3 doesn't differ from kairos: kairos's pool held 3 CPUs all the
+  time.
+- Two things the flags don't catch:
+  - The server's CPU per request was ~10% above E14's all night, and
+    batch 11–19% lower.
+  - My wait process (`tail`) used 3.5–8% of a CPU in every run.
+
+**Interpretation:**
+- The delay D moves kairos along a latency–throughput trade-off. At
+  1 ms it reaches bpfland's batch and keeps most of kairos's lead in
+  the share over 5 ms, but only a third of its lead in median.
+- The relative results match E14. The absolute levels are from a slower
+  night (cause not known).
+
+**Decisions:**
+- (by the rule in 5.1) pw1000r100 is the main configuration, kairos the
+  latency end.
+
+**Problems:**
+- I left a wait process running inside the VM during F. It wasn't a
+  neutral load: it cost more CPU under the sched_ext schedulers than
+  under EEVDF (section 8).
+- I first read the wrong stats column (`lc_cpus`, the time-averaged
+  pool) for the pool size; `nr_lc` is the sample.
+
+**Next:**
+- Aayush to decide whether F needs a rerun on a quieter night: no wait
+  process, the Mac unused from the evening, and the apt timers stopped
+  again.
+- Aayush to confirm or change the E13 success criterion (5.1). Then E13.
+- Why kairos's pool doesn't shrink in the burst sweep's quiet phases.
