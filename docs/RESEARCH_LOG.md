@@ -979,6 +979,7 @@ together with `meta.json` (git commit, kernel, VM config, parameters).
 | DS | 2026-11-04 | 3067b18 | kairos, pw1000r100, fixed3 (kairos with `--lc-min=3`) | `final-burst.conf` with 1 rep | 1 | `results/2026-11-04-dup-smoke/` | Not a measurement: the host slowed the VM in all three runs (server CPU per request 910–1,114 µs vs 674–677 in FS and E11; load generator 190–222 vs 137–148 µs; VM share 0.94–0.95); kairos busy p50 5.1 ms, batch 160 MB/s. The new counters work: dup_alt 8.9% of kairos's preemptions, 3.0% of pw1000r100's (section 6.28) |
 | DS2 | 2026-11-04 | 60c15d8 | kairos, pw1000r100, fixed3 | DS rerun, Mac idle (`caffeinate`) | 1 | `results/2026-11-04-dup-smoke2/` | Clean (VM share 0.98, server 643–671 µs per request). kairos dup_alt 8.8% of 8,061 preemptions/s, pw1000r100 0.8%, so the fix is tested first: E14 (section 6.29) |
 | E14 | 2026-11-04 | e11c590 | kairos, kclaim, pw1000r100, pwclaim (`--claim-borrower`) | `claim-burst.conf` (E3's phases), `claim-azure.conf` (E2a's replay); `experiments/e14_claim.sh` | 10 | `results/2026-11-04-claim-burst/`, `results/2026-11-04-claim-azure/` | All 80 runs at VM share 0.98. Flagged (swap-ins > 1,000): claim-burst kairos-r1 (1,593), claim-azure pw1000r100-r7 (1,874); their pairs were dropped. kclaim: busy p50 −2% (p = 0.008), nothing worse. pwclaim: no primary metric differs at p < 0.05. Adopted for both by the rule in 5.1 (section 6.30) |
+| GMP3 | 2026-11-04 | 6fefc35 | eevdf, bpfland, kairos, pw1000r100 (both with `--claim-borrower`) | `gmp3-burst.conf`: E3's phases with the server at GOMAXPROCS 3 | 6 | `results/2026-11-04-gmp3-burst/` | Clean (VM share 0.98–1.00, none flagged). kairos's ordering holds: in 6/6 reps the lowest busy p50 (0.82 ms; pw1000r100 1.13, bpfland 1.56) and the least batch (411 MB/s; 429, 443). EEVDF is overloaded: busy p50 227 ms, growing with burst length. Holm can't reject at n = 6 with 3 comparisons (section 6.31) |
 
 ### 5.1 Planned experiments
 | # | Experiment | Pattern | Shows |
@@ -2320,6 +2321,45 @@ pw1000r100 and fixed3, under the same names.
 E11's 376, and pw1000r100's, 435, is 9% above 399. Same phases. E11 ran
 on 7.0.0-38, E14 on -42. Not tested.
 
+### 6.31 The server at GOMAXPROCS 3 (GMP3; 2026-11-04)
+`results/2026-11-04-gmp3-burst/`, 6 reps, commit 6fefc35, E3's phases.
+The server runs GOMAXPROCS 3, Go's default under its 3-CPU mask, instead
+of the 16 used since E1b. kairos and pw1000r100 run with
+`--claim-borrower`.
+
+**Run checks:** none flagged. VM share 0.98–1.00, other processes ≤ 18%
+of a CPU, swap-ins ≤ 173, no direct-reclaim stalls. Server CPU per
+request in rep 1: 596–640 µs (claim-burst kairos-r2: 648).
+
+**Results**, medians over 6 reps; the diff is paired, against kairos:
+
+| config | busy p50 (ms) | busy >5 ms (%) | quiet p50 (ms) | batch (MB/s) |
+|---|---|---|---|---|
+| kairos | 0.82 | 3.3 | 0.83 | 411 |
+| pw1000r100 | 1.13 (+37%) | 4.7 | 0.93 | 429 (+5%) |
+| bpfland | 1.56 (+89%) | 8.5 | 0.98 | 443 (+8%) |
+| eevdf | 227 | 92 | 7.9 | 482 (+17%) |
+
+- **All four orderings hold in 6/6 reps.** kairos had the lowest busy
+  p50, busy >5 ms and quiet p50 against every other config, and the
+  least batch. pw1000r100 beat bpfland on busy p50 and >5 ms in 6/6. Its
+  batch was below bpfland's in 5/6 (p = 0.22).
+- **Not significant after Holm.** At n = 6 the smallest exact p is
+  2/64 = 0.031, and Holm over 3 comparisons makes that 0.094. That rules
+  out any rejection, which I missed when choosing 6 reps: it takes n ≥ 7
+  (2/128 × 3 = 0.047). The results are descriptive.
+- **The same ordering as at GOMAXPROCS 16** (E3: kairos 0.90–0.98 ms,
+  bpfland 1.33–1.64 per L). kairos's busy p50 is lower here than in
+  E14's GOMAXPROCS 16 runs (0.82 vs 0.91 ms with the fix). That
+  comparison crosses experiments and isn't paired.
+- **EEVDF is overloaded at GOMAXPROCS 3.** Its busy p50 grows with the
+  burst length: 6.2 ms at L 10 ms, 103 ms at 300 ms, 2,684 ms at 10 s.
+  So the server falls behind for as long as the burst lasts. At
+  GOMAXPROCS 16 (E3) it was 2.6–11.3 ms.
+- Counters: kairos 8,215 preemptions/s (dup_pick 19.2%, dup_alt 8.8%,
+  redirected by the fix); pw1000r100 891/s. LC pool at 3.00 CPUs in
+  both.
+
 ## 7. Explanations and insights
 (The "why" behind each result. This is what the report is graded on.)
 
@@ -2956,6 +2996,25 @@ Duplicate borrower picks and `--claim-borrower` (sections 6.28–6.30):
   lengthen waits in the short bursts, where the timer fires most
   (guess). Not tested.
 
+GOMAXPROCS 3 (section 6.31):
+- **Why EEVDF collapses** (a guess, consistent with the numbers). With 3
+  Ps, at most 3 server threads run Go code at once. EEVDF shares CPUs 0–2
+  fairly among them and the 2 zstd jobs (SCHED_BATCH has nice 0's
+  weight), so the server gets about 3/5 of 3 CPUs, 1.8 CPUs. A busy phase
+  needs 3,500 req/s × ~0.61 ms of server CPU per request, 2.1 CPUs. So
+  every busy phase is an overload, and its queue grows until the burst
+  ends. With 16 Ps, the server's threads are 16 of 18 runnable, and
+  fair sharing gives it nearly all 3 CPUs. E1b chose 16 so that the
+  kernel sees the server's threads (section 2). This run shows how much
+  that choice matters for EEVDF: GOMAXPROCS is a strong lever for the
+  baseline, not only for kairos.
+- **Why kairos doesn't care.** LC threads have strict priority on LC
+  CPUs, and batch only borrows. The number of server threads changes
+  how many of them can be runnable, not whether they beat zstd to a CPU.
+- **bpfland copes** (1.56 ms), presumably because it favours tasks that
+  sleep often (interactive) over CPU-bound ones (guess, not checked in
+  its source).
+
 ---
 
 ## 8. Limitations
@@ -3100,6 +3159,8 @@ Duplicate borrower picks and `--claim-borrower` (sections 6.28–6.30):
   kernel 7.0.0-42 instead of -38. Comparisons of F with those
   experiments cross both changes. Batch was 7–9% higher in E14 than in
   E11 for the same configs without the fix.
+- GMP3 (6.31) has 6 reps, too few for Holm to reject over 3
+  comparisons. Its result is the 6/6 direction, not a test.
 
 ---
 
@@ -4197,3 +4258,62 @@ comparisons with earlier experiments.
 - If dup_alt ≥ 1%: implement the reservation as an option, run its A/B
   (~2 h), and postpone F by a night. Otherwise run F.
 - Then the dependency rule (E13).
+
+### 2026-11-04 (evening) — DS2, `--claim-borrower` (E14), GOMAXPROCS 3
+**Did:**
+- Aayush ran `caffeinate` on the Mac and left it idle until 23:20.
+- Reran the smoke run as DS2 (clean, section 6.29).
+- Aayush decided:
+  - a flagged run drops only its own pairs (`stats.py --skip-runs`,
+    added);
+  - if dup_alt ≥ 1%, the fix gets an A/B tonight.
+- Wrote `--claim-borrower` (e11c590; section 4). Load-tested it for 8 s,
+  then ran E14: 4 configs × 10 reps on the burst sweep and the Azure
+  replay (3.2 h; section 6.30).
+- Set the E14 adoption rule in 5.1 before E14 ran. By that rule, adopted
+  the fix in F's configs (b160990).
+- Used the remaining idle time for GMP3, the server at GOMAXPROCS 3, 6
+  reps (6fefc35; section 6.31).
+
+**Found:**
+- DS2 is clean, and kairos's dup_alt is still 8.8%. The slow host had
+  not inflated it; my guess in 6.28 was wrong.
+- E14:
+  - `--claim-borrower` lowers kairos's busy p50 by 2% (p = 0.008, 8/9
+    reps); nothing else changes.
+  - For pw1000r100 no primary metric differs at p < 0.05. But busy
+    >5 ms and batch lean worse on the burst sweep (p = 0.065), and the
+    10–30 ms bursts are worse at unadjusted p < 0.05.
+  - The Azure replay shows no difference for either.
+- GMP3: kairos < pw1000r100 < bpfland on busy p50 in 6/6 reps, and the
+  reverse for batch, as at GOMAXPROCS 16. EEVDF is overloaded (busy p50
+  227 ms, growing with burst length).
+
+**Interpretation:**
+- Duplicates are a real, frequent effect of deciding a preemption on one
+  CPU while the victim switches later. Fixing them is worth a little
+  median latency for kairos and costs nothing measurable there.
+- For pw1000r100 the fix touches ~4% of decisions, so a real cost seems
+  unlikely. The short-burst pattern is unexplained (6.30, 7).
+- The results don't depend on GOMAXPROCS 16 for kairos. EEVDF's do.
+
+**Decisions:**
+- (Aayush) Exclusion per run, not per rep.
+- (Aayush) Fix plus A/B before F.
+- (by the pre-set rule) `--claim-borrower` adopted for kairos and
+  pw1000r100. F's kairos, pw1000r100 and fixed3 now pass it. Aayush can
+  still keep pw1000r100 without it before F runs.
+
+**Problems:**
+- I chose 6 reps for GMP3 without counting Holm's 3 comparisons. n = 6
+  can't reject; it would have needed 7.
+- Two E14 runs had 1.6–1.9k swap-ins (about 7 MB), flagged by the rule.
+
+**Next:**
+- F (`experiments/final.sh`, ~7 h) at night with the Mac idle. It
+  needs:
+  - `caffeinate` for at least 7.5 h;
+  - Aayush's OK to stop apt-daily.timer and apt-daily-upgrade.timer
+    for the night (sudo), or a start time that avoids them.
+- Aayush to confirm or change the E13 success criterion (5.1).
+- Then E13, the dependency rule.
