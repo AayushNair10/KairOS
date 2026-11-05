@@ -933,6 +933,20 @@ choices. Add as you go.)
 One row per experiment run batch. Raw data lives in `results/<date>-<name>/`
 together with `meta.json` (git commit, kernel, VM config, parameters).
 
+**Names (added 2026-11-05, Aayush's request).** In text written from now
+on, and in new configs, every variant of our scheduler is named
+`kairos-<variant>`, so that it can't be mistaken for a baseline. Existing
+result directories and the rows below keep the labels they ran under
+(raw data isn't edited):
+
+| label in results | name in text |
+|---|---|
+| kairos | kairos (borrower preemption at once) |
+| pw1000r100 | kairos-pw1000r100 (`--preempt-wait-us=1000 --preempt-min-run-us=100`) |
+| fixed3 | kairos-fixed3 (`--lc-min=3`) |
+| never3 | kairos-never3 (`--never-preempt --batch-slice-us=3000`) |
+| kclaim, pwclaim | kairos and kairos-pw1000r100 with `--claim-borrower` (E14) |
+
 | ID | Date | Commit | Config(s) | Workload / pattern | Reps | Data path | Status / one-line result |
 |---|---|---|---|---|---|---|---|
 | S1 | 2026-10-29 | 4edc764 + uncommitted phase 3 code | eevdf, kairos (scx_simple policy + enqueue printk) | `smoke.conf`: 5s@500, 10s@3000, 5s@500 req/s; 100 µs work; 4 zstd jobs | 1 | `results/2026-10-29-smoke/` | Harness works (latency + throughput logs). Smoke test, not a measurement |
