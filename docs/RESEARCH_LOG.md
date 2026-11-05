@@ -3351,6 +3351,20 @@ GOMAXPROCS 3 (section 6.31):
     ms). Its batch is 10% above kairos's (E14: 8%).
   - **Rerun?** The pre-set rules don't call for one. Whether to rerun F
     on a quieter night is Aayush's decision.
+  - **Added 2026-11-05: every config was slowed alike.** Config medians
+    against FS (1 rep, the same kernel and configs, the day before):
+    - server CPU per request +1 to +8%;
+    - batch −16 to −25% (bpfland −16%, eevdf −23%, lavd −24%, kairos
+      −25%, pw1000r100 −22%).
+
+    Against E3-r (5 reps, kernel −38): server +8 to +11%, batch −18 to
+    −21% for every config they share. F interleaves the configs within
+    each rep, so the comparisons stay paired.
+    - Aayush decided not to rerun F. The point of F is the standing of
+      kairos against the baselines, not absolute levels.
+    - The one unequal load was my wait process. It cost the sched_ext
+      schedulers more than EEVDF. In the main comparison it was alike:
+      on the burst sweep, bpfland 5.6% and pw1000r100 6.0% of a CPU.
 - **My wait process ran during every F run.**
   - **What it was.** `tail --pid=<wrapper> -f /dev/null` (uutils
     coreutils 0.10.0), started from the Claude Code session to report
@@ -4592,3 +4606,27 @@ comparisons with earlier experiments.
   again.
 - Aayush to confirm or change the E13 success criterion (5.1). Then E13.
 - Why kairos's pool doesn't shrink in the burst sweep's quiet phases.
+
+**Added later on 2026-11-05 (Aayush's answers):**
+- **No rerun of F.** Every config was slowed alike (section 8), and F
+  measures kairos against the baselines.
+- **E13** has not run, and the dependency rule isn't implemented. Aayush:
+  if it is better, switch to it. I take "better" to be the criterion
+  proposed in 5.1: busy p50 lower than pw1000r100's with Holm p < 0.05,
+  and median paired batch within 2%. That is an assumption, not
+  explicitly confirmed.
+- **Starvation guard (Feature B)** is to be built only if it helps.
+  - Longest wait of any task in F, from the per-second `wait_max_us`:
+    - burst sweep: kairos 949 ms, pw1000r100 622 ms, fixed3 530 ms,
+      never3 263 ms;
+    - Azure: 346, 355 and 220 ms.
+  - Waits over 50 ms came in 5–7.5% of seconds under the split configs
+    on the burst sweep (never3 12%). None was over 1 s.
+  - The sched_ext watchdog ejects a scheduler whose runnable task waits
+    30 s. kairos sets no `timeout_ms`, so the kernel's maximum,
+    `SCX_WATCHDOG_MAX_TIMEOUT` = 30 s, applies.
+  - E10's kpw-r2 had a 1.9 s wait in a 5 s overload, with batch starved.
+- **Dates.** Aayush plans to finish long before the deadlines, so work
+  is not ordered by them.
+- **Final goal.** An OS built around this scheduler.
+
