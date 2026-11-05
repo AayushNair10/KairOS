@@ -978,6 +978,7 @@ together with `meta.json` (git commit, kernel, VM config, parameters).
 | AP | 2026-11-04 | 1018388 | offline, no scheduler | `ml/azure_predict.py`: Azure trace at 1 s bins (10x), depth-5 tree vs simple predictors of the next 200 ms's LC demand, pools scored at equal cost; test hours 36, 54, 284 and 12 others | – | `results/2026-11-04-azure-predict/` | The tree is under-provisioned less often than the best simple predictor in 0/3 of E2a's hours and 2/12 others (by ≤ 0.3 points), so the condition for a run with more CPUs is not met (section 6.27) |
 | DS | 2026-11-04 | 3067b18 | kairos, pw1000r100, fixed3 (kairos with `--lc-min=3`) | `final-burst.conf` with 1 rep | 1 | `results/2026-11-04-dup-smoke/` | Not a measurement: the host slowed the VM in all three runs (server CPU per request 910–1,114 µs vs 674–677 in FS and E11; load generator 190–222 vs 137–148 µs; VM share 0.94–0.95); kairos busy p50 5.1 ms, batch 160 MB/s. The new counters work: dup_alt 8.9% of kairos's preemptions, 3.0% of pw1000r100's (section 6.28) |
 | DS2 | 2026-11-04 | 60c15d8 | kairos, pw1000r100, fixed3 | DS rerun, Mac idle (`caffeinate`) | 1 | `results/2026-11-04-dup-smoke2/` | Clean (VM share 0.98, server 643–671 µs per request). kairos dup_alt 8.8% of 8,061 preemptions/s, pw1000r100 0.8%, so the fix is tested first: E14 (section 6.29) |
+| E14 | 2026-11-04 | e11c590 | kairos, kclaim, pw1000r100, pwclaim (`--claim-borrower`) | `claim-burst.conf` (E3's phases), `claim-azure.conf` (E2a's replay); `experiments/e14_claim.sh` | 10 | `results/2026-11-04-claim-burst/`, `results/2026-11-04-claim-azure/` | All 80 runs at VM share 0.98. Flagged (swap-ins > 1,000): claim-burst kairos-r1 (1,593), claim-azure pw1000r100-r7 (1,874); their pairs were dropped. kclaim: busy p50 −2% (p = 0.008), nothing worse. pwclaim: no primary metric differs at p < 0.05. Adopted for both by the rule in 5.1 (section 6.30) |
 
 ### 5.1 Planned experiments
 | # | Experiment | Pattern | Shows |
@@ -995,7 +996,7 @@ together with `meta.json` (git commit, kernel, VM config, parameters).
 | E10 | Which wakeups preempt (`e10-preempt-diag.conf`, `--diag`) | E3's phases | which threads preempt, how long they then run |
 | E11 | Delayed borrower preemption (`e11-delay.conf`) | E3's phases | latency for batch throughput as the wait D grows |
 | E12 | Ablations (`e12-ablate.conf`, `e7_pipe.sh` with kairossync) | E3's phases; pipe | sync wakeups, shared vs per-CPU LC queue, borrower choice |
-| F | Final evaluation (`final-burst.conf`, `final-azure.conf`, `experiments/final.sh`) | E3's phases; E2a's Azure replay | every baseline and both kairos variants (D = 0 and pw1000r100), 10 reps, tested with `analysis/stats.py`; in the burst part also fixed3 (LC pool held at 3 CPUs), a pool-sizing ablation |
+| F | Final evaluation (`final-burst.conf`, `final-azure.conf`, `experiments/final.sh`) | E3's phases; E2a's Azure replay | every baseline and both kairos variants (D = 0 and pw1000r100), 10 reps, tested with `analysis/stats.py`; in the burst part also fixed3 (LC pool held at 3 CPUs), a pool-sizing ablation; after E14, kairos, pw1000r100 and fixed3 run with `--claim-borrower` |
 | E13 | Dependency rule for delayed preemption | E3's phases | whether letting short-running LC tasks that recently woke another LC task preempt at once recovers pw1000r100's latency at its batch throughput |
 | E14 | One borrower preemption per CPU at a time (`claim-burst.conf`, `claim-azure.conf`) | E3's phases; E2a's Azure replay | whether `--claim-borrower` (a second LC wakeup takes another borrower or queues, instead of re-picking a CPU already being preempted) changes latency or batch throughput, for kairos and pw1000r100 |
 
@@ -2233,8 +2234,91 @@ Counters, per second over the load (`runlib.sched_stats`):
   `--claim-borrower`.
 - **pw1000r100 is under 1%.** Most of its LC wakeups don't preempt at
   once.
-- **Latency and batch:** these smoke runs are not analysed yet. Parsing
-  them would have run alongside E14.
+- **Latency and batch** (analysed after E14):
+  - kairos: busy p50 0.99 ms, busy >5 ms 12.7%, batch 381 MB/s;
+  - fixed3: 0.96 ms, 11.3%, 392 MB/s;
+  - pw1000r100: 1.29 ms, 12.6%, 410 MB/s.
+
+  The >5 ms shares are 3x E14's (kairos 3.9%, pw1000r100 4.9%) and
+  above E11's per-L ranges. This is one rep each, the first runs after
+  the VM had been idle for hours. Not explained.
+
+### 6.30 One borrower preemption per CPU at a time (E14; 2026-11-04)
+`results/2026-11-04-claim-burst/`, `results/2026-11-04-claim-azure/`, 10
+reps, commit e11c590, kernel 7.0.0-42, Mac idle on `caffeinate`. kclaim
+and pwclaim are kairos and pw1000r100 with `--claim-borrower`.
+
+**Run checks** (rules in 5.1):
+- All 80 runs: VM share 0.98, other processes ≤ 14% of a CPU, direct-reclaim
+  stalls ≤ 21.
+- Two runs had more than 1,000 swap-ins: claim-burst kairos-r1 (1,593)
+  and claim-azure pw1000r100-r7 (1,874).
+- Both are references, so by the per-run rule the kairos pair on the
+  burst sweep and the pw1000r100 pair on the Azure replay have n = 9.
+- With all 10 reps the conclusions are the same: kclaim busy p50 −0.03
+  ms, p = 0.004; pwclaim on Azure: every primary p ≥ 0.69.
+
+**Burst sweep**, primary metrics (`stats.py --ref X --configs X Xclaim`;
+median of the paired differences, bootstrap 95% CI, in how many reps
+the fix was better, exact Wilcoxon p):
+
+| pair | busy p50 (ms) | busy >5 ms (points) | batch, whole load (MB/s) |
+|---|---|---|---|
+| kclaim − kairos (n = 9) | −0.02 [−0.05, −0.02], 8/9, **p = 0.008** | +0.2 [−1.4, +1.7], 3/9, p = 0.57 | −1 [−10, +2], 3/9, p = 0.43 |
+| pwclaim − pw1000r100 (n = 10) | +0.01 [−0.01, +0.02], 2/10, p = 0.38 | +0.9 [−0.3, +2.2], 3/10, p = 0.065 | −4 [−8, +0], 3/10, p = 0.065 |
+
+Reference medians: kairos busy p50 0.93 ms, >5 ms 3.9%, 404 MB/s;
+pw1000r100 1.20 ms, 4.9%, 435 MB/s.
+
+**Azure replay**, primary metrics:
+
+| pair | p50, all (ms) | >5 ms, all (points) | batch (MB/s) |
+|---|---|---|---|
+| kclaim − kairos (n = 10) | +0.00, 5/10, p = 0.70 | +0.3, 4/10, p = 0.38 | −5, 3/10, p = 0.11 |
+| pwclaim − pw1000r100 (n = 9) | +0.00, 4/9, p = 0.73 | −0.1, 5/9, p = 1.0 | −1, 4/9, p = 0.82 |
+
+**Per burst length** (descriptive; 21 tests per pair, unadjusted):
+- kclaim's busy p50 is lower at every L (by 2–5%; 5–8 of 9 reps better);
+  p < 0.05 at L 10, 30 and 10,000 ms.
+- pwclaim is worse at the two shortest bursts. At L 10 and 30 ms:
+  - busy >5 ms +1.2 and +1.6 points (p = 0.027, 0.020);
+  - block batch −17 and −18 MB/s, −4% (p = 0.037, 0.049);
+  - busy p50 +3% at L 30 ms (p = 0.049).
+
+  At L ≥ 100 ms nothing differs.
+
+**Counters**, medians over reps, per second over the load:
+
+| config | preemptions | dup_pick | dup_alt | no_victim |
+|---|---|---|---|---|
+| burst: kairos | 8,629 | 18.8% | 8.8% | 20,636 |
+| burst: kclaim | 8,046 | 22.0% | 9.5% | 22,048 |
+| burst: pw1000r100 | 935 (14 by the timer) | 2.7% | 0.4% | 17,037 |
+| burst: pwclaim | 900 (11) | 4.6% | 1.0% | 17,060 |
+| Azure: kairos | 9,188 | 15.6% | 9.3% | 10,575 |
+| Azure: kclaim | 8,961 | 18.8% | 10.3% | 11,580 |
+| Azure: pw1000r100 | 778 (19) | 1.1% | 0.5% | 8,769 |
+| Azure: pwclaim | 766 (18) | 3.4% | 1.6% | 8,764 |
+
+- With the option, dup_alt counts redirections to another borrower and
+  dup_pick − dup_alt counts wakeups sent to LC_DSQ instead. kclaim on the
+  burst sweep: about 760 redirected and 1,000 queued per second, so
+  no_victim is +1,400/s and preemptions are −580/s.
+- pwclaim changes about 40 of its ~900 decisions per second.
+
+**Decision by the rule in 5.1:** neither variant with the fix is worse
+with p < 0.05 on any primary metric of either workload, so
+`--claim-borrower` is adopted for kairos and for pw1000r100. F's configs
+(`final-burst.conf`, `final-azure.conf`) now pass it to kairos,
+pw1000r100 and fixed3, under the same names.
+- **Caveat for pw1000r100:** on the burst sweep two primary metrics lean
+  worse (p = 0.065), and the shortest bursts are worse at unadjusted
+  p < 0.05. Aayush can still keep pw1000r100 without the fix before F
+  runs; the rule doesn't require it.
+
+**Across kernels** (a guess): E14's kairos batch, 404 MB/s, is 7% above
+E11's 376, and pw1000r100's, 435, is 9% above 399. Same phases. E11 ran
+on 7.0.0-38, E14 on -42. Not tested.
 
 ## 7. Explanations and insights
 (The "why" behind each result. This is what the report is graded on.)
@@ -2838,6 +2922,40 @@ ML and the Azure replay (sections 6.13, 6.26):
   max(ewma, seasonal mean) was the best simple predictor in 4 of the 15
   test hours. Whether that matters online is not measured.
 
+Duplicate borrower picks and `--claim-borrower` (sections 6.28–6.30):
+- **Why duplicates are common under kairos.**
+  - A preemption is decided in one CPU's enqueue(). The kicked CPU then
+    switches only after an IPI and its scheduling path. Until then it
+    still shows `running_at` set and `batch` true.
+  - At ~8,000 preemptions/s on 3 CPUs, a second LC wakeup inside that
+    window picks the same CPU in ~1 of 5 cases. PICK_FIRST makes it
+    likelier, because every wakeup starts its scan at CPU 0 (guess).
+  - Under pw1000r100 most LC wakeups don't preempt (~900/s), so the
+    window is rarely hit (1–3%).
+- **What the fix changes.** Without it, the second task goes to the head
+  of the first one's CPU queue (`SCX_ENQ_PREEMPT` implies
+  `SCX_ENQ_HEAD`). The first task then waits for it while another LC CPU
+  may still run batch work. With the fix:
+  - about half of those wakeups preempt that other borrower;
+  - the rest wait in LC_DSQ, which every LC CPU serves first.
+
+  Either way, neither task is pushed back on a CPU it can't leave.
+- **Why the gain is small** (kairos busy p50 −2%). The duplicates are
+  ~1,600 per second (kairos on the burst sweep), against ~33,000 woken
+  tasks that start running per second, of any class (`lat_wakeups`).
+  Most preempting runs last 7–12 µs (E10), so the task
+  that was pushed back lost little. The busy median moves by 20 µs. The
+  tail (>5 ms) and batch don't move, because they are set by bursts
+  that saturate the LC CPUs, where no free borrower exists anyway.
+- **pw1000r100's short-burst pattern is not explained.** The fix
+  changes ~40 of its decisions per second. Losing 17 MB/s of batch in
+  the L 10 and 30 ms blocks, 4%, would be a large effect for that. With
+  21 unadjusted per-L tests, chance is a candidate, though the four
+  results point the same way. Another candidate is the timer path: an
+  overdue task whose claim fails loses its deadline. That could
+  lengthen waits in the short bursts, where the timer fires most
+  (guess). Not tested.
+
 ---
 
 ## 8. Limitations
@@ -2972,6 +3090,16 @@ ML and the Azure replay (sections 6.13, 6.26):
     batch throughput.
   - Its load is light (mean 0.35–0.38 CPUs), because each hour is scaled
     to its busiest second.
+- E14 (6.30) adopted `--claim-borrower` because it was "not worse at
+  p < 0.05". With 9–10 reps that test can miss small costs. pwclaim's
+  burst-sweep tail and batch lean worse (p = 0.065), so F's pw1000r100
+  may carry a cost of a few percent at short bursts that E14 couldn't
+  show.
+- F's kairos, pw1000r100 and fixed3 are not the configs of the same
+  names in E3, E11 and E12: they add `--claim-borrower`. They also run on
+  kernel 7.0.0-42 instead of -38. Comparisons of F with those
+  experiments cross both changes. Batch was 7–9% higher in E14 than in
+  E11 for the same configs without the fix.
 
 ---
 
