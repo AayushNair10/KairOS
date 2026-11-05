@@ -3161,6 +3161,15 @@ GOMAXPROCS 3 (section 6.31):
   E11 for the same configs without the fix.
 - GMP3 (6.31) has 6 reps, too few for Holm to reject over 3
   comparisons. Its result is the 6/6 direction, not a test.
+- The apt timers can't be planned around.
+  - At 18:06, `systemctl list-timers` showed apt-daily's next run at
+    23:40. It ran at 18:14:15 instead (journal), during DS2's fixed3-r1:
+    0.9 s of CPU, 92 MB peak memory.
+  - The timer is `OnCalendar=6,18:00` with `RandomizedDelaySec=12h`.
+  - `other_cpu()` misses processes that start and exit between the
+    snapshots, so the run checks can't see such a job.
+  - It was small here. apt-daily-upgrade, which can install packages, is
+    the larger risk. Stopping both timers during F is the reliable way.
 
 ---
 
@@ -4308,6 +4317,8 @@ comparisons with earlier experiments.
 - I chose 6 reps for GMP3 without counting Holm's 3 comparisons. n = 6
   can't reject; it would have needed 7.
 - Two E14 runs had 1.6–1.9k swap-ins (about 7 MB), flagged by the rule.
+- apt-daily ran at 18:14, not at 23:40 as listed, during DS2's last run
+  (section 8).
 
 **Next:**
 - F (`experiments/final.sh`, ~7 h) at night with the Mac idle. It
