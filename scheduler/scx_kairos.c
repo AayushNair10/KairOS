@@ -21,12 +21,90 @@
 #include "scx_kairos.bpf.skel.h"
 
 const char help_fmt[] =
-"KairOS: load-adaptive wakeup preemption.\n"
+"KairOS: a scheduler for a latency-critical (LC) service sharing CPUs with\n"
+"batch work. With --split it keeps a pool of LC CPUs sized to LC demand;\n"
+"batch work borrows idle LC CPUs, and LC wakeups preempt the borrowers.\n"
 "\n"
 "See the top-level comment in scx_kairos.bpf.c for more details.\n"
 "\n"
 "Usage: %s [options]\n"
 "\n"
+"The configuration the evaluation chose:\n"
+"      --main-config       shorthand for --split --class=policy\n"
+"                          --lc-buffer-pct=150 --claim-borrower\n"
+"                          --preempt-wait-us=1000 --preempt-min-run-us=100\n"
+"                          --max-wait-ms=2000 (options after it override it).\n"
+"                          Batch work must run as SCHED_BATCH or SCHED_IDLE,\n"
+"                          e.g. chrt --batch 0 CMD\n"
+"\n"
+"Soft CPU split:\n"
+"      --split             LC CPUs and batch CPUs, each pool serving its own\n"
+"                          queue first and lending idle CPUs to the other\n"
+"      --split-cpus LIST   CPUs the split manages, e.g. 0-2 (default all)\n"
+"      --lc-min N          fewest LC CPUs (default 1)\n"
+"      --lc-max N          most LC CPUs (default: all split CPUs)\n"
+"      --lc-buffer-pct N   spare LC capacity on top of LC demand, in %% of a\n"
+"                          CPU (default 50)\n"
+"      --lc-shift N        LC demand EWMA weight 1/2^N per tick (default 6)\n"
+"      --lc-hyst-pct N     shrink the LC pool only if it would with N%% of a\n"
+"                          CPU more demand (default 25)\n"
+"      --borrow-slice-us N slice of a batch task on an LC CPU (default 3000)\n"
+"      --claim-borrower    one preemption per borrower at a time; a second LC\n"
+"                          wakeup takes another borrower or queues (off by\n"
+"                          default)\n"
+"      --preempt-wait-us N a woken LC task that finds no idle CPU waits up to\n"
+"                          N us for an LC CPU to free up before it preempts a\n"
+"                          borrower (default 0: preempts at once)\n"
+"      --preempt-min-run-us N  with --preempt-wait-us, a task whose runs (waking\n"
+"                          to sleeping) average >= N us preempts at once\n"
+"                          (default 0: none does)\n"
+"      --max-wait-ms N     shared LC queue: a CPU runs the other pool's first\n"
+"                          task before its own queue's once that task has\n"
+"                          waited N ms (default 0: off; the kernel unloads the\n"
+"                          scheduler after a 30 s wait)\n"
+"      --class run|policy  batch = ran --batch-min-run-us since it slept (run),\n"
+"                          or has policy SCHED_BATCH/SCHED_IDLE (policy)\n"
+"                          (default run; E5 found policy much better)\n"
+"      --batch-min-run-us N  --class=run: a task is batch once it has run N us\n"
+"                          of CPU since it last slept (default 20000)\n"
+"\n"
+"Slices and timing (all designs):\n"
+"      --lat-slice-us N    slice of an LC task, or of any task in LATENCY mode\n"
+"                          (default 3000)\n"
+"      --batch-slice-us N  slice of a batch task on a batch CPU, or of any\n"
+"                          task in BATCH mode (default 20000)\n"
+"      --sleep-credit-us N vtime credit kept by a sleeping task (default 20000)\n"
+"      --timer-us N        load-signal timer period (default 1000)\n"
+"\n"
+"Experiments and ablations only (measured, not adopted; see RESEARCH_LOG):\n"
+"      --preempt-dep-us N  with --preempt-wait-us, a task that woke another LC\n"
+"                          task in the last N us also preempts at once\n"
+"                          (default 0: off; E13)\n"
+"      --no-borrow-preempt a woken LC task doesn't preempt a batch task on an\n"
+"                          LC CPU; it waits for the borrow slice instead\n"
+"      --borrower-pick first|prev|longest  which borrower a woken LC task\n"
+"                          preempts: the first LC CPU running one (CPU 0\n"
+"                          first), its previous CPU if that runs one, or the\n"
+"                          one running longest (default first; E12)\n"
+"      --lc-queue shared|percpu  queued LC tasks wait in one queue that\n"
+"                          every LC CPU serves first (shared), or in their\n"
+"                          CPU's own queue, which other CPUs serve only when\n"
+"                          idle (percpu) (default shared; E12)\n"
+"      --wake-sync         on a sync wakeup, put the woken task on the waker's\n"
+"                          CPU as the kernel's default does (if that CPU has\n"
+"                          nothing queued and some CPU is idle) (E12)\n"
+"      --kick-idle         wake an idle CPU when a task is queued in a shared\n"
+"                          queue (off by default: no gain measured in E2k)\n"
+"      --no-kick-idle      the default; kept so older configs still run\n"
+"      --ml-trace FILE     every --ml-period-ms, write the LC demand sample\n"
+"                          (training data for ml/train_burst.py)\n"
+"      --ml-model FILE     predict LC demand with this tree (from\n"
+"                          ml/train_burst.py); the prediction can only grow\n"
+"                          the LC pool, and is ignored once stale\n"
+"      --ml-period-ms N    sampling period (default 50; the model's must match)\n"
+"      --ml-ttl-ms N       a prediction is used for N ms (default 2 periods)\n"
+"\n"
+"Modes, the first design (static baselines and E1-E2), instead of --split:\n"
 "  -n, --never-preempt     BATCH mode: woken tasks never preempt (default)\n"
 "  -p, --force-preempt     LATENCY mode: woken tasks preempt a busy CPU\n"
 "  -a, --adaptive          switch between the modes against a latency target:\n"
@@ -38,69 +116,12 @@ const char help_fmt[] =
 "      --hold-max-ms N     longest hold (default 5000)\n"
 "      --signal-cpus LIST  only wakeups on these CPUs count, e.g. 0-2\n"
 "                          (default all)\n"
-"      --lat-slice-us N    slice in LATENCY mode (default 3000)\n"
-"      --batch-slice-us N  slice in BATCH mode (default 20000)\n"
-"      --sleep-credit-us N vtime credit kept by a sleeping task (default 20000)\n"
-"      --timer-us N        load-signal timer period (default 1000)\n"
-"      --fast-shift N      fast EWMA weight 1/2^N per timer tick (default 3)\n"
-"      --slow-shift N      slow EWMA weight 1/2^N per timer tick (default 6)\n"
-"      --split             soft CPU split instead of the modes: LC CPUs and\n"
-"                          batch CPUs, each pool serving its own queue first\n"
-"      --split-cpus LIST   CPUs the split manages (default all)\n"
-"      --lc-min N          fewest LC CPUs (default 1)\n"
-"      --lc-max N          most LC CPUs (default: all split CPUs)\n"
-"      --lc-buffer-pct N   spare LC capacity on top of LC demand, in %% of a\n"
-"                          CPU (default 50)\n"
-"      --lc-shift N        LC demand EWMA weight 1/2^N per tick (default 6)\n"
-"      --lc-hyst-pct N     shrink the LC pool only if it would with N%% of a\n"
-"                          CPU more demand (default 25)\n"
-"      --borrow-slice-us N slice of a batch task on an LC CPU (default 3000)\n"
-"      --no-borrow-preempt a woken LC task doesn't preempt a batch task on an\n"
-"                          LC CPU; it waits for the borrow slice instead\n"
-"      --borrower-pick first|prev|longest  which borrower a woken LC task\n"
-"                          preempts: the first LC CPU running one (CPU 0\n"
-"                          first), its previous CPU if that runs one, or the\n"
-"                          one running longest (default first)\n"
-"      --claim-borrower    --split: one preemption per borrower at a time; a\n"
-"                          second LC wakeup takes another borrower or queues\n"
-"                          (off by default)\n"
-"      --max-wait-ms N     --split, shared LC queue: a CPU runs the other\n"
-"                          pool's first task before its own queue's once that\n"
-"                          task has waited N ms (default 0: off; the kernel\n"
-"                          unloads the scheduler after a 30 s wait)\n"
-"      --lc-queue shared|percpu  queued LC tasks wait in one queue that\n"
-"                          every LC CPU serves first (shared), or in their\n"
-"                          CPU's own queue, which other CPUs serve only when\n"
-"                          idle (percpu; an ablation) (default shared)\n"
-"      --preempt-wait-us N a woken LC task that finds no idle CPU waits up to\n"
-"                          N us for an LC CPU to free up before it preempts a\n"
-"                          borrower (default 0: preempts at once)\n"
-"      --preempt-min-run-us N  with --preempt-wait-us, a task whose runs (waking\n"
-"                          to sleeping) average >= N us preempts at once\n"
-"                          (default 0: none does)\n"
-"      --preempt-dep-us N  with --preempt-wait-us, a task that woke another LC\n"
-"                          task in the last N us also preempts at once\n"
-"                          (default 0: off)\n"
-"      --kick-idle         wake an idle CPU when a task is queued in a shared\n"
-"                          queue (off by default: no gain measured in E2k)\n"
-"      --no-kick-idle      the default; kept so older configs still run\n"
-"      --wake-sync         --split: on a sync wakeup, put the woken task on the\n"
-"                          waker's CPU as the kernel's default does (if that\n"
-"                          CPU has nothing queued and some CPU is idle)\n"
-"      --ml-trace FILE     --split: every --ml-period-ms, write the LC demand\n"
-"                          sample (training data for ml/train_burst.py)\n"
-"      --ml-model FILE     --split: predict LC demand with this tree (from\n"
-"                          ml/train_burst.py); the prediction can only grow\n"
-"                          the LC pool, and is ignored once stale\n"
-"      --ml-period-ms N    sampling period (default 50; the model's must match)\n"
-"      --ml-ttl-ms N       a prediction is used for N ms (default 2 periods)\n"
-"      --class run|policy  batch = ran --batch-min-run-us since it slept (run),\n"
-"                          or has policy SCHED_BATCH/SCHED_IDLE (policy;\n"
-"                          e.g. chrt --batch 0) (default run)\n"
 "      --victim any|batch  which running tasks LATENCY mode may preempt: any,\n"
 "                          or only those classified batch (default any)\n"
-"      --batch-min-run-us N  a task is batch once it has run N us of CPU\n"
-"                          since it last slept (default 20000)\n"
+"      --fast-shift N      fast load EWMA weight 1/2^N per tick (default 3)\n"
+"      --slow-shift N      slow load EWMA weight 1/2^N per tick (default 6)\n"
+"\n"
+"Output and diagnostics:\n"
 "  -s, --stats FILE        also write the per-second stats to FILE as CSV\n"
 "      --diag FILE         count every wait for a CPU and every run, per task\n"
 "                          group, and write them per second to FILE as CSV\n"
@@ -111,6 +132,41 @@ const char help_fmt[] =
 "      --trace-class       bpf_printk every batch class change\n"
 "  -v, --verbose           print libbpf debug messages\n"
 "  -h, --help              display this help and exit\n";
+
+/*
+ * --main-config: the configuration the evaluation chose (RESEARCH_LOG
+ * 6.32 and 6.35-6.38: kairos-pw1000r100 with the starvation guard). main()
+ * replaces it in argv with these options before parsing, so it takes the
+ * same path as spelling them out, and options after it override it.
+ */
+static const char *const main_config[] = {
+	"--split", "--class=policy", "--lc-buffer-pct=150", "--claim-borrower",
+	"--preempt-wait-us=1000", "--preempt-min-run-us=100", "--max-wait-ms=2000",
+};
+#define MAIN_CONFIG_LEN (sizeof(main_config) / sizeof(main_config[0]))
+
+/* argv with every --main-config replaced by main_config[]; updates *argc. */
+static char **expand_main_config(int *argc, char **argv)
+{
+	/* room for every argument to expand, plus argv's closing NULL */
+	char **out = calloc((size_t)*argc * MAIN_CONFIG_LEN + 1, sizeof(*out));
+	int n = 0;
+
+	if (!out) {
+		perror("calloc");
+		exit(1);
+	}
+	for (int i = 0; i < *argc; i++) {
+		if (i && !strcmp(argv[i], "--main-config")) {
+			for (size_t j = 0; j < MAIN_CONFIG_LEN; j++)
+				out[n++] = (char *)main_config[j];
+		} else {
+			out[n++] = argv[i];
+		}
+	}
+	*argc = n;
+	return out;
+}
 
 enum {
 	OPT_LAT_SLICE = 256,	/* long-only options: values beyond any char */
@@ -573,6 +629,7 @@ int main(int argc, char **argv)
 	int opt;
 	__u64 ecode;
 
+	argv = expand_main_config(&argc, argv);
 	libbpf_set_print(libbpf_print_fn);
 	signal(SIGINT, sigint_handler);
 	signal(SIGTERM, sigint_handler);

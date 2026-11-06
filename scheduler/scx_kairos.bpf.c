@@ -57,6 +57,8 @@
  *   of the other pool that has waited longer than the limit runs before a
  *   CPU's own queue. Off by default.
  *
+ * The configuration the evaluation chose is the loader's --main-config.
+ *
  * The vtime parts are scx_simple's: Copyright (c) 2022 Meta Platforms, Inc.
  * and affiliates; Tejun Heo <tj@kernel.org>; David Vernet <dvernet@meta.com>.
  */
