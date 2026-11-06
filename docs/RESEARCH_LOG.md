@@ -3790,6 +3790,13 @@ GOMAXPROCS 3 (section 6.31):
     after the slowed rep 9. So heat from the load seems a less likely
     cause than other work on the Mac between about 05:00 and 07:40
     (a guess).
+  - **Added 2026-11-06, 08:50:** Aayush reports the Mac wasn't kept
+    awake that night (no `caffeinate`). The likely cause is then macOS
+    idle power management: the slower cores, and the VM held back in
+    rep 10. Not checked on the Mac side.
+  - **Next time:** check `caffeinate` before an unattended run.
+    Re-checking host speed before each run, not only when a part starts,
+    would also catch this.
   - **Effect on the decisions:**
     - E13's outcome holds in each clean rep (6.35).
     - The guard's lean (6.36) can only shrink without rep 9.
@@ -5189,3 +5196,8 @@ comparisons with earlier experiments.
   - README;
   - PROJECT_PLAN update;
   - write-ups, figures, report.
+
+**Added 2026-11-06, 08:50:** Aayush reports the Mac wasn't kept awake
+(no `caffeinate`) that night. That is the likely cause of the host
+slowdown (section 8). The decisions above don't change: as far as
+checked, none of them depends on the slowed reps.
