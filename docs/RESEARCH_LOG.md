@@ -1081,6 +1081,7 @@ result directories and the rows below keep the labels they ran under
 | F | Final evaluation (`final-burst.conf`, `final-azure.conf`, `experiments/final.sh`) | E3's phases; E2a's Azure replay | every baseline and both kairos variants (D = 0 and pw1000r100), 10 reps, tested with `analysis/stats.py`; in the burst part also fixed3 (LC pool held at 3 CPUs), a pool-sizing ablation; after E14, kairos, pw1000r100 and fixed3 run with `--claim-borrower` |
 | E13 | Dependency rule for delayed preemption | E3's phases | whether letting short-running LC tasks that recently woke another LC task preempt at once recovers pw1000r100's latency at its batch throughput |
 | E14 | One borrower preemption per CPU at a time (`claim-burst.conf`, `claim-azure.conf`) | E3's phases; E2a's Azure replay | whether `--claim-borrower` (a second LC wakeup takes another borrower or queues, instead of re-picking a CPU already being preempted) changes latency or batch throughput, for kairos and pw1000r100 |
+| E15 | Does sizing the LC pool pay? (`e15-pool-burst.conf`, `e15-pool-azure.conf`) | E3's phases; E2a's Azure replay | kairos-pw1000r100 with 1.5 CPUs of headroom (pool stays at 3) against 0.5 CPU (pool can shrink to 2): batch gained against latency lost |
 
 **Rules for F, set on 2026-11-04 before F runs** (Aayush agreed to the
 draft):
@@ -1141,6 +1142,42 @@ draft):
       p50 replaces kairos-pw1000r100 as the main configuration.
     - If none passes, kairos-pw1000r100 stays.
     - kairos is a reference point; it can't be chosen here.
+
+  **Added 2026-11-06, 01:30, before any of these run:**
+  - **E13 decision rule confirmed** by Aayush as written above.
+    `stats.py --ref kairos-pw1000r100 --configs kairos kairos-pw1000r100
+    kairos-pw1000r100-dep1000 kairos-pw1000r100-dep3000
+    kairos-pw1000r100-dep10000`, so the family stays at 4 comparisons.
+  - **Guard check** (in `e13-dep.conf`: kairos-pw1000r100-guard,
+    `--max-wait-ms=2000`). The guard goes into the main configuration
+    unless it is worse at p < 0.05 on any of the three burst-sweep
+    primary metrics. One comparison per metric
+    (`--configs kairos-pw1000r100 kairos-pw1000r100-guard`), no Holm, as
+    for E14. Its `overdue` count is reported.
+  - **E15, pool sizing** (`e15-pool-burst.conf`, `e15-pool-azure.conf`):
+    kairos-pw1000r100 (1.5 CPUs of headroom) against -buf50 (0.5 CPU,
+    so the pool can shrink to 2 CPUs).
+    - **"Sizing the pool to the load pays"** if, on either workload,
+      -buf50 has more whole-run batch at p < 0.05 and none of that
+      workload's latency primary metrics is worse at p < 0.05.
+    - **Otherwise** the report says that pool sizing doesn't pay on this
+      machine.
+    - One comparison per metric per workload, no Holm. Two workloads
+      make two chances, which the report states.
+    - Pool size (`nr_lc`, `lc_cpus`) is reported for both.
+  - **E5, classification** (`e5-class.conf`): kairos-pw1000r100 with
+    labels (`--class=policy`) against `--class=run`.
+    - **"The automatic rule matches the labels"** if no burst-sweep
+      primary metric differs at p < 0.05 (one comparison per metric, no
+      Holm).
+    - **Otherwise** the report says which is worse and by how much.
+    - The configs keep `--class=policy` either way: the question is
+      whether kairos needs labels, not which to use here.
+  - **Run checks and exclusions** for all three: as in F (5.1), with the
+    per-run exclusion.
+  - **Order**, by priority: E13, E15 burst, E15 Azure, E5
+    (`experiments/e13_e15_e5.sh`). A part that wouldn't end by 09:30 is
+    skipped.
 
 **Added on 2026-11-04 (evening), before E14 and F run:**
 - **Exclusion, decided** (Aayush chose this over the whole-rep rule
