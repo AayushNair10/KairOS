@@ -989,6 +989,23 @@ choices. Add as you go.)
   - **What it can't see** (section 4, 2026-10-29 notes): a handoff
     inside Go with no kernel wakeup, i.e. a goroutine readied on a busy
     P. Only futex wakeups between threads count.
+- **`--main-config` (2026-11-06, b4f4958).** The loader's shorthand for
+  the configuration the evaluation chose (6.32, 6.35–6.38):
+  `--split --class=policy --lc-buffer-pct=150 --claim-borrower
+  --preempt-wait-us=1000 --preempt-min-run-us=100 --max-wait-ms=2000`.
+  - **How it works.** `expand_main_config()` replaces it in argv with
+    those strings before getopt runs, so it takes the same parsing and
+    validation path as spelling them out. Options after it override it.
+  - It doesn't set `--split-cpus`: the default is all CPUs, and the
+    experiments add `--split-cpus=0-2`.
+  - It isn't in `long_opts`, so getopt's prefix matching doesn't accept
+    a shortened form.
+  - Checked by loading it: the printed configuration matches F's
+    pw1000r100 plus `max_wait_ms=2000`, and `--max-wait-ms=0
+    --lc-buffer-pct=50` after it override both.
+- **`--help` regrouped** (same commit): the main configuration; the
+  split; slices and timing; options for experiments and ablations only,
+  each marked with its experiment; the first design's modes; output.
 
 ---
 
@@ -5201,3 +5218,53 @@ comparisons with earlier experiments.
 (no `caffeinate`) that night. That is the likely cause of the host
 slowdown (section 8). The decisions above don't change: as far as
 checked, none of them depends on the slowed reps.
+
+### 2026-11-06 — Making it usable: --main-config, README, plan, figures
+**Did:**
+- Pushed everything up to f5b3819 (Aayush's OK).
+- `--main-config` in the loader and a regrouped `--help` (b4f4958;
+  section 4).
+- `README.md` (61670f0): what kairos is, F's headline results,
+  requirements, build, run, the harness, analysis.
+- `docs/PROJECT_PLAN.md` brought up to date (8d25aec): the design as
+  built, phase status, every experiment with its outcome.
+- `analysis/plots.py` (b026189): `tradeoff.pdf` and `byburst.pdf` from
+  F, in `docs/report/figures/`.
+  - The per-run numbers come from stats.py's functions and are cached
+    as CSV in `data/`.
+  - matplotlib went into a venv, `~/kairos-data/venv`, not the system.
+
+**Found:**
+- The figures' medians match 6.32's tables for all 17 configs.
+- The PDFs embed TrueType (CIDFontType2) fonts, no Type 3.
+
+**Interpretation:** none; tooling and documentation.
+
+**Decisions:**
+- The main configuration includes the guard, by the rule in 5.1
+  (6.36). Aayush hasn't decided yet whether its lean needs an overhead
+  check; dropping it is `--max-wait-ms=0` after `--main-config`.
+- The figures leave out fixed3, which lands on kairos, and lavdperf,
+  which lands on lavd.
+- Colors: the dataviz reference palette's first three slots, used
+  without running its validator (no node here). Those slots are
+  documented as passing every pair.
+
+**Problems:**
+- The first figure drafts had labels colliding. Fixed by placement, a
+  leader line and fewer tick labels, checked by looking at each render.
+- Checking the README against the log caught claims that were wrong:
+  - the Azure order of the baselines;
+  - "lowest latency of all" (fixed3 ties it);
+  - F's row labelled as the main configuration, though F ran without
+    the guard;
+  - E1's rep count, in the plan.
+
+**Next:**
+- Possibly more figures, e.g. the delay knob (kairos,
+  kairos-pw1000r100 and E13's windows on one trade-off plot) or a time
+  series of one run for the video.
+- The write-ups: strict priority and kpw-r2, the Redis per-request
+  check, transitions (E4) from F's data.
+- Progress report (needs Aayush's callback screenshot), final report,
+  video.
