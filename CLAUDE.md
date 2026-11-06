@@ -66,7 +66,8 @@ scripts/        helpers (log_entry.sh, meta.sh)
 - Build workloads: `make -C workloads` (`make -C workloads proto` regenerates
   the gRPC code; needs protoc + plugins)
 - Batch input (once): `./workloads/batch/make_input.sh` → `~/kairos-data/zstd-input-64M.tar`
-- Load: `sudo ./scheduler/scx_kairos [--force-preempt|--never-preempt] [--stats FILE] [--trace] [--verbose]`
+- Load: `sudo ./scheduler/scx_kairos [--main-config|--force-preempt|--never-preempt] [--stats FILE] [--trace] [--verbose]`
+  (`--main-config` is the configuration the evaluation chose)
   (Ctrl-C unloads; the kernel falls back to EEVDF; `--help` lists the tunables)
 - Trace output: `sudo cat /sys/kernel/debug/tracing/trace_pipe`
 - Is it running: `cat /sys/kernel/sched_ext/state` and `cat /sys/kernel/sched_ext/root/ops`
@@ -83,6 +84,7 @@ scripts/        helpers (log_entry.sh, meta.sh)
 - E10–E12, pipe and G in a row (~3.5 h, machine idle): `./experiments/e10_g.sh`
 - Final evaluation, burst sweep (9 configs) then Azure replay (8), × 10 reps (~7 h, machine idle): `./experiments/final.sh`
 - Statistical tests against a reference (Wilcoxon signed-rank paired by rep, Holm per metric, bootstrap CIs): `./analysis/stats.py results/<date>-<name> --ref kairos [pw1000r100] [--by burst|level] [--csv FILE]`
+- Figures for the report (F's data; needs matplotlib, e.g. in `~/kairos-data/venv`): `~/kairos-data/venv/bin/python analysis/plots.py [--png] [--refresh]` → `docs/report/figures/`
 - New log entry skeleton: `./scripts/log_entry.sh "<title>"`
 
 ## Coding rules

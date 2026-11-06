@@ -1,0 +1,2251 @@
+config,rep,metric,value
+bpfland,1,"busy p50, all L",1.613066
+bpfland,1,"busy >5 ms, all L",16.35184978204985
+bpfland,1,"quiet p50, all L",0.994886
+bpfland,1,"batch, whole load",353.327259960225
+bpfland,1,"busy p50, L 10 ms",1.428707
+bpfland,1,"busy >5 ms, L 10 ms",9.749552772808586
+bpfland,1,"batch, L 10 ms block",340.7506292746674
+bpfland,1,"busy p50, L 30 ms",1.535018
+bpfland,1,"busy >5 ms, L 30 ms",14.22000215617925
+bpfland,1,"batch, L 30 ms block",327.8714192954135
+bpfland,1,"busy p50, L 100 ms",1.704053
+bpfland,1,"busy >5 ms, L 100 ms",19.743644980611805
+bpfland,1,"batch, L 100 ms block",313.69339384210423
+bpfland,1,"busy p50, L 300 ms",1.939923
+bpfland,1,"busy >5 ms, L 300 ms",21.80445798929799
+bpfland,1,"batch, L 300 ms block",384.7869818391918
+bpfland,1,"busy p50, L 1000 ms",1.464245
+bpfland,1,"busy >5 ms, L 1000 ms",11.781763505531092
+bpfland,1,"batch, L 1000 ms block",347.86913514575747
+bpfland,1,"busy p50, L 3000 ms",1.781899
+bpfland,1,"busy >5 ms, L 3000 ms",21.75003173797131
+bpfland,1,"batch, L 3000 ms block",331.3548684982641
+bpfland,1,"busy p50, L 10000 ms",1.602537
+bpfland,1,"busy >5 ms, L 10000 ms",15.684405236198065
+bpfland,1,"batch, L 10000 ms block",323.79267781636304
+bpfland,2,"busy p50, all L",1.534417
+bpfland,2,"busy >5 ms, all L",15.955275718324785
+bpfland,2,"quiet p50, all L",1.024551
+bpfland,2,"batch, whole load",352.9176590990738
+bpfland,2,"busy p50, L 10 ms",1.377344
+bpfland,2,"busy >5 ms, L 10 ms",7.903398926654741
+bpfland,2,"batch, L 10 ms block",333.7270811502019
+bpfland,2,"busy p50, L 30 ms",1.390097
+bpfland,2,"busy >5 ms, L 30 ms",9.957954504617817
+bpfland,2,"batch, L 30 ms block",337.51309409188593
+bpfland,2,"busy p50, L 100 ms",1.432897
+bpfland,2,"busy >5 ms, L 100 ms",10.990234094499497
+bpfland,2,"batch, L 100 ms block",342.31558864403235
+bpfland,2,"busy p50, L 300 ms",1.865638
+bpfland,2,"busy >5 ms, L 300 ms",23.268010914631986
+bpfland,2,"batch, L 300 ms block",356.1969715785414
+bpfland,2,"busy p50, L 1000 ms",1.589709
+bpfland,2,"busy >5 ms, L 1000 ms",20.373751476747934
+bpfland,2,"batch, L 1000 ms block",312.14968650112314
+bpfland,2,"busy p50, L 3000 ms",1.523033
+bpfland,2,"busy >5 ms, L 3000 ms",19.195125047606957
+bpfland,2,"batch, L 3000 ms block",326.90176824539543
+bpfland,2,"busy p50, L 10000 ms",1.653756
+bpfland,2,"busy >5 ms, L 10000 ms",17.35486624928856
+bpfland,2,"batch, L 10000 ms block",341.68281827808534
+bpfland,3,"busy p50, all L",1.744155
+bpfland,3,"busy >5 ms, all L",19.91977447437378
+bpfland,3,"quiet p50, all L",1.110234
+bpfland,3,"batch, whole load",309.0580540609047
+bpfland,3,"busy p50, L 10 ms",1.417453
+bpfland,3,"busy >5 ms, L 10 ms",7.892665474060823
+bpfland,3,"batch, L 10 ms block",302.3400402981655
+bpfland,3,"busy p50, L 30 ms",1.513877
+bpfland,3,"busy >5 ms, L 30 ms",11.219319366083301
+bpfland,3,"batch, L 30 ms block",299.77836210597803
+bpfland,3,"busy p50, L 100 ms",1.546696
+bpfland,3,"busy >5 ms, L 100 ms",12.117621714778112
+bpfland,3,"batch, L 100 ms block",302.34112876816397
+bpfland,3,"busy p50, L 300 ms",2.495904
+bpfland,3,"busy >5 ms, L 300 ms",29.66086679187781
+bpfland,3,"batch, L 300 ms block",313.39793176942106
+bpfland,3,"busy p50, L 1000 ms",1.564149
+bpfland,3,"busy >5 ms, L 1000 ms",13.933340493323309
+bpfland,3,"batch, L 1000 ms block",289.4432707770291
+bpfland,3,"busy p50, L 3000 ms",2.84911
+bpfland,3,"busy >5 ms, L 3000 ms",39.93271550082519
+bpfland,3,"batch, L 3000 ms block",266.44489490317267
+bpfland,3,"busy p50, L 10000 ms",1.863375
+bpfland,3,"busy >5 ms, L 10000 ms",20.73562891291975
+bpfland,3,"batch, L 10000 ms block",288.34827281698307
+bpfland,4,"busy p50, all L",1.804321
+bpfland,4,"busy >5 ms, all L",19.89203912753706
+bpfland,4,"quiet p50, all L",0.983051
+bpfland,4,"batch, whole load",343.3342529495592
+bpfland,4,"busy p50, L 10 ms",1.656134
+bpfland,4,"busy >5 ms, L 10 ms",16.11449016100179
+bpfland,4,"batch, L 10 ms block",333.3831163400801
+bpfland,4,"busy p50, L 30 ms",1.88584
+bpfland,4,"busy >5 ms, L 30 ms",21.633665145362418
+bpfland,4,"batch, L 30 ms block",332.73385007727217
+bpfland,4,"busy p50, L 100 ms",1.978826
+bpfland,4,"busy >5 ms, L 100 ms",23.596151084302743
+bpfland,4,"batch, L 100 ms block",327.4048241585019
+bpfland,4,"busy p50, L 300 ms",1.991917
+bpfland,4,"busy >5 ms, L 300 ms",23.094369042134733
+bpfland,4,"batch, L 300 ms block",353.5256411514951
+bpfland,4,"busy p50, L 1000 ms",1.918252
+bpfland,4,"busy >5 ms, L 1000 ms",21.161350374109475
+bpfland,4,"batch, L 1000 ms block",333.17756711379883
+bpfland,4,"busy p50, L 3000 ms",1.718483
+bpfland,4,"busy >5 ms, L 3000 ms",18.246159705471626
+bpfland,4,"batch, L 3000 ms block",339.26268621084387
+bpfland,4,"busy p50, L 10000 ms",1.702556
+bpfland,4,"busy >5 ms, L 10000 ms",18.184405236198064
+bpfland,4,"batch, L 10000 ms block",315.7902057627292
+bpfland,5,"busy p50, all L",1.610811
+bpfland,5,"busy >5 ms, all L",18.521416241322356
+bpfland,5,"quiet p50, all L",0.990998
+bpfland,5,"batch, whole load",367.02410340942953
+bpfland,5,"busy p50, L 10 ms",1.566829
+bpfland,5,"busy >5 ms, L 10 ms",17.670840787119857
+bpfland,5,"batch, L 10 ms block",325.9393626847119
+bpfland,5,"busy p50, L 30 ms",1.475393
+bpfland,5,"busy >5 ms, L 30 ms",14.52186725123082
+bpfland,5,"batch, L 30 ms block",349.46763018936485
+bpfland,5,"busy p50, L 100 ms",1.596434
+bpfland,5,"busy >5 ms, L 100 ms",16.54818325434439
+bpfland,5,"batch, L 100 ms block",353.29325979430365
+bpfland,5,"busy p50, L 300 ms",1.892013
+bpfland,5,"busy >5 ms, L 300 ms",20.071582976009072
+bpfland,5,"batch, L 300 ms block",383.73049388327087
+bpfland,5,"busy p50, L 1000 ms",1.573893
+bpfland,5,"busy >5 ms, L 1000 ms",15.440518383274263
+bpfland,5,"batch, L 1000 ms block",338.99579425835617
+bpfland,5,"busy p50, L 3000 ms",1.405829
+bpfland,5,"busy >5 ms, L 3000 ms",12.606322203884728
+bpfland,5,"batch, L 3000 ms block",359.4081683071954
+bpfland,5,"busy p50, L 10000 ms",1.762852
+bpfland,5,"busy >5 ms, L 10000 ms",24.47922595332954
+bpfland,5,"batch, L 10000 ms block",349.8195591176425
+bpfland,6,"busy p50, all L",1.456988
+bpfland,6,"busy >5 ms, all L",14.85496897366798
+bpfland,6,"quiet p50, all L",0.986658
+bpfland,6,"batch, whole load",367.77373610361195
+bpfland,6,"busy p50, L 10 ms",1.327306
+bpfland,6,"busy >5 ms, L 10 ms",7.0554561717352415
+bpfland,6,"batch, L 10 ms block",356.0843418756562
+bpfland,6,"busy p50, L 30 ms",1.342185
+bpfland,6,"busy >5 ms, L 30 ms",9.149387285729688
+bpfland,6,"batch, L 30 ms block",356.81332275256443
+bpfland,6,"busy p50, L 100 ms",1.367895
+bpfland,6,"busy >5 ms, L 100 ms",10.085451673129398
+bpfland,6,"batch, L 100 ms block",360.75020297041465
+bpfland,6,"busy p50, L 300 ms",1.972529
+bpfland,6,"busy >5 ms, L 300 ms",24.795350650271093
+bpfland,6,"batch, L 300 ms block",352.9181239726475
+bpfland,6,"busy p50, L 1000 ms",1.688373
+bpfland,6,"busy >5 ms, L 1000 ms",23.939426484802922
+bpfland,6,"batch, L 1000 ms block",333.44708437640986
+bpfland,6,"busy p50, L 3000 ms",1.514936
+bpfland,6,"busy >5 ms, L 3000 ms",19.26177478735559
+bpfland,6,"batch, L 3000 ms block",330.1290102193934
+bpfland,6,"busy p50, L 10000 ms",1.410839
+bpfland,6,"busy >5 ms, L 10000 ms",12.528457598178713
+bpfland,6,"batch, L 10000 ms block",355.69362305938455
+bpfland,7,"busy p50, all L",1.555432
+bpfland,7,"busy >5 ms, all L",15.923400767482583
+bpfland,7,"quiet p50, all L",0.988188
+bpfland,7,"batch, whole load",368.2214444766386
+bpfland,7,"busy p50, L 10 ms",1.501455
+bpfland,7,"busy >5 ms, L 10 ms",13.846153846153847
+bpfland,7,"batch, L 10 ms block",350.45688063619133
+bpfland,7,"busy p50, L 30 ms",1.588424
+bpfland,7,"busy >5 ms, L 30 ms",16.77866819994969
+bpfland,7,"batch, L 30 ms block",348.0920606508953
+bpfland,7,"busy p50, L 100 ms",1.635685
+bpfland,7,"busy >5 ms, L 100 ms",17.49605055292259
+bpfland,7,"batch, L 100 ms block",352.3855093365563
+bpfland,7,"busy p50, L 300 ms",1.858305
+bpfland,7,"busy >5 ms, L 300 ms",21.368581452213046
+bpfland,7,"batch, L 300 ms block",372.9938523083955
+bpfland,7,"busy p50, L 1000 ms",1.597155
+bpfland,7,"busy >5 ms, L 1000 ms",16.89399634840511
+bpfland,7,"batch, L 1000 ms block",337.6250501535509
+bpfland,7,"busy p50, L 3000 ms",1.629998
+bpfland,7,"busy >5 ms, L 3000 ms",17.897042021074014
+bpfland,7,"batch, L 3000 ms block",341.65512531771157
+bpfland,7,"busy p50, L 10000 ms",1.408164
+bpfland,7,"busy >5 ms, L 10000 ms",12.330677290836654
+bpfland,7,"batch, L 10000 ms block",357.62184750970357
+bpfland,8,"busy p50, all L",1.434654
+bpfland,8,"busy >5 ms, all L",14.661235506211476
+bpfland,8,"quiet p50, all L",0.993829
+bpfland,8,"batch, whole load",369.66618321685166
+bpfland,8,"busy p50, L 10 ms",1.414523
+bpfland,8,"busy >5 ms, L 10 ms",16.81932021466905
+bpfland,8,"batch, L 10 ms block",322.42108490469354
+bpfland,8,"busy p50, L 30 ms",1.287763
+bpfland,8,"busy >5 ms, L 30 ms",7.16210874330686
+bpfland,8,"batch, L 30 ms block",366.54660284707137
+bpfland,8,"busy p50, L 100 ms",1.28325
+bpfland,8,"busy >5 ms, L 100 ms",6.477093206951027
+bpfland,8,"batch, L 100 ms block",370.6243865925496
+bpfland,8,"busy p50, L 300 ms",1.884977
+bpfland,8,"busy >5 ms, L 300 ms",20.96814203196428
+bpfland,8,"batch, L 300 ms block",386.77101101589216
+bpfland,8,"busy p50, L 1000 ms",1.331484
+bpfland,8,"busy >5 ms, L 1000 ms",9.093187269537824
+bpfland,8,"batch, L 1000 ms block",355.11685002309423
+bpfland,8,"busy p50, L 3000 ms",1.411547
+bpfland,8,"busy >5 ms, L 3000 ms",13.317252761203504
+bpfland,8,"batch, L 3000 ms block",310.7987829849489
+bpfland,8,"busy p50, L 10000 ms",1.581979
+bpfland,8,"busy >5 ms, L 10000 ms",20.298804780876495
+bpfland,8,"batch, L 10000 ms block",353.57478496379605
+bpfland,9,"busy p50, all L",1.483932
+bpfland,9,"busy >5 ms, all L",14.94314253898472
+bpfland,9,"quiet p50, all L",0.981884
+bpfland,9,"batch, whole load",374.896172908937
+bpfland,9,"busy p50, L 10 ms",1.42905
+bpfland,9,"busy >5 ms, L 10 ms",14.31484794275492
+bpfland,9,"batch, L 10 ms block",333.0845082590543
+bpfland,9,"busy p50, L 30 ms",1.401165
+bpfland,9,"busy >5 ms, L 30 ms",10.586840119308585
+bpfland,9,"batch, L 30 ms block",352.86416124813525
+bpfland,9,"busy p50, L 100 ms",1.36316
+bpfland,9,"busy >5 ms, L 100 ms",10.27574321413184
+bpfland,9,"batch, L 100 ms block",363.80403481916636
+bpfland,9,"busy p50, L 300 ms",1.858293
+bpfland,9,"busy >5 ms, L 300 ms",19.52585137673199
+bpfland,9,"batch, L 300 ms block",382.8023094172646
+bpfland,9,"busy p50, L 1000 ms",1.408127
+bpfland,9,"busy >5 ms, L 1000 ms",13.743600758958937
+bpfland,9,"batch, L 1000 ms block",357.93589659277086
+bpfland,9,"busy p50, L 3000 ms",1.340552
+bpfland,9,"busy >5 ms, L 3000 ms",9.372222927510473
+bpfland,9,"batch, L 3000 ms block",365.1932325692873
+bpfland,9,"busy p50, L 10000 ms",1.652127
+bpfland,9,"busy >5 ms, L 10000 ms",19.901821286283436
+bpfland,9,"batch, L 10000 ms block",354.48745982278945
+bpfland,10,"busy p50, all L",1.932946
+bpfland,10,"busy >5 ms, all L",22.70200232645745
+bpfland,10,"quiet p50, all L",1.088494
+bpfland,10,"batch, whole load",312.879033907721
+bpfland,10,"busy p50, L 10 ms",1.700883
+bpfland,10,"busy >5 ms, L 10 ms",17.50983899821109
+bpfland,10,"batch, L 10 ms block",292.24006561281516
+bpfland,10,"busy p50, L 30 ms",1.77723
+bpfland,10,"busy >5 ms, L 30 ms",19.542171272505122
+bpfland,10,"batch, L 30 ms block",306.36472094792884
+bpfland,10,"busy p50, L 100 ms",1.940247
+bpfland,10,"busy >5 ms, L 100 ms",21.714778112882378
+bpfland,10,"batch, L 100 ms block",296.57358671095113
+bpfland,10,"busy p50, L 300 ms",2.679696
+bpfland,10,"busy >5 ms, L 300 ms",32.50292356213898
+bpfland,10,"batch, L 300 ms block",301.6599880518832
+bpfland,10,"busy p50, L 1000 ms",1.818374
+bpfland,10,"busy >5 ms, L 1000 ms",20.66731106576451
+bpfland,10,"batch, L 1000 ms block",296.0265602858016
+bpfland,10,"busy p50, L 3000 ms",2.431325
+bpfland,10,"busy >5 ms, L 3000 ms",31.411070204392534
+bpfland,10,"batch, L 3000 ms block",266.172487672644
+bpfland,10,"busy p50, L 10000 ms",1.777809
+bpfland,10,"busy >5 ms, L 10000 ms",19.378201479795106
+bpfland,10,"batch, L 10000 ms block",305.71722118097966
+eevdf,1,"busy p50, all L",3.795618
+eevdf,1,"busy >5 ms, all L",40.723354403917725
+eevdf,1,"quiet p50, all L",1.089368
+eevdf,1,"batch, whole load",439.419017554378
+eevdf,1,"busy p50, L 10 ms",2.408575
+eevdf,1,"busy >5 ms, L 10 ms",19.92128801431127
+eevdf,1,"batch, L 10 ms block",453.3459500899713
+eevdf,1,"busy p50, L 30 ms",2.950506
+eevdf,1,"busy >5 ms, L 30 ms",29.568404786717934
+eevdf,1,"batch, L 30 ms block",442.6758140521824
+eevdf,1,"busy p50, L 100 ms",3.538049
+eevdf,1,"busy >5 ms, L 100 ms",38.60404997845756
+eevdf,1,"batch, L 100 ms block",451.8435678650835
+eevdf,1,"busy p50, L 300 ms",7.401385
+eevdf,1,"busy >5 ms, L 300 ms",61.724370105248234
+eevdf,1,"batch, L 300 ms block",415.07325129843025
+eevdf,1,"busy p50, L 1000 ms",4.666049
+eevdf,1,"busy >5 ms, L 1000 ms",48.365732287974794
+eevdf,1,"batch, L 1000 ms block",362.17306414060306
+eevdf,1,"busy p50, L 3000 ms",4.069896
+eevdf,1,"busy >5 ms, L 3000 ms",43.53180144725149
+eevdf,1,"batch, L 3000 ms block",397.8888118565228
+eevdf,1,"busy p50, L 10000 ms",3.993061
+eevdf,1,"busy >5 ms, L 10000 ms",41.52390438247012
+eevdf,1,"batch, L 10000 ms block",440.236512326322
+eevdf,2,"busy p50, all L",4.904899
+eevdf,2,"busy >5 ms, all L",49.321311923301415
+eevdf,2,"quiet p50, all L",1.340836
+eevdf,2,"batch, whole load",339.8863858889452
+eevdf,2,"busy p50, L 10 ms",2.855421
+eevdf,2,"busy >5 ms, L 10 ms",25.40608228980322
+eevdf,2,"batch, L 10 ms block",336.72989301802454
+eevdf,2,"busy p50, L 30 ms",3.882821
+eevdf,2,"busy >5 ms, L 30 ms",41.13630646494412
+eevdf,2,"batch, L 30 ms block",289.148201753262
+eevdf,2,"busy p50, L 100 ms",6.712782
+eevdf,2,"busy >5 ms, L 100 ms",60.58092776102255
+eevdf,2,"batch, L 100 ms block",307.65673458731993
+eevdf,2,"busy p50, L 300 ms",10.624404
+eevdf,2,"busy >5 ms, L 300 ms",71.43414011835998
+eevdf,2,"batch, L 300 ms block",367.585665554881
+eevdf,2,"busy p50, L 1000 ms",5.914985
+eevdf,2,"busy >5 ms, L 1000 ms",55.47560233415673
+eevdf,2,"batch, L 1000 ms block",334.83476848726707
+eevdf,2,"busy p50, L 3000 ms",4.884004
+eevdf,2,"busy >5 ms, L 3000 ms",49.247810079979686
+eevdf,2,"batch, L 3000 ms block",321.7498501419521
+eevdf,2,"busy p50, L 10000 ms",4.517747
+eevdf,2,"busy >5 ms, L 10000 ms",46.31900967558338
+eevdf,2,"batch, L 10000 ms block",324.3307490972892
+eevdf,3,"busy p50, all L",5.293841
+eevdf,3,"busy >5 ms, all L",51.76988769254333
+eevdf,3,"quiet p50, all L",1.360204
+eevdf,3,"batch, whole load",324.7210507938359
+eevdf,3,"busy p50, L 10 ms",2.844984
+eevdf,3,"busy >5 ms, L 10 ms",26.41860465116279
+eevdf,3,"batch, L 10 ms block",274.8837441346156
+eevdf,3,"busy p50, L 30 ms",4.144763
+eevdf,3,"busy >5 ms, L 30 ms",41.91612462716067
+eevdf,3,"batch, L 30 ms block",247.61449500904675
+eevdf,3,"busy p50, L 100 ms",4.013524
+eevdf,3,"busy >5 ms, L 100 ms",42.53913543013069
+eevdf,3,"batch, L 100 ms block",334.21639014065624
+eevdf,3,"busy p50, L 300 ms",13.118292
+eevdf,3,"busy >5 ms, L 300 ms",74.91406499167228
+eevdf,3,"batch, L 300 ms block",357.5806645710091
+eevdf,3,"busy p50, L 1000 ms",13.830753
+eevdf,3,"busy >5 ms, L 1000 ms",78.02599076361292
+eevdf,3,"batch, L 1000 ms block",278.42749298275186
+eevdf,3,"busy p50, L 3000 ms",3.09323
+eevdf,3,"busy >5 ms, L 3000 ms",31.474546147010283
+eevdf,3,"batch, L 3000 ms block",334.9371484656001
+eevdf,3,"busy p50, L 10000 ms",6.880827
+eevdf,3,"busy >5 ms, L 10000 ms",58.78201479795105
+eevdf,3,"batch, L 10000 ms block",321.1611305543063
+eevdf,4,"busy p50, all L",3.902932
+eevdf,4,"busy >5 ms, all L",41.59846669067637
+eevdf,4,"quiet p50, all L",1.260693
+eevdf,4,"batch, whole load",366.13630771170045
+eevdf,4,"busy p50, L 10 ms",2.456147
+eevdf,4,"busy >5 ms, L 10 ms",18.676207513416816
+eevdf,4,"batch, L 10 ms block",361.8526826431247
+eevdf,4,"busy p50, L 30 ms",2.55695
+eevdf,4,"busy >5 ms, L 30 ms",22.930966327667374
+eevdf,4,"batch, L 30 ms block",345.2708043292505
+eevdf,4,"busy p50, L 100 ms",5.228051
+eevdf,4,"busy >5 ms, L 100 ms",51.551055579491596
+eevdf,4,"batch, L 100 ms block",366.11683327147733
+eevdf,4,"busy p50, L 300 ms",9.369399
+eevdf,4,"busy >5 ms, L 300 ms",66.64304192210922
+eevdf,4,"batch, L 300 ms block",352.3522652921442
+eevdf,4,"busy p50, L 1000 ms",4.401829
+eevdf,4,"busy >5 ms, L 1000 ms",46.61511473883937
+eevdf,4,"batch, L 1000 ms block",321.0479413892515
+eevdf,4,"busy p50, L 3000 ms",3.940109
+eevdf,4,"busy >5 ms, L 3000 ms",42.61774787355592
+eevdf,4,"batch, L 3000 ms block",333.03233468475645
+eevdf,4,"busy p50, L 10000 ms",4.027874
+eevdf,4,"busy >5 ms, L 10000 ms",41.6548093340922
+eevdf,4,"batch, L 10000 ms block",358.923154846014
+eevdf,5,"busy p50, all L",3.748745
+eevdf,5,"busy >5 ms, all L",39.92730855366376
+eevdf,5,"quiet p50, all L",1.266172
+eevdf,5,"batch, whole load",363.1540835090912
+eevdf,5,"busy p50, L 10 ms",2.220007
+eevdf,5,"busy >5 ms, L 10 ms",14.869409660107335
+eevdf,5,"batch, L 10 ms block",353.49107251239593
+eevdf,5,"busy p50, L 30 ms",2.728598
+eevdf,5,"busy >5 ms, L 30 ms",26.330542279081467
+eevdf,5,"batch, L 30 ms block",339.9631811848515
+eevdf,5,"busy p50, L 100 ms",3.451549
+eevdf,5,"busy >5 ms, L 100 ms",36.50366221456269
+eevdf,5,"batch, L 100 ms block",347.12083924970426
+eevdf,5,"busy p50, L 300 ms",11.947253
+eevdf,5,"busy >5 ms, L 300 ms",73.0465289344059
+eevdf,5,"batch, L 300 ms block",363.2476109491407
+eevdf,5,"busy p50, L 1000 ms",2.938773
+eevdf,5,"busy >5 ms, L 1000 ms",29.792718290194394
+eevdf,5,"batch, L 1000 ms block",356.303810033709
+eevdf,5,"busy p50, L 3000 ms",4.867694
+eevdf,5,"busy >5 ms, L 3000 ms",49.193855528754604
+eevdf,5,"batch, L 3000 ms block",331.9818028378379
+eevdf,5,"busy p50, L 10000 ms",4.186107
+eevdf,5,"busy >5 ms, L 10000 ms",43.20859419464997
+eevdf,5,"batch, L 10000 ms block",346.71666980919105
+eevdf,6,"busy p50, all L",4.096376
+eevdf,6,"busy >5 ms, all L",42.92893541803791
+eevdf,6,"quiet p50, all L",1.239433
+eevdf,6,"batch, whole load",376.340628542385
+eevdf,6,"busy p50, L 10 ms",2.3861
+eevdf,6,"busy >5 ms, L 10 ms",19.18783542039356
+eevdf,6,"batch, L 10 ms block",367.4123307969677
+eevdf,6,"busy p50, L 30 ms",4.01491
+eevdf,6,"busy >5 ms, L 30 ms",41.57832321126963
+eevdf,6,"batch, L 30 ms block",312.1822824149372
+eevdf,6,"busy p50, L 100 ms",4.585121
+eevdf,6,"busy >5 ms, L 100 ms",46.83685193163866
+eevdf,6,"batch, L 100 ms block",351.1652116904548
+eevdf,6,"busy p50, L 300 ms",9.790148
+eevdf,6,"busy >5 ms, L 300 ms",68.29086785499132
+eevdf,6,"batch, L 300 ms block",398.4125622725129
+eevdf,6,"busy p50, L 1000 ms",4.291374
+eevdf,6,"busy >5 ms, L 1000 ms",44.4921777109512
+eevdf,6,"batch, L 1000 ms block",368.02747840504264
+eevdf,6,"busy p50, L 3000 ms",4.224195
+eevdf,6,"busy >5 ms, L 3000 ms",44.137996699250984
+eevdf,6,"batch, L 3000 ms block",359.09589945928815
+eevdf,6,"busy p50, L 10000 ms",3.860727
+eevdf,6,"busy >5 ms, L 10000 ms",40.00996015936255
+eevdf,6,"batch, L 10000 ms block",361.6865282547521
+eevdf,7,"busy p50, all L",4.121202
+eevdf,7,"busy >5 ms, all L",43.74609324871983
+eevdf,7,"quiet p50, all L",1.303855
+eevdf,7,"batch, whole load",347.5704111532918
+eevdf,7,"busy p50, L 10 ms",2.320169
+eevdf,7,"busy >5 ms, L 10 ms",19.341681574239715
+eevdf,7,"batch, L 10 ms block",329.0892751472304
+eevdf,7,"busy p50, L 30 ms",2.779818
+eevdf,7,"busy >5 ms, L 30 ms",26.528192043698567
+eevdf,7,"batch, L 30 ms block",358.72036990261773
+eevdf,7,"busy p50, L 100 ms",4.20594
+eevdf,7,"busy >5 ms, L 100 ms",43.84245296567571
+eevdf,7,"batch, L 100 ms block",344.15587253261896
+eevdf,7,"busy p50, L 300 ms",16.982987
+eevdf,7,"busy >5 ms, L 300 ms",82.61809419185656
+eevdf,7,"batch, L 300 ms block",317.33195897102786
+eevdf,7,"busy p50, L 1000 ms",2.976431
+eevdf,7,"busy >5 ms, L 1000 ms",31.446675974653637
+eevdf,7,"batch, L 1000 ms block",363.5846793082211
+eevdf,7,"busy p50, L 3000 ms",3.201286
+eevdf,7,"busy >5 ms, L 3000 ms",33.39151961406627
+eevdf,7,"batch, L 3000 ms block",337.9025029609903
+eevdf,7,"busy p50, L 10000 ms",5.633212
+eevdf,7,"busy >5 ms, L 10000 ms",54.15338645418327
+eevdf,7,"batch, L 10000 ms block",313.13007308643193
+eevdf,8,"busy p50, all L",4.319566
+eevdf,8,"busy >5 ms, all L",45.02647276761505
+eevdf,8,"quiet p50, all L",1.257483
+eevdf,8,"batch, whole load",377.1335167015936
+eevdf,8,"busy p50, L 10 ms",3.013655
+eevdf,8,"busy >5 ms, L 10 ms",30.143112701252235
+eevdf,8,"batch, L 10 ms block",365.57544703151046
+eevdf,8,"busy p50, L 30 ms",2.745831
+eevdf,8,"busy >5 ms, L 30 ms",26.402414920760414
+eevdf,8,"batch, L 30 ms block",362.10017730974647
+eevdf,8,"busy p50, L 100 ms",7.225522
+eevdf,8,"busy >5 ms, L 100 ms",62.656182679879365
+eevdf,8,"batch, L 100 ms block",373.02308390562666
+eevdf,8,"busy p50, L 300 ms",8.488518
+eevdf,8,"busy >5 ms, L 300 ms",65.20429497856054
+eevdf,8,"batch, L 300 ms block",364.757754124519
+eevdf,8,"busy p50, L 1000 ms",5.40513
+eevdf,8,"busy >5 ms, L 1000 ms",51.81684745641356
+eevdf,8,"batch, L 1000 ms block",346.1925021349554
+eevdf,8,"busy p50, L 3000 ms",4.338031
+eevdf,8,"busy >5 ms, L 3000 ms",44.677542211501844
+eevdf,8,"batch, L 3000 ms block",348.91095799263985
+eevdf,8,"busy p50, L 10000 ms",3.909177
+eevdf,8,"busy >5 ms, L 10000 ms",40.68867387592487
+eevdf,8,"batch, L 10000 ms block",364.8894554743066
+eevdf,9,"busy p50, all L",4.026465
+eevdf,9,"busy >5 ms, all L",42.3150321440251
+eevdf,9,"quiet p50, all L",1.213951
+eevdf,9,"batch, whole load",383.3357404807013
+eevdf,9,"busy p50, L 10 ms",2.77036
+eevdf,9,"busy >5 ms, L 10 ms",25.642218246869408
+eevdf,9,"batch, L 10 ms block",379.43891114818155
+eevdf,9,"busy p50, L 30 ms",3.671725
+eevdf,9,"busy >5 ms, L 30 ms",39.195745139612605
+eevdf,9,"batch, L 30 ms block",349.49233399960394
+eevdf,9,"busy p50, L 100 ms",5.719217
+eevdf,9,"busy >5 ms, L 100 ms",54.62085308056872
+eevdf,9,"batch, L 100 ms block",377.445570214732
+eevdf,9,"busy p50, L 300 ms",8.921119
+eevdf,9,"busy >5 ms, L 300 ms",66.6182359403239
+eevdf,9,"batch, L 300 ms block",390.08340056541425
+eevdf,9,"busy p50, L 1000 ms",3.727754
+eevdf,9,"busy >5 ms, L 1000 ms",39.01478537930047
+eevdf,9,"batch, L 1000 ms block",373.1852471101967
+eevdf,9,"busy p50, L 3000 ms",3.752922
+eevdf,9,"busy >5 ms, L 3000 ms",39.453472134061194
+eevdf,9,"batch, L 3000 ms block",353.6069973070007
+eevdf,9,"busy p50, L 10000 ms",3.666643
+eevdf,9,"busy >5 ms, L 10000 ms",38.14029595902106
+eevdf,9,"batch, L 10000 ms block",368.77568852967227
+eevdf,10,"busy p50, all L",4.992655
+eevdf,10,"busy >5 ms, all L",49.94722004893012
+eevdf,10,"quiet p50, all L",1.324306
+eevdf,10,"batch, whole load",340.74425813826264
+eevdf,10,"busy p50, L 10 ms",3.13139
+eevdf,10,"busy >5 ms, L 10 ms",29.838998211091234
+eevdf,10,"batch, L 10 ms block",336.60825006491973
+eevdf,10,"busy p50, L 30 ms",3.407443
+eevdf,10,"busy >5 ms, L 30 ms",35.24274984727064
+eevdf,10,"batch, L 30 ms block",314.21969779176646
+eevdf,10,"busy p50, L 100 ms",7.332773
+eevdf,10,"busy >5 ms, L 100 ms",62.437167887404854
+eevdf,10,"batch, L 100 ms block",349.4141095162718
+eevdf,10,"busy p50, L 300 ms",17.133456
+eevdf,10,"busy >5 ms, L 300 ms",80.39264325454481
+eevdf,10,"batch, L 300 ms block",319.3450009216125
+eevdf,10,"busy p50, L 1000 ms",6.899795
+eevdf,10,"busy >5 ms, L 1000 ms",59.88257616439337
+eevdf,10,"batch, L 1000 ms block",334.1168065639891
+eevdf,10,"busy p50, L 3000 ms",4.11523
+eevdf,10,"busy >5 ms, L 3000 ms",42.49396978545131
+eevdf,10,"batch, L 3000 ms block",341.5139422218437
+eevdf,10,"busy p50, L 10000 ms",4.501955
+eevdf,10,"busy >5 ms, L 10000 ms",45.98463289698349
+eevdf,10,"batch, L 10000 ms block",321.535556526626
+eevdfidle,1,"busy p50, all L",1.767236
+eevdfidle,1,"busy >5 ms, all L",15.15509026406534
+eevdfidle,1,"quiet p50, all L",1.156379
+eevdfidle,1,"batch, whole load",396.97932944796787
+eevdfidle,1,"busy p50, L 10 ms",1.52885
+eevdfidle,1,"busy >5 ms, L 10 ms",4.268336314847943
+eevdfidle,1,"batch, L 10 ms block",378.10569393216934
+eevdfidle,1,"busy p50, L 30 ms",1.924332
+eevdfidle,1,"busy >5 ms, L 30 ms",16.29352786861681
+eevdfidle,1,"batch, L 30 ms block",317.6986437703882
+eevdfidle,1,"busy p50, L 100 ms",1.749321
+eevdfidle,1,"busy >5 ms, L 100 ms",14.609363779979894
+eevdfidle,1,"batch, L 100 ms block",375.0137861813343
+eevdfidle,1,"busy p50, L 300 ms",2.994088
+eevdfidle,1,"busy >5 ms, L 300 ms",33.56603706722421
+eevdfidle,1,"batch, L 300 ms block",411.2781733833338
+eevdfidle,1,"busy p50, L 1000 ms",1.676876
+eevdfidle,1,"busy >5 ms, L 1000 ms",8.155228582679984
+eevdfidle,1,"batch, L 1000 ms block",364.3234431018788
+eevdfidle,1,"busy p50, L 3000 ms",1.538308
+eevdfidle,1,"busy >5 ms, L 3000 ms",5.2113748889171
+eevdfidle,1,"batch, L 3000 ms block",403.1525984688635
+eevdfidle,1,"busy p50, L 10000 ms",1.781486
+eevdfidle,1,"busy >5 ms, L 10000 ms",19.097894137734777
+eevdfidle,1,"batch, L 10000 ms block",394.3531416224133
+eevdfidle,2,"busy p50, all L",2.010859
+eevdfidle,2,"busy >5 ms, all L",16.853569787514125
+eevdfidle,2,"quiet p50, all L",1.259963
+eevdfidle,2,"batch, whole load",340.0292067995439
+eevdfidle,2,"busy p50, L 10 ms",1.767272
+eevdfidle,2,"busy >5 ms, L 10 ms",7.220035778175313
+eevdfidle,2,"batch, L 10 ms block",337.2954854867115
+eevdfidle,2,"busy p50, L 30 ms",2.002212
+eevdfidle,2,"busy >5 ms, L 30 ms",14.363747439537141
+eevdfidle,2,"batch, L 30 ms block",329.7624757327815
+eevdfidle,2,"busy p50, L 100 ms",2.051642
+eevdfidle,2,"busy >5 ms, L 100 ms",15.887548470486859
+eevdfidle,2,"batch, L 100 ms block",344.7084718452533
+eevdfidle,2,"busy p50, L 300 ms",3.778406
+eevdfidle,2,"busy >5 ms, L 300 ms",40.45146886849286
+eevdfidle,2,"batch, L 300 ms block",328.265606220122
+eevdfidle,2,"busy p50, L 1000 ms",1.863468
+eevdfidle,2,"busy >5 ms, L 1000 ms",10.006085991479612
+eevdfidle,2,"batch, L 1000 ms block",338.8817814962405
+eevdfidle,2,"busy p50, L 3000 ms",1.878149
+eevdfidle,2,"busy >5 ms, L 3000 ms",12.539672464136093
+eevdfidle,2,"batch, L 3000 ms block",314.3465700250811
+eevdfidle,2,"busy p50, L 10000 ms",1.950403
+eevdfidle,2,"busy >5 ms, L 10000 ms",17.233921457029027
+eevdfidle,2,"batch, L 10000 ms block",319.0014064434248
+eevdfidle,3,"busy p50, all L",2.975837
+eevdfidle,3,"busy >5 ms, all L",31.357086381116783
+eevdfidle,3,"quiet p50, all L",1.362681
+eevdfidle,3,"batch, whole load",290.73886393084666
+eevdfidle,3,"busy p50, L 10 ms",2.149808
+eevdfidle,3,"busy >5 ms, L 10 ms",18.9087656529517
+eevdfidle,3,"batch, L 10 ms block",262.98717001511477
+eevdfidle,3,"busy p50, L 30 ms",2.426145
+eevdfidle,3,"busy >5 ms, L 30 ms",23.200488733963418
+eevdfidle,3,"batch, L 30 ms block",285.24173665846206
+eevdfidle,3,"busy p50, L 100 ms",3.349048
+eevdfidle,3,"busy >5 ms, L 100 ms",35.66709751543875
+eevdfidle,3,"batch, L 100 ms block",288.5901133978068
+eevdfidle,3,"busy p50, L 300 ms",5.053908
+eevdfidle,3,"busy >5 ms, L 300 ms",50.419929834508665
+eevdfidle,3,"batch, L 300 ms block",276.7604989629055
+eevdfidle,3,"busy p50, L 1000 ms",2.480906
+eevdfidle,3,"busy >5 ms, L 1000 ms",23.234167472165538
+eevdfidle,3,"batch, L 1000 ms block",298.9617105141835
+eevdfidle,3,"busy p50, L 3000 ms",2.647206
+eevdfidle,3,"busy >5 ms, L 3000 ms",25.466548178240448
+eevdfidle,3,"batch, L 3000 ms block",287.441173419915
+eevdfidle,3,"busy p50, L 10000 ms",3.416854
+eevdfidle,3,"busy >5 ms, L 10000 ms",36.044393853158795
+eevdfidle,3,"batch, L 10000 ms block",264.75026911443825
+eevdfidle,4,"busy p50, all L",2.833265
+eevdfidle,4,"busy >5 ms, all L",29.90201557319027
+eevdfidle,4,"quiet p50, all L",1.28441
+eevdfidle,4,"batch, whole load",328.3403201764906
+eevdfidle,4,"busy p50, L 10 ms",2.205164
+eevdfidle,4,"busy >5 ms, L 10 ms",22.37567084078712
+eevdfidle,4,"batch, L 10 ms block",292.76531449429433
+eevdfidle,4,"busy p50, L 30 ms",2.204844
+eevdfidle,4,"busy >5 ms, L 30 ms",20.764006181047183
+eevdfidle,4,"batch, L 30 ms block",322.21825073467943
+eevdfidle,4,"busy p50, L 100 ms",3.458377
+eevdfidle,4,"busy >5 ms, L 100 ms",37.354588539422664
+eevdfidle,4,"batch, L 100 ms block",322.6010976364076
+eevdfidle,4,"busy p50, L 300 ms",3.802941
+eevdfidle,4,"busy >5 ms, L 300 ms",40.35933236471881
+eevdfidle,4,"batch, L 300 ms block",328.62680921419184
+eevdfidle,4,"busy p50, L 1000 ms",2.395315
+eevdfidle,4,"busy >5 ms, L 1000 ms",23.692406830630436
+eevdfidle,4,"batch, L 1000 ms block",323.50721048616197
+eevdfidle,4,"busy p50, L 3000 ms",3.026879
+eevdfidle,4,"busy >5 ms, L 3000 ms",30.97943379459185
+eevdfidle,4,"batch, L 3000 ms block",311.9330712663324
+eevdfidle,4,"busy p50, L 10000 ms",3.027205
+eevdfidle,4,"busy >5 ms, L 10000 ms",31.34604439385316
+eevdfidle,4,"batch, L 10000 ms block",302.81341370230746
+eevdfidle,5,"busy p50, all L",2.022853
+eevdfidle,5,"busy >5 ms, all L",19.85685249349047
+eevdfidle,5,"quiet p50, all L",1.266513
+eevdfidle,5,"batch, whole load",338.3148393561519
+eevdfidle,5,"busy p50, L 10 ms",1.633533
+eevdfidle,5,"busy >5 ms, L 10 ms",6.819320214669052
+eevdfidle,5,"batch, L 10 ms block",328.07616092400093
+eevdfidle,5,"busy p50, L 30 ms",1.849334
+eevdfidle,5,"busy >5 ms, L 30 ms",15.599956876414993
+eevdfidle,5,"batch, L 30 ms block",314.8660467735247
+eevdfidle,5,"busy p50, L 100 ms",2.347169
+eevdfidle,5,"busy >5 ms, L 100 ms",27.980037340226914
+eevdfidle,5,"batch, L 100 ms block",274.0676633274525
+eevdfidle,5,"busy p50, L 300 ms",3.387163
+eevdfidle,5,"busy >5 ms, L 300 ms",36.9609128601297
+eevdfidle,5,"batch, L 300 ms block",344.41969614609116
+eevdfidle,5,"busy p50, L 1000 ms",1.914926
+eevdfidle,5,"busy >5 ms, L 1000 ms",16.79017649375291
+eevdfidle,5,"batch, L 1000 ms block",327.89644773196824
+eevdfidle,5,"busy p50, L 3000 ms",1.731625
+eevdfidle,5,"busy >5 ms, L 3000 ms",7.556810968642885
+eevdfidle,5,"batch, L 3000 ms block",338.15680566195874
+eevdfidle,5,"busy p50, L 10000 ms",2.178235
+eevdfidle,5,"busy >5 ms, L 10000 ms",23.373648264086512
+eevdfidle,5,"batch, L 10000 ms block",322.55940205679997
+eevdfidle,6,"busy p50, all L",1.937704
+eevdfidle,6,"busy >5 ms, all L",16.778642955014924
+eevdfidle,6,"quiet p50, all L",1.253595
+eevdfidle,6,"batch, whole load",348.9837258353627
+eevdfidle,6,"busy p50, L 10 ms",1.589088
+eevdfidle,6,"busy >5 ms, L 10 ms",4.915921288014311
+eevdfidle,6,"batch, L 10 ms block",345.2074110431437
+eevdfidle,6,"busy p50, L 30 ms",1.809225
+eevdfidle,6,"busy >5 ms, L 30 ms",11.697272433248283
+eevdfidle,6,"batch, L 30 ms block",328.73718996496683
+eevdfidle,6,"busy p50, L 100 ms",1.842045
+eevdfidle,6,"busy >5 ms, L 100 ms",11.679592129829096
+eevdfidle,6,"batch, L 100 ms block",336.02220710311786
+eevdfidle,6,"busy p50, L 300 ms",3.280357
+eevdfidle,6,"busy >5 ms, L 300 ms",35.16070732485205
+eevdfidle,6,"batch, L 300 ms block",364.2333884158445
+eevdfidle,6,"busy p50, L 1000 ms",1.720107
+eevdfidle,6,"busy >5 ms, L 1000 ms",8.971467439945584
+eevdfidle,6,"batch, L 1000 ms block",346.0564532723788
+eevdfidle,6,"busy p50, L 3000 ms",2.052292
+eevdfidle,6,"busy >5 ms, L 3000 ms",16.278405484321443
+eevdfidle,6,"batch, L 3000 ms block",287.03618059424343
+eevdfidle,6,"busy p50, L 10000 ms",2.019625
+eevdfidle,6,"busy >5 ms, L 10000 ms",21.475526465566308
+eevdfidle,6,"batch, L 10000 ms block",328.56749761337636
+eevdfidle,7,"busy p50, all L",2.96765
+eevdfidle,7,"busy >5 ms, all L",31.26187548899072
+eevdfidle,7,"quiet p50, all L",1.237563
+eevdfidle,7,"batch, whole load",345.2602816033244
+eevdfidle,7,"busy p50, L 10 ms",2.24131
+eevdfidle,7,"busy >5 ms, L 10 ms",21.202146690518784
+eevdfidle,7,"batch, L 10 ms block",340.78999805655405
+eevdfidle,7,"busy p50, L 30 ms",2.669468
+eevdfidle,7,"busy >5 ms, L 30 ms",28.238760915657455
+eevdfidle,7,"batch, L 30 ms block",328.26527255394313
+eevdfidle,7,"busy p50, L 100 ms",3.42696
+eevdfidle,7,"busy >5 ms, L 100 ms",37.05658480539997
+eevdfidle,7,"batch, L 100 ms block",340.6083007062362
+eevdfidle,7,"busy p50, L 300 ms",3.546956
+eevdfidle,7,"busy >5 ms, L 300 ms",37.588149828129986
+eevdfidle,7,"batch, L 300 ms block",354.0447624000555
+eevdfidle,7,"busy p50, L 1000 ms",2.902122
+eevdfidle,7,"busy >5 ms, L 1000 ms",30.30107757849139
+eevdfidle,7,"batch, L 1000 ms block",315.97614877846263
+eevdfidle,7,"busy p50, L 3000 ms",3.23662
+eevdfidle,7,"busy >5 ms, L 3000 ms",34.27700901358385
+eevdfidle,7,"batch, L 3000 ms block",332.27365765744594
+eevdfidle,7,"busy p50, L 10000 ms",2.982424
+eevdfidle,7,"busy >5 ms, L 10000 ms",30.65310187820148
+eevdfidle,7,"batch, L 10000 ms block",328.1012028197228
+eevdfidle,8,"busy p50, all L",2.474552
+eevdfidle,8,"busy >5 ms, all L",25.967735926381284
+eevdfidle,8,"quiet p50, all L",1.235729
+eevdfidle,8,"batch, whole load",350.3126878875245
+eevdfidle,8,"busy p50, L 10 ms",1.909335
+eevdfidle,8,"busy >5 ms, L 10 ms",18.22540250447227
+eevdfidle,8,"batch, L 10 ms block",308.1033404126381
+eevdfidle,8,"busy p50, L 30 ms",2.03797
+eevdfidle,8,"busy >5 ms, L 30 ms",17.738167966363605
+eevdfidle,8,"batch, L 30 ms block",334.78080840959245
+eevdfidle,8,"busy p50, L 100 ms",2.628992
+eevdfidle,8,"busy >5 ms, L 100 ms",28.170328881229356
+eevdfidle,8,"batch, L 100 ms block",332.98078402106415
+eevdfidle,8,"busy p50, L 300 ms",3.383437
+eevdfidle,8,"busy >5 ms, L 300 ms",36.46479322442326
+eevdfidle,8,"batch, L 300 ms block",366.59871301738275
+eevdfidle,8,"busy p50, L 1000 ms",1.963364
+eevdfidle,8,"busy >5 ms, L 1000 ms",15.451258368238284
+eevdfidle,8,"batch, L 1000 ms block",342.33056729021666
+eevdfidle,8,"busy p50, L 3000 ms",2.772128
+eevdfidle,8,"busy >5 ms, L 3000 ms",30.379586136854133
+eevdfidle,8,"batch, L 3000 ms block",327.08543316763064
+eevdfidle,8,"busy p50, L 10000 ms",2.829382
+eevdfidle,8,"busy >5 ms, L 10000 ms",29.41946499715424
+eevdfidle,8,"batch, L 10000 ms block",333.5909544315424
+eevdfidle,9,"busy p50, all L",2.798756
+eevdfidle,9,"busy >5 ms, all L",29.637494877240044
+eevdfidle,9,"quiet p50, all L",1.264407
+eevdfidle,9,"batch, whole load",341.5210622975846
+eevdfidle,9,"busy p50, L 10 ms",1.962986
+eevdfidle,9,"busy >5 ms, L 10 ms",16.22540250447227
+eevdfidle,9,"batch, L 10 ms block",339.81785446090316
+eevdfidle,9,"busy p50, L 30 ms",2.811888
+eevdfidle,9,"busy >5 ms, L 30 ms",30.082294174722392
+eevdfidle,9,"batch, L 30 ms block",284.01916793461123
+eevdfidle,9,"busy p50, L 100 ms",3.421885
+eevdfidle,9,"busy >5 ms, L 100 ms",37.92187275599598
+eevdfidle,9,"batch, L 100 ms block",321.8836926724085
+eevdfidle,9,"busy p50, L 300 ms",3.209956
+eevdfidle,9,"busy >5 ms, L 300 ms",34.63623799567667
+eevdfidle,9,"batch, L 300 ms block",363.14881348732104
+eevdfidle,9,"busy p50, L 1000 ms",2.616988
+eevdfidle,9,"busy >5 ms, L 1000 ms",26.094583467583146
+eevdfidle,9,"batch, L 1000 ms block",334.71810403711675
+eevdfidle,9,"busy p50, L 3000 ms",2.948777
+eevdfidle,9,"busy >5 ms, L 3000 ms",30.535102196267616
+eevdfidle,9,"batch, L 3000 ms block",332.74594543341755
+eevdfidle,9,"busy p50, L 10000 ms",2.919706
+eevdfidle,9,"busy >5 ms, L 10000 ms",30.51081388730791
+eevdfidle,9,"batch, L 10000 ms block",313.163601547394
+eevdfidle,10,"busy p50, all L",2.259617
+eevdfidle,10,"busy >5 ms, all L",22.11045291407424
+eevdfidle,10,"quiet p50, all L",1.314037
+eevdfidle,10,"batch, whole load",313.83523023152316
+eevdfidle,10,"busy p50, L 10 ms",1.732428
+eevdfidle,10,"busy >5 ms, L 10 ms",6.565295169946332
+eevdfidle,10,"batch, L 10 ms block",315.0740897462035
+eevdfidle,10,"busy p50, L 30 ms",2.329145
+eevdfidle,10,"busy >5 ms, L 30 ms",22.54285406260107
+eevdfidle,10,"batch, L 30 ms block",265.3375540655356
+eevdfidle,10,"busy p50, L 100 ms",2.223028
+eevdfidle,10,"busy >5 ms, L 100 ms",19.51744937526928
+eevdfidle,10,"batch, L 100 ms block",296.7955673014445
+eevdfidle,10,"busy p50, L 300 ms",4.176302
+eevdfidle,10,"busy >5 ms, L 300 ms",44.02353024557922
+eevdfidle,10,"batch, L 300 ms block",314.5856870202548
+eevdfidle,10,"busy p50, L 1000 ms",2.096544
+eevdfidle,10,"busy >5 ms, L 1000 ms",16.11713743600759
+eevdfidle,10,"batch, L 1000 ms block",298.8318280338523
+eevdfidle,10,"busy p50, L 3000 ms",1.868244
+eevdfidle,10,"busy >5 ms, L 3000 ms",9.204011679573442
+eevdfidle,10,"batch, L 3000 ms block",305.0522840924756
+eevdfidle,10,"busy p50, L 10000 ms",2.550693
+eevdfidle,10,"busy >5 ms, L 10000 ms",28.51878201479795
+eevdfidle,10,"batch, L 10000 ms block",297.702078235778
+fixed3,1,"busy p50, all L",1.138549
+fixed3,1,"busy >5 ms, all L",8.33550662543621
+fixed3,1,"quiet p50, all L",0.885312
+fixed3,1,"batch, whole load",325.5200209829233
+fixed3,1,"busy p50, L 10 ms",1.168818
+fixed3,1,"busy >5 ms, L 10 ms",7.119856887298748
+fixed3,1,"batch, L 10 ms block",288.99561588583254
+fixed3,1,"busy p50, L 30 ms",1.143882
+fixed3,1,"busy >5 ms, L 30 ms",2.982714629676214
+fixed3,1,"batch, L 30 ms block",313.2081148487861
+fixed3,1,"busy p50, L 100 ms",1.115992
+fixed3,1,"busy >5 ms, L 100 ms",4.247450811431854
+fixed3,1,"batch, L 100 ms block",307.7493686091827
+fixed3,1,"busy p50, L 300 ms",1.091303
+fixed3,1,"busy >5 ms, L 300 ms",4.720223962578404
+fixed3,1,"batch, L 300 ms block",325.0872565200527
+fixed3,1,"busy p50, L 1000 ms",1.102524
+fixed3,1,"busy >5 ms, L 1000 ms",5.140872802778076
+fixed3,1,"batch, L 1000 ms block",313.25827670436354
+fixed3,1,"busy p50, L 3000 ms",1.041976
+fixed3,1,"busy >5 ms, L 3000 ms",2.8246794464897804
+fixed3,1,"batch, L 3000 ms block",319.481932920352
+fixed3,1,"busy p50, L 10000 ms",1.243759
+fixed3,1,"busy >5 ms, L 10000 ms",17.75042686397268
+fixed3,1,"batch, L 10000 ms block",307.26723343650025
+fixed3,2,"busy p50, all L",1.321838
+fixed3,2,"busy >5 ms, all L",12.300833302286303
+fixed3,2,"quiet p50, all L",0.932512
+fixed3,2,"batch, whole load",288.2756253153817
+fixed3,2,"busy p50, L 10 ms",1.315381
+fixed3,2,"busy >5 ms, L 10 ms",6.332737030411449
+fixed3,2,"batch, L 10 ms block",255.19569910477063
+fixed3,2,"busy p50, L 30 ms",1.124834
+fixed3,2,"busy >5 ms, L 30 ms",2.982714629676214
+fixed3,2,"batch, L 30 ms block",310.9614056835744
+fixed3,2,"busy p50, L 100 ms",1.233857
+fixed3,2,"busy >5 ms, L 100 ms",8.03892000574465
+fixed3,2,"batch, L 100 ms block",293.0962408506356
+fixed3,2,"busy p50, L 300 ms",2.556839
+fixed3,2,"busy >5 ms, L 300 ms",28.863531663063892
+fixed3,2,"batch, L 300 ms block",247.65980512240043
+fixed3,2,"busy p50, L 1000 ms",1.055732
+fixed3,2,"busy >5 ms, L 1000 ms",2.957075860093796
+fixed3,2,"batch, L 1000 ms block",315.040356439731
+fixed3,2,"busy p50, L 3000 ms",1.196066
+fixed3,2,"busy >5 ms, L 3000 ms",5.73505141551352
+fixed3,2,"batch, L 3000 ms block",294.2485010024004
+fixed3,2,"busy p50, L 10000 ms",1.50544
+fixed3,2,"busy >5 ms, L 10000 ms",20.0597609561753
+fixed3,2,"batch, L 10000 ms block",252.82836283527655
+fixed3,3,"busy p50, all L",1.173835
+fixed3,3,"busy >5 ms, all L",8.43734088397104
+fixed3,3,"quiet p50, all L",0.904265
+fixed3,3,"batch, whole load",303.36888662799737
+fixed3,3,"busy p50, L 10 ms",1.309155
+fixed3,3,"busy >5 ms, L 10 ms",13.992844364937389
+fixed3,3,"batch, L 10 ms block",246.60839483984998
+fixed3,3,"busy p50, L 30 ms",1.406268
+fixed3,3,"busy >5 ms, L 30 ms",15.244187300104215
+fixed3,3,"batch, L 30 ms block",265.40874564894847
+fixed3,3,"busy p50, L 100 ms",1.26618
+fixed3,3,"busy >5 ms, L 100 ms",7.773229929628034
+fixed3,3,"batch, L 100 ms block",302.0433922230812
+fixed3,3,"busy p50, L 300 ms",1.066112
+fixed3,3,"busy >5 ms, L 300 ms",8.412771536907757
+fixed3,3,"batch, L 300 ms block",309.30680356570133
+fixed3,3,"busy p50, L 1000 ms",1.155813
+fixed3,3,"busy >5 ms, L 1000 ms",6.597930762896932
+fixed3,3,"batch, L 1000 ms block",292.1566126227745
+fixed3,3,"busy p50, L 3000 ms",1.182748
+fixed3,3,"busy >5 ms, L 3000 ms",8.128094452202616
+fixed3,3,"batch, L 3000 ms block",262.2028892401817
+fixed3,3,"busy p50, L 10000 ms",1.077095
+fixed3,3,"busy >5 ms, L 10000 ms",4.675583380762664
+fixed3,3,"batch, L 10000 ms block",307.1123978669192
+fixed3,4,"busy p50, all L",1.043026
+fixed3,4,"busy >5 ms, all L",5.24032471053819
+fixed3,4,"quiet p50, all L",0.88537
+fixed3,4,"batch, whole load",326.6134287328057
+fixed3,4,"busy p50, L 10 ms",1.008665
+fixed3,4,"busy >5 ms, L 10 ms",0.6833631484794276
+fixed3,4,"batch, L 10 ms block",318.018210255924
+fixed3,4,"busy p50, L 30 ms",1.18296
+fixed3,4,"busy >5 ms, L 30 ms",10.651525496819636
+fixed3,4,"batch, L 30 ms block",281.6871562841386
+fixed3,4,"busy p50, L 100 ms",1.09042
+fixed3,4,"busy >5 ms, L 100 ms",6.732012063765619
+fixed3,4,"batch, L 100 ms block",308.6519316020258
+fixed3,4,"busy p50, L 300 ms",1.002745
+fixed3,4,"busy >5 ms, L 300 ms",1.9773911194585208
+fixed3,4,"batch, L 300 ms block",336.4884454846146
+fixed3,4,"busy p50, L 1000 ms",0.991612
+fixed3,4,"busy >5 ms, L 1000 ms",0.9236387069058103
+fixed3,4,"batch, L 1000 ms block",317.4149710230621
+fixed3,4,"busy p50, L 3000 ms",0.9957
+fixed3,4,"busy >5 ms, L 3000 ms",2.113748889171004
+fixed3,4,"batch, L 3000 ms block",323.15905667852996
+fixed3,4,"busy p50, L 10000 ms",1.05735
+fixed3,4,"busy >5 ms, L 10000 ms",8.74644280022766
+fixed3,4,"batch, L 10000 ms block",304.2451484431285
+fixed3,5,"busy p50, all L",1.072544
+fixed3,5,"busy >5 ms, all L",7.275354039632568
+fixed3,5,"quiet p50, all L",0.847873
+fixed3,5,"batch, whole load",332.924211850471
+fixed3,5,"busy p50, L 10 ms",1.118772
+fixed3,5,"busy >5 ms, L 10 ms",10.11449016100179
+fixed3,5,"batch, L 10 ms block",287.1266874349096
+fixed3,5,"busy p50, L 30 ms",1.073458
+fixed3,5,"busy >5 ms, L 30 ms",4.014087037769073
+fixed3,5,"batch, L 30 ms block",322.51857146581114
+fixed3,5,"busy p50, L 100 ms",1.242062
+fixed3,5,"busy >5 ms, L 100 ms",11.474938963090622
+fixed3,5,"batch, L 100 ms block",306.46541165338385
+fixed3,5,"busy p50, L 300 ms",0.992976
+fixed3,5,"busy >5 ms, L 300 ms",4.784010772883518
+fixed3,5,"batch, L 300 ms block",350.94075300117896
+fixed3,5,"busy p50, L 1000 ms",1.038033
+fixed3,5,"busy >5 ms, L 1000 ms",6.318691153832384
+fixed3,5,"batch, L 1000 ms block",321.97775405920004
+fixed3,5,"busy p50, L 3000 ms",1.048365
+fixed3,5,"busy >5 ms, L 3000 ms",5.043163640980069
+fixed3,5,"batch, L 3000 ms block",320.2968844116472
+fixed3,5,"busy p50, L 10000 ms",1.05775
+fixed3,5,"busy >5 ms, L 10000 ms",8.154524758110416
+fixed3,5,"batch, L 10000 ms block",310.74870162222254
+fixed3,6,"busy p50, all L",1.027549
+fixed3,6,"busy >5 ms, all L",7.498478695527986
+fixed3,6,"quiet p50, all L",0.849354
+fixed3,6,"batch, whole load",336.5891449581729
+fixed3,6,"busy p50, L 10 ms",0.975811
+fixed3,6,"busy >5 ms, L 10 ms",1.4633273703041145
+fixed3,6,"batch, L 10 ms block",325.1536148047952
+fixed3,6,"busy p50, L 30 ms",1.06661
+fixed3,6,"busy >5 ms, L 30 ms",2.551478779602544
+fixed3,6,"batch, L 30 ms block",314.8986426264994
+fixed3,6,"busy p50, L 100 ms",0.984119
+fixed3,6,"busy >5 ms, L 100 ms",2.8256498635645557
+fixed3,6,"batch, L 100 ms block",332.50881373500164
+fixed3,6,"busy p50, L 300 ms",1.138738
+fixed3,6,"busy >5 ms, L 300 ms",14.699316063645062
+fixed3,6,"batch, L 300 ms block",304.7193952842867
+fixed3,6,"busy p50, L 1000 ms",1.042882
+fixed3,6,"busy >5 ms, L 1000 ms",12.469122543228439
+fixed3,6,"batch, L 1000 ms block",307.57695651234707
+fixed3,6,"busy p50, L 3000 ms",1.058774
+fixed3,6,"busy >5 ms, L 3000 ms",14.167830392281326
+fixed3,6,"batch, L 3000 ms block",322.2931259626053
+fixed3,6,"busy p50, L 10000 ms",1.005649
+fixed3,6,"busy >5 ms, L 10000 ms",5.852305065452476
+fixed3,6,"batch, L 10000 ms block",322.49679136854274
+fixed3,7,"busy p50, all L",1.037815
+fixed3,7,"busy >5 ms, all L",9.288443467497899
+fixed3,7,"quiet p50, all L",0.8487
+fixed3,7,"batch, whole load",335.861240699963
+fixed3,7,"busy p50, L 10 ms",0.970817
+fixed3,7,"busy >5 ms, L 10 ms",1.3631484794275492
+fixed3,7,"batch, L 10 ms block",325.5851435027477
+fixed3,7,"busy p50, L 30 ms",1.073763
+fixed3,7,"busy >5 ms, L 30 ms",10.256225967585438
+fixed3,7,"batch, L 30 ms block",301.68925193538547
+fixed3,7,"busy p50, L 100 ms",1.095194
+fixed3,7,"busy >5 ms, L 100 ms",12.670544305615396
+fixed3,7,"batch, L 100 ms block",295.4556874618726
+fixed3,7,"busy p50, L 300 ms",0.968949
+fixed3,7,"busy >5 ms, L 300 ms",4.181579786668556
+fixed3,7,"batch, L 300 ms block",354.90216288560697
+fixed3,7,"busy p50, L 1000 ms",0.986966
+fixed3,7,"busy >5 ms, L 1000 ms",7.589589374574875
+fixed3,7,"batch, L 1000 ms block",330.0345758540008
+fixed3,7,"busy p50, L 3000 ms",0.951419
+fixed3,7,"busy >5 ms, L 3000 ms",2.9071981718928526
+fixed3,7,"batch, L 3000 ms block",332.68091683425905
+fixed3,7,"busy p50, L 10000 ms",1.153115
+fixed3,7,"busy >5 ms, L 10000 ms",16.30335799658509
+fixed3,7,"batch, L 10000 ms block",311.37114705126845
+fixed3,8,"busy p50, all L",1.051896
+fixed3,8,"busy >5 ms, all L",6.851872549871879
+fixed3,8,"quiet p50, all L",0.84188
+fixed3,8,"batch, whole load",337.7560701029393
+fixed3,8,"busy p50, L 10 ms",1.007786
+fixed3,8,"busy >5 ms, L 10 ms",2.0143112701252237
+fixed3,8,"batch, L 10 ms block",324.0394954825201
+fixed3,8,"busy p50, L 30 ms",1.033858
+fixed3,8,"busy >5 ms, L 30 ms",3.1480217055377873
+fixed3,8,"batch, L 30 ms block",335.95612523718194
+fixed3,8,"busy p50, L 100 ms",1.123178
+fixed3,8,"busy >5 ms, L 100 ms",11.194887261237971
+fixed3,8,"batch, L 100 ms block",310.9857111940156
+fixed3,8,"busy p50, L 300 ms",1.033109
+fixed3,8,"busy >5 ms, L 300 ms",9.146319855416563
+fixed3,8,"batch, L 300 ms block",341.1836866211761
+fixed3,8,"busy p50, L 1000 ms",0.988159
+fixed3,8,"busy >5 ms, L 1000 ms",4.52511366484087
+fixed3,8,"batch, L 1000 ms block",336.74459117341746
+fixed3,8,"busy p50, L 3000 ms",1.018649
+fixed3,8,"busy >5 ms, L 3000 ms",5.0812492065507175
+fixed3,8,"batch, L 3000 ms block",332.7473275178863
+fixed3,8,"busy p50, L 10000 ms",1.110856
+fixed3,8,"busy >5 ms, L 10000 ms",9.318440523619806
+fixed3,8,"batch, L 10000 ms block",298.1786993675456
+fixed3,9,"busy p50, all L",1.09567
+fixed3,9,"busy >5 ms, all L",6.03305887758777
+fixed3,9,"quiet p50, all L",0.888752
+fixed3,9,"batch, whole load",319.38188360376046
+fixed3,9,"busy p50, L 10 ms",1.148243
+fixed3,9,"busy >5 ms, L 10 ms",8.264758497316636
+fixed3,9,"batch, L 10 ms block",286.8769825140196
+fixed3,9,"busy p50, L 30 ms",1.088763
+fixed3,9,"busy >5 ms, L 30 ms",3.151615337621734
+fixed3,9,"batch, L 30 ms block",320.30451066280835
+fixed3,9,"busy p50, L 100 ms",1.25915
+fixed3,9,"busy >5 ms, L 100 ms",10.261381588395807
+fixed3,9,"batch, L 100 ms block",300.6423422939746
+fixed3,9,"busy p50, L 300 ms",1.053883
+fixed3,9,"busy >5 ms, L 300 ms",4.543038378397534
+fixed3,9,"batch, L 300 ms block",330.8503848937229
+fixed3,9,"busy p50, L 1000 ms",1.077056
+fixed3,9,"busy >5 ms, L 1000 ms",6.794830487237318
+fixed3,9,"batch, L 1000 ms block",312.20391334146655
+fixed3,9,"busy p50, L 3000 ms",1.113232
+fixed3,9,"busy >5 ms, L 3000 ms",6.671321569125301
+fixed3,9,"batch, L 3000 ms block",312.5721382590711
+fixed3,9,"busy p50, L 10000 ms",1.045214
+fixed3,9,"busy >5 ms, L 10000 ms",4.620091064314172
+fixed3,9,"batch, L 10000 ms block",282.8846367699681
+fixed3,10,"busy p50, all L",1.268256
+fixed3,10,"busy >5 ms, all L",10.898335465229396
+fixed3,10,"quiet p50, all L",0.92478
+fixed3,10,"batch, whole load",297.1415223779913
+fixed3,10,"busy p50, L 10 ms",1.441914
+fixed3,10,"busy >5 ms, L 10 ms",7.155635062611807
+fixed3,10,"batch, L 10 ms block",241.35171247221834
+fixed3,10,"busy p50, L 30 ms",1.299167
+fixed3,10,"busy >5 ms, L 30 ms",7.758651669242103
+fixed3,10,"batch, L 30 ms block",286.6362811335955
+fixed3,10,"busy p50, L 100 ms",1.918971
+fixed3,10,"busy >5 ms, L 100 ms",22.791900043084876
+fixed3,10,"batch, L 100 ms block",256.0093731282897
+fixed3,10,"busy p50, L 300 ms",1.135396
+fixed3,10,"busy >5 ms, L 300 ms",12.144299939756902
+fixed3,10,"batch, L 300 ms block",316.6144490531232
+fixed3,10,"busy p50, L 1000 ms",1.398696
+fixed3,10,"busy >5 ms, L 1000 ms",12.68392224250886
+fixed3,10,"batch, L 1000 ms block",250.83148552520487
+fixed3,10,"busy p50, L 3000 ms",1.104135
+fixed3,10,"busy >5 ms, L 3000 ms",4.690872159451568
+fixed3,10,"batch, L 3000 ms block",287.58316245429137
+fixed3,10,"busy p50, L 10000 ms",1.145549
+fixed3,10,"busy >5 ms, L 10000 ms",10.489470688673876
+fixed3,10,"batch, L 10000 ms block",301.1317287697893
+kairos,1,"busy p50, all L",1.15681
+kairos,1,"busy >5 ms, all L",8.210490584470689
+kairos,1,"quiet p50, all L",0.891787
+kairos,1,"batch, whole load",314.93955862232684
+kairos,1,"busy p50, L 10 ms",1.128941
+kairos,1,"busy >5 ms, L 10 ms",3.395348837209302
+kairos,1,"batch, L 10 ms block",300.13111979117673
+kairos,1,"busy p50, L 30 ms",1.217295
+kairos,1,"busy >5 ms, L 30 ms",10.468250260538326
+kairos,1,"batch, L 30 ms block",283.1369820284682
+kairos,1,"busy p50, L 100 ms",1.203093
+kairos,1,"busy >5 ms, L 100 ms",7.791181961798076
+kairos,1,"batch, L 100 ms block",302.8594154765111
+kairos,1,"busy p50, L 300 ms",1.178709
+kairos,1,"busy >5 ms, L 300 ms",7.168928735958042
+kairos,1,"batch, L 300 ms block",315.2995307110243
+kairos,1,"busy p50, L 1000 ms",1.115404
+kairos,1,"busy >5 ms, L 1000 ms",4.632513514481079
+kairos,1,"batch, L 1000 ms block",309.8017175814594
+kairos,1,"busy p50, L 3000 ms",1.063782
+kairos,1,"busy >5 ms, L 3000 ms",2.831027040751555
+kairos,1,"batch, L 3000 ms block",309.40504299910725
+kairos,1,"busy p50, L 10000 ms",1.190543
+kairos,1,"busy >5 ms, L 10000 ms",13.649686966420035
+kairos,1,"batch, L 10000 ms block",292.15685596404535
+kairos,2,"busy p50, all L",1.031842
+kairos,2,"busy >5 ms, all L",5.783026795656728
+kairos,2,"quiet p50, all L",0.857538
+kairos,2,"batch, whole load",339.3323347075559
+kairos,2,"busy p50, L 10 ms",1.0856
+kairos,2,"busy >5 ms, L 10 ms",5.24865831842576
+kairos,2,"batch, L 10 ms block",302.28717399177435
+kairos,2,"busy p50, L 30 ms",1.147569
+kairos,2,"busy >5 ms, L 30 ms",10.259819599669386
+kairos,2,"batch, L 30 ms block",302.35588970964113
+kairos,2,"busy p50, L 100 ms",1.060368
+kairos,2,"busy >5 ms, L 100 ms",4.215137153525779
+kairos,2,"batch, L 100 ms block",327.71132560988735
+kairos,2,"busy p50, L 300 ms",0.946466
+kairos,2,"busy >5 ms, L 300 ms",3.2637584606116445
+kairos,2,"batch, L 300 ms block",358.01212723225694
+kairos,2,"busy p50, L 1000 ms",1.000112
+kairos,2,"busy >5 ms, L 1000 ms",2.577596391365052
+kairos,2,"batch, L 1000 ms block",335.5704197957482
+kairos,2,"busy p50, L 3000 ms",1.012054
+kairos,2,"busy >5 ms, L 3000 ms",4.141805255808049
+kairos,2,"batch, L 3000 ms block",312.0047396899291
+kairos,2,"busy p50, L 10000 ms",1.017112
+kairos,2,"busy >5 ms, L 10000 ms",7.865680136596471
+kairos,2,"batch, L 10000 ms block",329.82118559561644
+kairos,3,"busy p50, all L",1.147552
+kairos,3,"busy >5 ms, all L",6.015258580364202
+kairos,3,"quiet p50, all L",0.910013
+kairos,3,"batch, whole load",309.34018845417773
+kairos,3,"busy p50, L 10 ms",1.243733
+kairos,3,"busy >5 ms, L 10 ms",9.087656529516995
+kairos,3,"batch, L 10 ms block",257.54596695552965
+kairos,3,"busy p50, L 30 ms",1.201381
+kairos,3,"busy >5 ms, L 30 ms",4.585474539116685
+kairos,3,"batch, L 30 ms block",298.5390878751585
+kairos,3,"busy p50, L 100 ms",1.241069
+kairos,3,"busy >5 ms, L 100 ms",6.681746373689502
+kairos,3,"batch, L 100 ms block",291.99540237108545
+kairos,3,"busy p50, L 300 ms",1.162205
+kairos,3,"busy >5 ms, L 300 ms",9.7841879584677
+kairos,3,"batch, L 300 ms block",311.71398207797967
+kairos,3,"busy p50, L 1000 ms",1.135834
+kairos,3,"busy >5 ms, L 1000 ms",3.9487344717717394
+kairos,3,"batch, L 1000 ms block",300.3058880561941
+kairos,3,"busy p50, L 3000 ms",1.120924
+kairos,3,"busy >5 ms, L 3000 ms",5.5446235876602765
+kairos,3,"batch, L 3000 ms block",300.6276894605519
+kairos,3,"busy p50, L 10000 ms",1.068402
+kairos,3,"busy >5 ms, L 10000 ms",4.614399544678429
+kairos,3,"batch, L 10000 ms block",294.6525151310537
+kairos,4,"busy p50, all L",1.128475
+kairos,4,"busy >5 ms, all L",6.432944624517218
+kairos,4,"quiet p50, all L",0.890816
+kairos,4,"batch, whole load",320.8013713116049
+kairos,4,"busy p50, L 10 ms",1.141556
+kairos,4,"busy >5 ms, L 10 ms",9.20572450805009
+kairos,4,"batch, L 10 ms block",283.64513194386564
+kairos,4,"busy p50, L 30 ms",1.314344
+kairos,4,"busy >5 ms, L 30 ms",7.794587990081576
+kairos,4,"batch, L 30 ms block",289.944904901326
+kairos,4,"busy p50, L 100 ms",1.199073
+kairos,4,"busy >5 ms, L 100 ms",6.674565560821485
+kairos,4,"batch, L 100 ms block",313.4647442024024
+kairos,4,"busy p50, L 300 ms",1.028351
+kairos,4,"busy >5 ms, L 300 ms",4.291434848860697
+kairos,4,"batch, L 300 ms block",336.49091004822753
+kairos,4,"busy p50, L 1000 ms",1.196531
+kairos,4,"busy >5 ms, L 1000 ms",8.080048687931837
+kairos,4,"batch, L 1000 ms block",294.2852056833798
+kairos,4,"busy p50, L 3000 ms",1.085707
+kairos,4,"busy >5 ms, L 3000 ms",5.22407007744065
+kairos,4,"batch, L 3000 ms block",311.4489107028637
+kairos,4,"busy p50, L 10000 ms",1.070757
+kairos,4,"busy >5 ms, L 10000 ms",5.442515651678998
+kairos,4,"batch, L 10000 ms block",301.4262314172395
+kairos,5,"busy p50, all L",1.07927
+kairos,5,"busy >5 ms, all L",9.045448712376174
+kairos,5,"quiet p50, all L",0.869441
+kairos,5,"batch, whole load",326.30272143999065
+kairos,5,"busy p50, L 10 ms",0.999226
+kairos,5,"busy >5 ms, L 10 ms",2.1753130590339893
+kairos,5,"batch, L 10 ms block",316.5124629883423
+kairos,5,"busy p50, L 30 ms",1.082588
+kairos,5,"busy >5 ms, L 30 ms",8.45222266144392
+kairos,5,"batch, L 30 ms block",303.7821682164967
+kairos,5,"busy p50, L 100 ms",1.059292
+kairos,5,"busy >5 ms, L 100 ms",6.487864426253052
+kairos,5,"batch, L 100 ms block",305.61461749082616
+kairos,5,"busy p50, L 300 ms",0.980284
+kairos,5,"busy >5 ms, L 300 ms",3.4551188915269853
+kairos,5,"batch, L 300 ms block",345.1165164296997
+kairos,5,"busy p50, L 1000 ms",0.961625
+kairos,5,"busy >5 ms, L 1000 ms",2.7028962159452976
+kairos,5,"batch, L 1000 ms block",332.7971710002441
+kairos,5,"busy p50, L 3000 ms",1.127944
+kairos,5,"busy >5 ms, L 3000 ms",11.574838136346324
+kairos,5,"batch, L 3000 ms block",302.45504107048924
+kairos,5,"busy p50, L 10000 ms",1.236568
+kairos,5,"busy >5 ms, L 10000 ms",16.657655093910073
+kairos,5,"batch, L 10000 ms block",291.265931399072
+kairos,6,"busy p50, all L",1.024377
+kairos,6,"busy >5 ms, all L",7.60114087486391
+kairos,6,"quiet p50, all L",0.851338
+kairos,6,"batch, whole load",334.4579826009591
+kairos,6,"busy p50, L 10 ms",0.994118
+kairos,6,"busy >5 ms, L 10 ms",1.8425760286225403
+kairos,6,"batch, L 10 ms block",317.9957288333922
+kairos,6,"busy p50, L 30 ms",1.060987
+kairos,6,"busy >5 ms, L 30 ms",7.47475473461027
+kairos,6,"batch, L 30 ms block",309.212261021895
+kairos,6,"busy p50, L 100 ms",1.097443
+kairos,6,"busy >5 ms, L 100 ms",12.674134712049405
+kairos,6,"batch, L 100 ms block",294.07378529546963
+kairos,6,"busy p50, L 300 ms",0.963228
+kairos,6,"busy >5 ms, L 300 ms",3.46220631489422
+kairos,6,"batch, L 300 ms block",352.31773856233355
+kairos,6,"busy p50, L 1000 ms",1.001664
+kairos,6,"busy >5 ms, L 1000 ms",5.7208319908352125
+kairos,6,"batch, L 1000 ms block",319.5088317759109
+kairos,6,"busy p50, L 3000 ms",1.034424
+kairos,6,"busy >5 ms, L 3000 ms",6.411070204392535
+kairos,6,"batch, L 3000 ms block",323.8756833270852
+kairos,6,"busy p50, L 10000 ms",1.0271
+kairos,6,"busy >5 ms, L 10000 ms",10.873648264086512
+kairos,6,"batch, L 10000 ms block",319.7347583031566
+kairos,7,"busy p50, all L",1.133945
+kairos,7,"busy >5 ms, all L",9.83901080022685
+kairos,7,"quiet p50, all L",0.859158
+kairos,7,"batch, whole load",321.70333511085806
+kairos,7,"busy p50, L 10 ms",1.115636
+kairos,7,"busy >5 ms, L 10 ms",2.8729874776386404
+kairos,7,"batch, L 10 ms block",295.7157311337629
+kairos,7,"busy p50, L 30 ms",1.058057
+kairos,7,"busy >5 ms, L 30 ms",2.8461566104862186
+kairos,7,"batch, L 30 ms block",321.3058436545482
+kairos,7,"busy p50, L 100 ms",2.359235
+kairos,7,"busy >5 ms, L 100 ms",29.225908372827803
+kairos,7,"batch, L 100 ms block",251.55665342521115
+kairos,7,"busy p50, L 300 ms",1.103087
+kairos,7,"busy >5 ms, L 300 ms",9.529040717247245
+kairos,7,"batch, L 300 ms block",335.7347078121825
+kairos,7,"busy p50, L 1000 ms",1.073704
+kairos,7,"busy >5 ms, L 1000 ms",14.670819460852755
+kairos,7,"batch, L 1000 ms block",308.9570305713492
+kairos,7,"busy p50, L 3000 ms",1.039629
+kairos,7,"busy >5 ms, L 3000 ms",5.8905674749270025
+kairos,7,"batch, L 3000 ms block",312.1981222210171
+kairos,7,"busy p50, L 10000 ms",1.061416
+kairos,7,"busy >5 ms, L 10000 ms",7.669322709163347
+kairos,7,"batch, L 10000 ms block",310.87910423986926
+kairos,8,"busy p50, all L",1.0372
+kairos,8,"busy >5 ms, all L",4.893011934478348
+kairos,8,"quiet p50, all L",0.8623
+kairos,8,"batch, whole load",340.92256834372085
+kairos,8,"busy p50, L 10 ms",1.118256
+kairos,8,"busy >5 ms, L 10 ms",4.83005366726297
+kairos,8,"batch, L 10 ms block",305.6707507659964
+kairos,8,"busy p50, L 30 ms",1.220191
+kairos,8,"busy >5 ms, L 30 ms",7.327415819168434
+kairos,8,"batch, L 30 ms block",313.5054979000945
+kairos,8,"busy p50, L 100 ms",1.089831
+kairos,8,"busy >5 ms, L 100 ms",6.843314663219877
+kairos,8,"batch, L 100 ms block",329.9024610037184
+kairos,8,"busy p50, L 300 ms",0.91458
+kairos,8,"busy >5 ms, L 300 ms",1.2154931074807753
+kairos,8,"batch, L 300 ms block",370.5209294664419
+kairos,8,"busy p50, L 1000 ms",1.074694
+kairos,8,"busy >5 ms, L 1000 ms",5.917731715175599
+kairos,8,"batch, L 1000 ms block",317.80111582759076
+kairos,8,"busy p50, L 3000 ms",1.021236
+kairos,8,"busy >5 ms, L 3000 ms",6.461850958486734
+kairos,8,"batch, L 3000 ms block",333.13114876132425
+kairos,8,"busy p50, L 10000 ms",0.973393
+kairos,8,"busy >5 ms, L 10000 ms",3.547239612976665
+kairos,8,"batch, L 10000 ms block",326.7024918970152
+kairos,9,"busy p50, all L",1.098074
+kairos,9,"busy >5 ms, all L",7.679793350968047
+kairos,9,"quiet p50, all L",0.880091
+kairos,9,"batch, whole load",326.82627970849006
+kairos,9,"busy p50, L 10 ms",1.024851
+kairos,9,"busy >5 ms, L 10 ms",1.7567084078711985
+kairos,9,"batch, L 10 ms block",317.46342784478867
+kairos,9,"busy p50, L 30 ms",1.228283
+kairos,9,"busy >5 ms, L 30 ms",11.607431631149604
+kairos,9,"batch, L 30 ms block",295.9326533937449
+kairos,9,"busy p50, L 100 ms",1.268829
+kairos,9,"busy >5 ms, L 100 ms",14.10311647278472
+kairos,9,"batch, L 100 ms block",288.48550442141806
+kairos,9,"busy p50, L 300 ms",0.97066
+kairos,9,"busy >5 ms, L 300 ms",4.206385768453878
+kairos,9,"batch, L 300 ms block",360.3234471110142
+kairos,9,"busy p50, L 1000 ms",1.115532
+kairos,9,"busy >5 ms, L 1000 ms",8.02992875809974
+kairos,9,"batch, L 1000 ms block",311.68079240076287
+kairos,9,"busy p50, L 3000 ms",1.200364
+kairos,9,"busy >5 ms, L 3000 ms",9.930811222546655
+kairos,9,"batch, L 3000 ms block",304.01716476131634
+kairos,9,"busy p50, L 10000 ms",1.042798
+kairos,9,"busy >5 ms, L 10000 ms",6.180990324416619
+kairos,9,"batch, L 10000 ms block",299.9779026162106
+kairos,10,"busy p50, all L",1.109881
+kairos,10,"busy >5 ms, all L",7.6615790933439305
+kairos,10,"quiet p50, all L",0.902579
+kairos,10,"batch, whole load",316.0401155230278
+kairos,10,"busy p50, L 10 ms",1.063203
+kairos,10,"busy >5 ms, L 10 ms",1.710196779964222
+kairos,10,"batch, L 10 ms block",302.47440791421735
+kairos,10,"busy p50, L 30 ms",1.191245
+kairos,10,"busy >5 ms, L 30 ms",10.45028210011859
+kairos,10,"batch, L 30 ms block",283.29375637515227
+kairos,10,"busy p50, L 100 ms",1.247252
+kairos,10,"busy >5 ms, L 100 ms",13.557374694815453
+kairos,10,"batch, L 100 ms block",277.62909768869264
+kairos,10,"busy p50, L 300 ms",1.068117
+kairos,10,"busy >5 ms, L 300 ms",3.5472553953010384
+kairos,10,"batch, L 300 ms block",325.7056863568534
+kairos,10,"busy p50, L 1000 ms",1.04727
+kairos,10,"busy >5 ms, L 1000 ms",2.6420363011491785
+kairos,10,"batch, L 1000 ms block",313.79245834360813
+kairos,10,"busy p50, L 3000 ms",1.12314
+kairos,10,"busy >5 ms, L 3000 ms",8.04874952393043
+kairos,10,"batch, L 3000 ms block",300.9745129184912
+kairos,10,"busy p50, L 10000 ms",1.094488
+kairos,10,"busy >5 ms, L 10000 ms",10.061183836084234
+kairos,10,"batch, L 10000 ms block",298.9953561734637
+lavd,1,"busy p50, all L",8.905932
+lavd,1,"busy >5 ms, all L",73.95940704312225
+lavd,1,"quiet p50, all L",1.118504
+lavd,1,"batch, whole load",381.10022078887533
+lavd,1,"busy p50, L 10 ms",3.834291
+lavd,1,"busy >5 ms, L 10 ms",35.37030411449016
+lavd,1,"batch, L 10 ms block",360.3142278626613
+lavd,1,"busy p50, L 30 ms",6.231945
+lavd,1,"busy >5 ms, L 30 ms",62.66934991195601
+lavd,1,"batch, L 30 ms block",386.765348080354
+lavd,1,"busy p50, L 100 ms",8.712629
+lavd,1,"busy >5 ms, L 100 ms",79.97989372396955
+lavd,1,"batch, L 100 ms block",366.3955433550032
+lavd,1,"busy p50, L 300 ms",17.011202
+lavd,1,"busy >5 ms, L 300 ms",90.69775683050428
+lavd,1,"batch, L 300 ms block",400.46375054672984
+lavd,1,"busy p50, L 1000 ms",9.4907
+lavd,1,"busy >5 ms, L 1000 ms",75.2049547130634
+lavd,1,"batch, L 1000 ms block",371.7416266198549
+lavd,1,"busy p50, L 3000 ms",7.683318
+lavd,1,"busy >5 ms, L 3000 ms",72.20705852481909
+lavd,1,"batch, L 3000 ms block",369.4914412084408
+lavd,1,"busy p50, L 10000 ms",15.14705
+lavd,1,"busy >5 ms, L 10000 ms",84.9601593625498
+lavd,1,"batch, L 10000 ms block",343.37519928726954
+lavd,2,"busy p50, all L",8.28988
+lavd,2,"busy >5 ms, all L",72.83095099122818
+lavd,2,"quiet p50, all L",1.142953
+lavd,2,"batch, whole load",392.55292195565534
+lavd,2,"busy p50, L 10 ms",5.339288
+lavd,2,"busy >5 ms, L 10 ms",52.72271914132379
+lavd,2,"batch, L 10 ms block",350.00825162169076
+lavd,2,"busy p50, L 30 ms",6.16485
+lavd,2,"busy >5 ms, L 30 ms",62.16983505228735
+lavd,2,"batch, L 30 ms block",382.98685265957533
+lavd,2,"busy p50, L 100 ms",10.817401
+lavd,2,"busy >5 ms, L 100 ms",80.60821484992101
+lavd,2,"batch, L 100 ms block",367.90896020359935
+lavd,2,"busy p50, L 300 ms",16.628065
+lavd,2,"busy >5 ms, L 300 ms",89.06056203267302
+lavd,2,"batch, L 300 ms block",415.9400106339102
+lavd,2,"busy p50, L 1000 ms",6.609839
+lavd,2,"busy >5 ms, L 1000 ms",66.13324741345362
+lavd,2,"batch, L 1000 ms block",376.57669138668
+lavd,2,"busy p50, L 3000 ms",7.457491
+lavd,2,"busy >5 ms, L 3000 ms",70.95023486098769
+lavd,2,"batch, L 3000 ms block",379.1081495218945
+lavd,2,"busy p50, L 10000 ms",10.304449
+lavd,2,"busy >5 ms, L 10000 ms",78.9556061468412
+lavd,2,"batch, L 10000 ms block",374.083484161932
+lavd,3,"busy p50, all L",12.771404
+lavd,3,"busy >5 ms, all L",80.4209149352773
+lavd,3,"quiet p50, all L",1.220822
+lavd,3,"batch, whole load",344.45381083305807
+lavd,3,"busy p50, L 10 ms",3.968795
+lavd,3,"busy >5 ms, L 10 ms",36.304114490161005
+lavd,3,"batch, L 10 ms block",327.55591249275
+lavd,3,"busy p50, L 30 ms",7.194199
+lavd,3,"busy >5 ms, L 30 ms",69.42178459769289
+lavd,3,"batch, L 30 ms block",307.4567961662959
+lavd,3,"busy p50, L 100 ms",11.27692
+lavd,3,"busy >5 ms, L 100 ms",83.57030015797788
+lavd,3,"batch, L 100 ms block",336.202039027326
+lavd,3,"busy p50, L 300 ms",24.006131
+lavd,3,"busy >5 ms, L 300 ms",93.54690102413268
+lavd,3,"batch, L 300 ms block",370.21450203940344
+lavd,3,"busy p50, L 1000 ms",18.508383
+lavd,3,"busy >5 ms, L 1000 ms",90.09773386317259
+lavd,3,"batch, L 1000 ms block",335.1112886435193
+lavd,3,"busy p50, L 3000 ms",12.896471
+lavd,3,"busy >5 ms, L 3000 ms",84.3150945791545
+lavd,3,"batch, L 3000 ms block",325.03400322497663
+lavd,3,"busy p50, L 10000 ms",23.612915
+lavd,3,"busy >5 ms, L 10000 ms",90.21058622652248
+lavd,3,"batch, L 10000 ms block",326.25383848849793
+lavd,4,"busy p50, all L",11.094035
+lavd,4,"busy >5 ms, all L",76.99746242274465
+lavd,4,"quiet p50, all L",1.14068
+lavd,4,"batch, whole load",351.8698154385973
+lavd,4,"busy p50, L 10 ms",3.705562
+lavd,4,"busy >5 ms, L 10 ms",31.70304114490161
+lavd,4,"batch, L 10 ms block",357.3026548467434
+lavd,4,"busy p50, L 30 ms",6.706986
+lavd,4,"busy >5 ms, L 30 ms",66.44625723218456
+lavd,4,"batch, L 30 ms block",346.4848750166266
+lavd,4,"busy p50, L 100 ms",11.588504
+lavd,4,"busy >5 ms, L 100 ms",83.43386471348556
+lavd,4,"batch, L 100 ms block",329.32264393899374
+lavd,4,"busy p50, L 300 ms",29.995673
+lavd,4,"busy >5 ms, L 300 ms",96.09837343633723
+lavd,4,"batch, L 300 ms block",340.86325611659123
+lavd,4,"busy p50, L 1000 ms",8.560939
+lavd,4,"busy >5 ms, L 1000 ms",73.59753696344825
+lavd,4,"batch, L 1000 ms block",365.0034754188405
+lavd,4,"busy p50, L 3000 ms",8.736832
+lavd,4,"busy >5 ms, L 3000 ms",76.66941729084677
+lavd,4,"batch, L 3000 ms block",345.62585126562874
+lavd,4,"busy p50, L 10000 ms",26.461783
+lavd,4,"busy >5 ms, L 10000 ms",90.4667046101309
+lavd,4,"batch, L 10000 ms block",311.6114578745476
+lavd,5,"busy p50, all L",8.876443
+lavd,5,"busy >5 ms, all L",73.94202070629923
+lavd,5,"quiet p50, all L",1.143655
+lavd,5,"batch, whole load",389.83891925466435
+lavd,5,"busy p50, L 10 ms",4.065509
+lavd,5,"busy >5 ms, L 10 ms",40.21466905187835
+lavd,5,"batch, L 10 ms block",377.9673463064794
+lavd,5,"busy p50, L 30 ms",6.422519
+lavd,5,"busy >5 ms, L 30 ms",62.83465698781759
+lavd,5,"batch, L 30 ms block",387.7698705182715
+lavd,5,"busy p50, L 100 ms",10.794691
+lavd,5,"busy >5 ms, L 100 ms",81.48786442625305
+lavd,5,"batch, L 100 ms block",387.81317162922613
+lavd,5,"busy p50, L 300 ms",19.832573
+lavd,5,"busy >5 ms, L 300 ms",90.26188029341932
+lavd,5,"batch, L 300 ms block",389.76752904607827
+lavd,5,"busy p50, L 1000 ms",12.521342
+lavd,5,"busy >5 ms, L 1000 ms",82.74084416281818
+lavd,5,"batch, L 1000 ms block",359.678459096895
+lavd,5,"busy p50, L 3000 ms",7.353614
+lavd,5,"busy >5 ms, L 3000 ms",70.89945410689349
+lavd,5,"batch, L 3000 ms block",376.7375054096931
+lavd,5,"busy p50, L 10000 ms",10.602502
+lavd,5,"busy >5 ms, L 10000 ms",80.07683551508252
+lavd,5,"batch, L 10000 ms block",364.3241743140159
+lavd,6,"busy p50, all L",8.363941
+lavd,6,"busy >5 ms, all L",71.3046789944074
+lavd,6,"quiet p50, all L",1.080539
+lavd,6,"batch, whole load",383.00182170590034
+lavd,6,"busy p50, L 10 ms",3.443368
+lavd,6,"busy >5 ms, L 10 ms",29.352415026833633
+lavd,6,"batch, L 10 ms block",388.92945853818185
+lavd,6,"busy p50, L 30 ms",6.199648
+lavd,6,"busy >5 ms, L 30 ms",61.24986523879685
+lavd,6,"batch, L 30 ms block",373.538134146968
+lavd,6,"busy p50, L 100 ms",8.792608
+lavd,6,"busy >5 ms, L 100 ms",76.67312939824788
+lavd,6,"batch, L 100 ms block",385.0758242808976
+lavd,6,"busy p50, L 300 ms",19.166322
+lavd,6,"busy >5 ms, L 300 ms",89.82246004465077
+lavd,6,"batch, L 300 ms block",394.7452527681781
+lavd,6,"busy p50, L 1000 ms",9.800031
+lavd,6,"busy >5 ms, L 1000 ms",75.04027494361507
+lavd,6,"batch, L 1000 ms block",336.86900007033506
+lavd,6,"busy p50, L 3000 ms",6.546873
+lavd,6,"busy >5 ms, L 3000 ms",65.37387330201854
+lavd,6,"batch, L 3000 ms block",370.7137358918335
+lavd,6,"busy p50, L 10000 ms",13.591589
+lavd,6,"busy >5 ms, L 10000 ms",83.58138873079112
+lavd,6,"batch, L 10000 ms block",353.33791995483296
+lavd,7,"busy p50, all L",7.171605
+lavd,7,"busy >5 ms, all L",67.20978271218576
+lavd,7,"quiet p50, all L",1.10651
+lavd,7,"batch, whole load",393.7866051905968
+lavd,7,"busy p50, L 10 ms",3.431655
+lavd,7,"busy >5 ms, L 10 ms",27.033989266547405
+lavd,7,"batch, L 10 ms block",390.8197997161327
+lavd,7,"busy p50, L 30 ms",6.032854
+lavd,7,"busy >5 ms, L 30 ms",60.64254141660977
+lavd,7,"batch, L 30 ms block",374.5872878323066
+lavd,7,"busy p50, L 100 ms",11.027411
+lavd,7,"busy >5 ms, L 100 ms",84.08731868447508
+lavd,7,"batch, L 100 ms block",349.9397554046355
+lavd,7,"busy p50, L 300 ms",13.904312
+lavd,7,"busy >5 ms, L 300 ms",87.0441900846947
+lavd,7,"batch, L 300 ms block",421.52607022400014
+lavd,7,"busy p50, L 1000 ms",7.427481
+lavd,7,"busy >5 ms, L 1000 ms",68.37074428095801
+lavd,7,"batch, L 1000 ms block",379.23000939335515
+lavd,7,"busy p50, L 3000 ms",5.935613
+lavd,7,"busy >5 ms, L 3000 ms",60.419575980703314
+lavd,7,"batch, L 3000 ms block",385.35828980559177
+lavd,7,"busy p50, L 10000 ms",9.226913
+lavd,7,"busy >5 ms, L 10000 ms",73.71798520204895
+lavd,7,"batch, L 10000 ms block",373.6208797762257
+lavd,8,"busy p50, all L",8.013784
+lavd,8,"busy >5 ms, all L",71.16434641862159
+lavd,8,"quiet p50, all L",1.129408
+lavd,8,"batch, whole load",395.33746135447996
+lavd,8,"busy p50, L 10 ms",3.487254
+lavd,8,"busy >5 ms, L 10 ms",29.481216457960645
+lavd,8,"batch, L 10 ms block",397.9370755362563
+lavd,8,"busy p50, L 30 ms",6.571479
+lavd,8,"busy >5 ms, L 30 ms",63.9918065188486
+lavd,8,"batch, L 30 ms block",369.92773566163817
+lavd,8,"busy p50, L 100 ms",11.16834
+lavd,8,"busy >5 ms, L 100 ms",82.74450667815597
+lavd,8,"batch, L 100 ms block",365.5514412417159
+lavd,8,"busy p50, L 300 ms",15.521792
+lavd,8,"busy >5 ms, L 300 ms",88.25968319217549
+lavd,8,"batch, L 300 ms block",419.468633785222
+lavd,8,"busy p50, L 1000 ms",7.33147
+lavd,8,"busy >5 ms, L 1000 ms",69.4841227222282
+lavd,8,"batch, L 1000 ms block",383.4770252824657
+lavd,8,"busy p50, L 3000 ms",8.022459
+lavd,8,"busy >5 ms, L 3000 ms",72.94972705344675
+lavd,8,"batch, L 3000 ms block",379.85163511755616
+lavd,8,"busy p50, L 10000 ms",10.097039
+lavd,8,"busy >5 ms, L 10000 ms",78.9954467842914
+lavd,8,"batch, L 10000 ms block",364.2731144535872
+lavd,9,"busy p50, all L",7.749761
+lavd,9,"busy >5 ms, all L",70.58852750145921
+lavd,9,"quiet p50, all L",1.098735
+lavd,9,"batch, whole load",406.5047672157266
+lavd,9,"busy p50, L 10 ms",3.793365
+lavd,9,"busy >5 ms, L 10 ms",35.635062611806795
+lavd,9,"batch, L 10 ms block",393.3193338675507
+lavd,9,"busy p50, L 30 ms",6.117132
+lavd,9,"busy >5 ms, L 30 ms",61.2534588708808
+lavd,9,"batch, L 30 ms block",399.46812097623297
+lavd,9,"busy p50, L 100 ms",8.955729
+lavd,9,"busy >5 ms, L 100 ms",77.80769783139452
+lavd,9,"batch, L 100 ms block",393.67490883553114
+lavd,9,"busy p50, L 300 ms",16.776541
+lavd,9,"busy >5 ms, L 300 ms",88.20652751692123
+lavd,9,"batch, L 300 ms block",425.13854210595355
+lavd,9,"busy p50, L 1000 ms",8.995264
+lavd,9,"busy >5 ms, L 1000 ms",75.004474993735
+lavd,9,"batch, L 1000 ms block",390.0610278709323
+lavd,9,"busy p50, L 3000 ms",8.177361
+lavd,9,"busy >5 ms, L 3000 ms",72.47683128094452
+lavd,9,"batch, L 3000 ms block",382.1082278481051
+lavd,9,"busy p50, L 10000 ms",8.744745
+lavd,9,"busy >5 ms, L 10000 ms",75.64883323847468
+lavd,9,"batch, L 10000 ms block",386.09250270672544
+lavd,10,"busy p50, all L",12.526645
+lavd,10,"busy >5 ms, all L",80.17419453655063
+lavd,10,"quiet p50, all L",1.234567
+lavd,10,"batch, whole load",344.5809980585239
+lavd,10,"busy p50, L 10 ms",3.945659
+lavd,10,"busy >5 ms, L 10 ms",35.26296958855098
+lavd,10,"batch, L 10 ms block",335.71571588042843
+lavd,10,"busy p50, L 30 ms",6.830719
+lavd,10,"busy >5 ms, L 30 ms",67.86574190534373
+lavd,10,"batch, L 30 ms block",331.51416568266745
+lavd,10,"busy p50, L 100 ms",10.76659
+lavd,10,"busy >5 ms, L 100 ms",85.58092776102255
+lavd,10,"batch, L 100 ms block",340.1659029719085
+lavd,10,"busy p50, L 300 ms",27.273364
+lavd,10,"busy >5 ms, L 300 ms",95.00336652609944
+lavd,10,"batch, L 300 ms block",328.17290814735986
+lavd,10,"busy p50, L 1000 ms",18.253112
+lavd,10,"busy >5 ms, L 1000 ms",87.92825690044035
+lavd,10,"batch, L 1000 ms block",304.9193749401453
+lavd,10,"busy p50, L 3000 ms",16.077405
+lavd,10,"busy >5 ms, L 3000 ms",83.37882442554272
+lavd,10,"batch, L 3000 ms block",327.95070814300686
+lavd,10,"busy p50, L 10000 ms",20.476834
+lavd,10,"busy >5 ms, L 10000 ms",90.29311326124075
+lavd,10,"batch, L 10000 ms block",332.61562654355
+lavdperf,1,"busy p50, all L",8.882204
+lavdperf,1,"busy >5 ms, all L",73.36744367033849
+lavdperf,1,"quiet p50, all L",1.130008
+lavdperf,1,"batch, whole load",377.0728975199915
+lavdperf,1,"busy p50, L 10 ms",3.635346
+lavdperf,1,"busy >5 ms, L 10 ms",31.123434704830053
+lavdperf,1,"batch, L 10 ms block",381.24648739533103
+lavdperf,1,"busy p50, L 30 ms",6.426691
+lavdperf,1,"busy >5 ms, L 30 ms",64.1211772738707
+lavdperf,1,"batch, L 30 ms block",364.139233555387
+lavdperf,1,"busy p50, L 100 ms",10.533714
+lavdperf,1,"busy >5 ms, L 100 ms",82.47881660203934
+lavdperf,1,"batch, L 100 ms block",358.8856925627157
+lavdperf,1,"busy p50, L 300 ms",17.464114
+lavdperf,1,"busy >5 ms, L 300 ms",89.96420851199547
+lavdperf,1,"batch, L 300 ms block",409.3326792354743
+lavdperf,1,"busy p50, L 1000 ms",15.464334
+lavdperf,1,"busy >5 ms, L 1000 ms",81.36254609243547
+lavdperf,1,"batch, L 1000 ms block",301.1996785301986
+lavdperf,1,"busy p50, L 3000 ms",7.393055
+lavdperf,1,"busy >5 ms, L 3000 ms",70.55033642249587
+lavdperf,1,"batch, L 3000 ms block",359.280831010701
+lavdperf,1,"busy p50, L 10000 ms",12.551653
+lavdperf,1,"busy >5 ms, L 10000 ms",81.63915765509391
+lavdperf,1,"batch, L 10000 ms block",360.56832186054805
+lavdperf,2,"busy p50, all L",8.3448
+lavdperf,2,"busy >5 ms, all L",71.26949236036081
+lavdperf,2,"quiet p50, all L",1.124421
+lavdperf,2,"batch, whole load",388.6138957223787
+lavdperf,2,"busy p50, L 10 ms",3.539825
+lavdperf,2,"busy >5 ms, L 10 ms",30.19320214669052
+lavdperf,2,"batch, L 10 ms block",376.7440278189821
+lavdperf,2,"busy p50, L 30 ms",5.959428
+lavdperf,2,"busy >5 ms, L 30 ms",60.36942537822978
+lavdperf,2,"batch, L 30 ms block",395.0617512408269
+lavdperf,2,"busy p50, L 100 ms",7.970266
+lavdperf,2,"busy >5 ms, L 100 ms",76.33922159988511
+lavdperf,2,"batch, L 100 ms block",387.33165338012833
+lavdperf,2,"busy p50, L 300 ms",22.618486
+lavdperf,2,"busy >5 ms, L 300 ms",91.35334349197349
+lavdperf,2,"batch, L 300 ms block",377.6655916796275
+lavdperf,2,"busy p50, L 1000 ms",9.263201
+lavdperf,2,"busy >5 ms, L 1000 ms",72.8027780761107
+lavdperf,2,"batch, L 1000 ms block",374.8533587349834
+lavdperf,2,"busy p50, L 3000 ms",8.731041
+lavdperf,2,"busy >5 ms, L 3000 ms",72.8322965596039
+lavdperf,2,"batch, L 3000 ms block",359.39199294846685
+lavdperf,2,"busy p50, L 10000 ms",12.105206
+lavdperf,2,"busy >5 ms, L 10000 ms",80.5378486055777
+lavdperf,2,"batch, L 10000 ms block",367.8064509123759
+lavdperf,3,"busy p50, all L",13.463666
+lavdperf,3,"busy >5 ms, all L",81.33990702449404
+lavdperf,3,"quiet p50, all L",1.255831
+lavdperf,3,"batch, whole load",341.2976021199646
+lavdperf,3,"busy p50, L 10 ms",3.941073
+lavdperf,3,"busy >5 ms, L 10 ms",34.90161001788909
+lavdperf,3,"batch, L 10 ms block",338.83239390672173
+lavdperf,3,"busy p50, L 30 ms",7.146625
+lavdperf,3,"busy >5 ms, L 30 ms",68.80008624717001
+lavdperf,3,"batch, L 30 ms block",329.49124528452256
+lavdperf,3,"busy p50, L 100 ms",13.93803
+lavdperf,3,"busy >5 ms, L 100 ms",85.92560677868735
+lavdperf,3,"batch, L 100 ms block",294.22178271930085
+lavdperf,3,"busy p50, L 300 ms",25.673584
+lavdperf,3,"busy >5 ms, L 300 ms",93.98632127290124
+lavdperf,3,"batch, L 300 ms block",358.8751826404237
+lavdperf,3,"busy p50, L 1000 ms",15.024918
+lavdperf,3,"busy >5 ms, L 1000 ms",85.97715963197652
+lavdperf,3,"batch, L 1000 ms block",329.13323933425033
+lavdperf,3,"busy p50, L 3000 ms",20.581545
+lavdperf,3,"busy >5 ms, L 3000 ms",90.17392408277263
+lavdperf,3,"batch, L 3000 ms block",323.3556146493663
+lavdperf,3,"busy p50, L 10000 ms",20.749177
+lavdperf,3,"busy >5 ms, L 10000 ms",92.07455890722822
+lavdperf,3,"batch, L 10000 ms block",318.0151611609418
+lavdperf,4,"busy p50, all L",12.348245
+lavdperf,4,"busy >5 ms, all L",80.61506236313434
+lavdperf,4,"quiet p50, all L",1.265347
+lavdperf,4,"batch, whole load",336.07398146946366
+lavdperf,4,"busy p50, L 10 ms",4.745908
+lavdperf,4,"busy >5 ms, L 10 ms",47.0304114490161
+lavdperf,4,"batch, L 10 ms block",282.9005691655
+lavdperf,4,"busy p50, L 30 ms",8.325912
+lavdperf,4,"busy >5 ms, L 30 ms",76.18859381176556
+lavdperf,4,"batch, L 30 ms block",278.53745688593443
+lavdperf,4,"busy p50, L 100 ms",12.321728
+lavdperf,4,"busy >5 ms, L 100 ms",86.60419359471493
+lavdperf,4,"batch, L 100 ms block",342.00297983953897
+lavdperf,4,"busy p50, L 300 ms",25.243167
+lavdperf,4,"busy >5 ms, L 300 ms",92.17548460257274
+lavdperf,4,"batch, L 300 ms block",343.0164990457522
+lavdperf,4,"busy p50, L 1000 ms",45.412414
+lavdperf,4,"busy >5 ms, L 1000 ms",98.3138223606487
+lavdperf,4,"batch, L 1000 ms block",284.4637531299085
+lavdperf,4,"busy p50, L 3000 ms",11.557921
+lavdperf,4,"busy >5 ms, L 3000 ms",76.56785578265837
+lavdperf,4,"batch, L 3000 ms block",329.07656844883064
+lavdperf,4,"busy p50, L 10000 ms",12.638087
+lavdperf,4,"busy >5 ms, L 10000 ms",83.4889015367103
+lavdperf,4,"batch, L 10000 ms block",357.65776042154846
+lavdperf,5,"busy p50, all L",7.773075
+lavdperf,5,"busy >5 ms, all L",70.48379552012055
+lavdperf,5,"quiet p50, all L",1.121283
+lavdperf,5,"batch, whole load",391.1859923741993
+lavdperf,5,"busy p50, L 10 ms",3.486219
+lavdperf,5,"busy >5 ms, L 10 ms",28.75134168157424
+lavdperf,5,"batch, L 10 ms block",395.63804097274436
+lavdperf,5,"busy p50, L 30 ms",6.662241
+lavdperf,5,"busy >5 ms, L 30 ms",66.92421029934955
+lavdperf,5,"batch, L 30 ms block",348.6864802134897
+lavdperf,5,"busy p50, L 100 ms",8.919298
+lavdperf,5,"busy >5 ms, L 100 ms",79.1361482119776
+lavdperf,5,"batch, L 100 ms block",387.05276663405766
+lavdperf,5,"busy p50, L 300 ms",17.566464
+lavdperf,5,"busy >5 ms, L 300 ms",87.5899216839718
+lavdperf,5,"batch, L 300 ms block",385.95365992484085
+lavdperf,5,"busy p50, L 1000 ms",9.866704
+lavdperf,5,"busy >5 ms, L 1000 ms",74.98299502380696
+lavdperf,5,"batch, L 1000 ms block",348.5363532686999
+lavdperf,5,"busy p50, L 3000 ms",8.81134
+lavdperf,5,"busy >5 ms, L 3000 ms",71.73416275231688
+lavdperf,5,"batch, L 3000 ms block",366.9673947698385
+lavdperf,5,"busy p50, L 10000 ms",8.686069
+lavdperf,5,"busy >5 ms, L 10000 ms",75.84376778599886
+lavdperf,5,"batch, L 10000 ms block",381.7730977957038
+lavdperf,6,"busy p50, all L",8.703898
+lavdperf,6,"busy >5 ms, all L",72.80942505039968
+lavdperf,6,"quiet p50, all L",1.083251
+lavdperf,6,"batch, whole load",388.13158901811954
+lavdperf,6,"busy p50, L 10 ms",3.712873
+lavdperf,6,"busy >5 ms, L 10 ms",33.25939177101968
+lavdperf,6,"batch, L 10 ms block",363.87566117550193
+lavdperf,6,"busy p50, L 30 ms",6.081869
+lavdperf,6,"busy >5 ms, L 30 ms",60.79347396413555
+lavdperf,6,"batch, L 30 ms block",383.37663427447535
+lavdperf,6,"busy p50, L 100 ms",8.833328
+lavdperf,6,"busy >5 ms, L 100 ms",78.42165733160994
+lavdperf,6,"batch, L 100 ms block",379.8570657265782
+lavdperf,6,"busy p50, L 300 ms",14.769934
+lavdperf,6,"busy >5 ms, L 300 ms",86.7996739785251
+lavdperf,6,"batch, L 300 ms block",412.1064066126081
+lavdperf,6,"busy p50, L 1000 ms",12.446899
+lavdperf,6,"busy >5 ms, L 1000 ms",79.85894819747253
+lavdperf,6,"batch, L 1000 ms block",351.83239918891286
+lavdperf,6,"busy p50, L 3000 ms",9.622765
+lavdperf,6,"busy >5 ms, L 3000 ms",75.97752951631331
+lavdperf,6,"batch, L 3000 ms block",362.6199630343431
+lavdperf,6,"busy p50, L 10000 ms",11.767669
+lavdperf,6,"busy >5 ms, L 10000 ms",81.2322140011383
+lavdperf,6,"batch, L 10000 ms block",368.0409357237927
+lavdperf,7,"busy p50, all L",7.66425
+lavdperf,7,"busy >5 ms, all L",69.27089154651466
+lavdperf,7,"quiet p50, all L",1.113722
+lavdperf,7,"batch, whole load",397.4646547161698
+lavdperf,7,"busy p50, L 10 ms",3.440452
+lavdperf,7,"busy >5 ms, L 10 ms",27.677996422182467
+lavdperf,7,"batch, L 10 ms block",393.46583730762285
+lavdperf,7,"busy p50, L 30 ms",5.906832
+lavdperf,7,"busy >5 ms, L 30 ms",59.34883386638876
+lavdperf,7,"batch, L 30 ms block",391.1561742019103
+lavdperf,7,"busy p50, L 100 ms",13.014063
+lavdperf,7,"busy >5 ms, L 100 ms",82.01924457848628
+lavdperf,7,"batch, L 100 ms block",350.15653521046465
+lavdperf,7,"busy p50, L 300 ms",16.714463
+lavdperf,7,"busy >5 ms, L 300 ms",86.9804032743896
+lavdperf,7,"batch, L 300 ms block",414.1245594427516
+lavdperf,7,"busy p50, L 1000 ms",8.13031
+lavdperf,7,"busy >5 ms, L 1000 ms",71.4781799305481
+lavdperf,7,"batch, L 1000 ms block",369.7108502233475
+lavdperf,7,"busy p50, L 3000 ms",6.992869
+lavdperf,7,"busy >5 ms, L 3000 ms",68.54132283864415
+lavdperf,7,"batch, L 3000 ms block",388.4853537690147
+lavdperf,7,"busy p50, L 10000 ms",9.580058
+lavdperf,7,"busy >5 ms, L 10000 ms",77.02760387023335
+lavdperf,7,"batch, L 10000 ms block",382.88221057231254
+lavdperf,8,"busy p50, all L",8.111136
+lavdperf,8,"busy >5 ms, all L",71.49551473906006
+lavdperf,8,"quiet p50, all L",1.119414
+lavdperf,8,"batch, whole load",392.5812911945475
+lavdperf,8,"busy p50, L 10 ms",3.870125
+lavdperf,8,"busy >5 ms, L 10 ms",36.311270125223615
+lavdperf,8,"batch, L 10 ms block",386.3011065883305
+lavdperf,8,"busy p50, L 30 ms",6.585255
+lavdperf,8,"busy >5 ms, L 30 ms",64.01696194343623
+lavdperf,8,"batch, L 30 ms block",371.77761034099575
+lavdperf,8,"busy p50, L 100 ms",11.103598
+lavdperf,8,"busy >5 ms, L 100 ms",81.07496768634209
+lavdperf,8,"batch, L 100 ms block",386.1043318437146
+lavdperf,8,"busy p50, L 300 ms",17.610722
+lavdperf,8,"busy >5 ms, L 300 ms",90.16620007796166
+lavdperf,8,"batch, L 300 ms block",396.1446142557621
+lavdperf,8,"busy p50, L 1000 ms",10.854896
+lavdperf,8,"busy >5 ms, L 1000 ms",78.83506963090252
+lavdperf,8,"batch, L 1000 ms block",379.0257021429671
+lavdperf,8,"busy p50, L 3000 ms",7.31205
+lavdperf,8,"busy >5 ms, L 3000 ms",69.69658499428716
+lavdperf,8,"batch, L 3000 ms block",363.8935576163002
+lavdperf,8,"busy p50, L 10000 ms",8.682164
+lavdperf,8,"busy >5 ms, L 10000 ms",75.04553215708594
+lavdperf,8,"batch, L 10000 ms block",381.9075798143579
+lavdperf,9,"busy p50, all L",7.553906
+lavdperf,9,"busy >5 ms, all L",69.40335887469004
+lavdperf,9,"quiet p50, all L",1.114591
+lavdperf,9,"batch, whole load",394.05510923298993
+lavdperf,9,"busy p50, L 10 ms",3.608067
+lavdperf,9,"busy >5 ms, L 10 ms",29.29159212880143
+lavdperf,9,"batch, L 10 ms block",375.0077950249967
+lavdperf,9,"busy p50, L 30 ms",5.911398
+lavdperf,9,"busy >5 ms, L 30 ms",59.85553599022532
+lavdperf,9,"batch, L 30 ms block",393.15103078848244
+lavdperf,9,"busy p50, L 100 ms",10.601665
+lavdperf,9,"busy >5 ms, L 100 ms",82.31724831250898
+lavdperf,9,"batch, L 100 ms block",353.0081942739086
+lavdperf,9,"busy p50, L 300 ms",14.745866
+lavdperf,9,"busy >5 ms, L 300 ms",86.55161416067189
+lavdperf,9,"batch, L 300 ms block",418.5771274853582
+lavdperf,9,"busy p50, L 1000 ms",7.124748
+lavdperf,9,"busy >5 ms, L 1000 ms",69.0330433537393
+lavdperf,9,"batch, L 1000 ms block",357.1537092826853
+lavdperf,9,"busy p50, L 3000 ms",12.38594
+lavdperf,9,"busy >5 ms, L 3000 ms",76.28856163514028
+lavdperf,9,"batch, L 3000 ms block",337.3858411919259
+lavdperf,9,"busy p50, L 10000 ms",8.577691
+lavdperf,9,"busy >5 ms, L 10000 ms",74.19322709163346
+lavdperf,9,"batch, L 10000 ms block",392.57256184500943
+lavdperf,10,"busy p50, all L",10.544308
+lavdperf,10,"busy >5 ms, all L",78.26004164441629
+lavdperf,10,"quiet p50, all L",1.20945
+lavdperf,10,"batch, whole load",361.5198531164286
+lavdperf,10,"busy p50, L 10 ms",4.152974
+lavdperf,10,"busy >5 ms, L 10 ms",40.15742397137746
+lavdperf,10,"batch, L 10 ms block",331.3743046410509
+lavdperf,10,"busy p50, L 30 ms",6.752814
+lavdperf,10,"busy >5 ms, L 30 ms",65.8856506270888
+lavdperf,10,"batch, L 30 ms block",353.335358424735
+lavdperf,10,"busy p50, L 100 ms",12.243362
+lavdperf,10,"busy >5 ms, L 100 ms",84.86284647422089
+lavdperf,10,"batch, L 100 ms block",342.07567480269086
+lavdperf,10,"busy p50, L 300 ms",21.509737
+lavdperf,10,"busy >5 ms, L 300 ms",92.58301144618873
+lavdperf,10,"batch, L 300 ms block",381.47342548696474
+lavdperf,10,"busy p50, L 1000 ms",13.850451
+lavdperf,10,"busy >5 ms, L 1000 ms",86.23849926610103
+lavdperf,10,"batch, L 1000 ms block",343.32516947356436
+lavdperf,10,"busy p50, L 3000 ms",10.388614
+lavdperf,10,"busy >5 ms, L 3000 ms",81.21112098514664
+lavdperf,10,"batch, L 3000 ms block",344.07429070185276
+lavdperf,10,"busy p50, L 10000 ms",13.410916
+lavdperf,10,"busy >5 ms, L 10000 ms",85.45105293113261
+lavdperf,10,"batch, L 10000 ms block",340.30536444192217
+never3,1,"busy p50, all L",3.581631
+never3,1,"busy >5 ms, all L",34.95440226187963
+never3,1,"quiet p50, all L",1.199159
+never3,1,"batch, whole load",334.35893558613975
+never3,1,"busy p50, L 10 ms",3.816028
+never3,1,"busy >5 ms, L 10 ms",36.87656529516995
+never3,1,"batch, L 10 ms block",340.8886756387835
+never3,1,"busy p50, L 30 ms",3.222793
+never3,1,"busy >5 ms, L 30 ms",25.281201710568872
+never3,1,"batch, L 30 ms block",356.518923880507
+never3,1,"busy p50, L 100 ms",3.136419
+never3,1,"busy >5 ms, L 100 ms",26.15611087175068
+never3,1,"batch, L 100 ms block",336.56208067186964
+never3,1,"busy p50, L 300 ms",4.842492
+never3,1,"busy >5 ms, L 300 ms",48.811084730146355
+never3,1,"batch, L 300 ms block",369.61008422728133
+never3,1,"busy p50, L 1000 ms",3.11453
+never3,1,"busy >5 ms, L 1000 ms",28.292700390219455
+never3,1,"batch, L 1000 ms block",316.22797158788205
+never3,1,"busy p50, L 3000 ms",3.316071
+never3,1,"busy >5 ms, L 3000 ms",33.14078964072616
+never3,1,"batch, L 3000 ms block",292.63220828915325
+never3,1,"busy p50, L 10000 ms",3.853389
+never3,1,"busy >5 ms, L 10000 ms",39.40381331815595
+never3,1,"batch, L 10000 ms block",279.46292344356544
+never3,2,"busy p50, all L",4.267204
+never3,2,"busy >5 ms, all L",43.13012017270428
+never3,2,"quiet p50, all L",1.099223
+never3,2,"batch, whole load",389.6910492980498
+never3,2,"busy p50, L 10 ms",4.433776
+never3,2,"busy >5 ms, L 10 ms",44.89087656529517
+never3,2,"batch, L 10 ms block",391.1017282037852
+never3,2,"busy p50, L 30 ms",4.830753
+never3,2,"busy >5 ms, L 30 ms",48.5355949257915
+never3,2,"batch, L 30 ms block",348.5194046878791
+never3,2,"busy p50, L 100 ms",5.299499
+never3,2,"busy >5 ms, L 100 ms",52.31940255636938
+never3,2,"batch, L 100 ms block",344.7634498186642
+never3,2,"busy p50, L 300 ms",5.436395
+never3,2,"busy >5 ms, L 300 ms",53.559658386193696
+never3,2,"batch, L 300 ms block",417.37598051007075
+never3,2,"busy p50, L 1000 ms",3.520496
+never3,2,"busy >5 ms, L 1000 ms",32.9574338595926
+never3,2,"batch, L 1000 ms block",384.1090746569442
+never3,2,"busy p50, L 3000 ms",4.053422
+never3,2,"busy >5 ms, L 3000 ms",40.71346959502348
+never3,2,"batch, L 3000 ms block",378.37609859768025
+never3,2,"busy p50, L 10000 ms",3.803442
+never3,2,"busy >5 ms, L 10000 ms",37.58679567444508
+never3,2,"batch, L 10000 ms block",363.0370563581504
+never3,3,"busy p50, all L",3.576677
+never3,3,"busy >5 ms, all L",34.66462998149597
+never3,3,"quiet p50, all L",1.143432
+never3,3,"batch, whole load",351.9054448434815
+never3,3,"busy p50, L 10 ms",4.177919
+never3,3,"busy >5 ms, L 10 ms",42.27191413237925
+never3,3,"batch, L 10 ms block",311.8542971846208
+never3,3,"busy p50, L 30 ms",3.433167
+never3,3,"busy >5 ms, L 30 ms",28.14173284939088
+never3,3,"batch, L 30 ms block",333.89346397540214
+never3,3,"busy p50, L 100 ms",2.929929
+never3,3,"busy >5 ms, L 100 ms",21.36291828234956
+never3,3,"batch, L 100 ms block",341.3473635783034
+never3,3,"busy p50, L 300 ms",6.673295
+never3,3,"busy >5 ms, L 300 ms",60.618732059959605
+never3,3,"batch, L 300 ms block",357.705907605994
+never3,3,"busy p50, L 1000 ms",2.754307
+never3,3,"busy >5 ms, L 1000 ms",20.910750724948986
+never3,3,"batch, L 1000 ms block",324.9640395964976
+never3,3,"busy p50, L 3000 ms",2.609805
+never3,3,"busy >5 ms, L 3000 ms",16.05941348229021
+never3,3,"batch, L 3000 ms block",343.23149773828357
+never3,3,"busy p50, L 10000 ms",4.111011
+never3,3,"busy >5 ms, L 10000 ms",42.879908935685826
+never3,3,"batch, L 10000 ms block",337.6370776465584
+never3,4,"busy p50, all L",3.332821
+never3,4,"busy >5 ms, all L",30.522542213611846
+never3,4,"quiet p50, all L",1.10787
+never3,4,"batch, whole load",372.83103104510036
+never3,4,"busy p50, L 10 ms",3.42367
+never3,4,"busy >5 ms, L 10 ms",31.960644007155636
+never3,4,"batch, L 10 ms block",380.349830710206
+never3,4,"busy p50, L 30 ms",3.384285
+never3,4,"busy >5 ms, L 30 ms",29.55403025838215
+never3,4,"batch, L 30 ms block",360.99343816646274
+never3,4,"busy p50, L 100 ms",3.070859
+never3,4,"busy >5 ms, L 100 ms",24.989228780697974
+never3,4,"batch, L 100 ms block",365.4029901438139
+never3,4,"busy p50, L 300 ms",4.994928
+never3,4,"busy >5 ms, L 300 ms",49.96987845068925
+never3,4,"batch, L 300 ms block",359.7048614404551
+never3,4,"busy p50, L 1000 ms",2.922576
+never3,4,"busy >5 ms, L 1000 ms",24.784305301972577
+never3,4,"batch, L 1000 ms block",331.1962747216989
+never3,4,"busy p50, L 3000 ms",2.935486
+never3,4,"busy >5 ms, L 3000 ms",24.96191443442935
+never3,4,"batch, L 3000 ms block",335.2960617930158
+never3,4,"busy p50, L 10000 ms",3.31114
+never3,4,"busy >5 ms, L 10000 ms",29.49203187250996
+never3,4,"batch, L 10000 ms block",361.660448047942
+never3,5,"busy p50, all L",3.22523
+never3,5,"busy >5 ms, all L",30.300659438918075
+never3,5,"quiet p50, all L",1.08864
+never3,5,"batch, whole load",375.85994420711
+never3,5,"busy p50, L 10 ms",3.37945
+never3,5,"busy >5 ms, L 10 ms",32.27549194991055
+never3,5,"batch, L 10 ms block",398.9191248922745
+never3,5,"busy p50, L 30 ms",3.299103
+never3,5,"busy >5 ms, L 30 ms",28.274697236496927
+never3,5,"batch, L 30 ms block",364.5585428612424
+never3,5,"busy p50, L 100 ms",2.667651
+never3,5,"busy >5 ms, L 100 ms",18.526497199482982
+never3,5,"batch, L 100 ms block",379.80690778186505
+never3,5,"busy p50, L 300 ms",5.823588
+never3,5,"busy >5 ms, L 300 ms",55.76030334172012
+never3,5,"batch, L 300 ms block",363.0280797155708
+never3,5,"busy p50, L 1000 ms",3.345882
+never3,5,"busy >5 ms, L 1000 ms",32.660294275588015
+never3,5,"batch, L 1000 ms block",298.57629615647954
+never3,5,"busy p50, L 3000 ms",3.644328
+never3,5,"busy >5 ms, L 3000 ms",39.548686047987815
+never3,5,"batch, L 3000 ms block",353.5752823307096
+never3,5,"busy p50, L 10000 ms",2.702003
+never3,5,"busy >5 ms, L 10000 ms",19.6770062606716
+never3,5,"batch, L 10000 ms block",375.89552715785373
+never3,6,"busy p50, all L",3.662337
+never3,6,"busy >5 ms, all L",35.73513157731331
+never3,6,"quiet p50, all L",1.070169
+never3,6,"batch, whole load",372.1160581303457
+never3,6,"busy p50, L 10 ms",3.609347
+never3,6,"busy >5 ms, L 10 ms",34.49731663685152
+never3,6,"batch, L 10 ms block",393.62142872943406
+never3,6,"busy p50, L 30 ms",4.050528
+never3,6,"busy >5 ms, L 30 ms",39.49761023466417
+never3,6,"batch, L 30 ms block",363.71116046665566
+never3,6,"busy p50, L 100 ms",3.458073
+never3,6,"busy >5 ms, L 100 ms",32.55421513715353
+never3,6,"batch, L 100 ms block",363.583868568671
+never3,6,"busy p50, L 300 ms",5.617821
+never3,6,"busy >5 ms, L 300 ms",54.0274283284312
+never3,6,"batch, L 300 ms block",318.8357368662127
+never3,6,"busy p50, L 1000 ms",3.17331
+never3,6,"busy >5 ms, L 1000 ms",28.360720294991587
+never3,6,"batch, L 1000 ms block",373.1086219371551
+never3,6,"busy p50, L 3000 ms",3.706535
+never3,6,"busy >5 ms, L 3000 ms",36.67639964453472
+never3,6,"batch, L 3000 ms block",358.85766783031124
+never3,6,"busy p50, L 10000 ms",3.369417
+never3,6,"busy >5 ms, L 10000 ms",31.162492885600454
+never3,6,"batch, L 10000 ms block",343.9804623935378
+never3,7,"busy p50, all L",2.988869
+never3,7,"busy >5 ms, all L",26.93805910526599
+never3,7,"quiet p50, all L",1.031366
+never3,7,"batch, whole load",393.5031130120505
+never3,7,"busy p50, L 10 ms",3.66734
+never3,7,"busy >5 ms, L 10 ms",36.16100178890876
+never3,7,"batch, L 10 ms block",375.2054616206782
+never3,7,"busy p50, L 30 ms",3.110575
+never3,7,"busy >5 ms, L 30 ms",25.069177417615986
+never3,7,"batch, L 30 ms block",382.22565036959037
+never3,7,"busy p50, L 100 ms",2.480209
+never3,7,"busy >5 ms, L 100 ms",15.869596438316817
+never3,7,"batch, L 100 ms block",387.617654232804
+never3,7,"busy p50, L 300 ms",5.984823
+never3,7,"busy >5 ms, L 300 ms",57.20259399695241
+never3,7,"batch, L 300 ms block",397.999380223764
+never3,7,"busy p50, L 1000 ms",2.462457
+never3,7,"busy >5 ms, L 1000 ms",14.624279526008664
+never3,7,"batch, L 1000 ms block",363.3763982460152
+never3,7,"busy p50, L 3000 ms",2.389256
+never3,7,"busy >5 ms, L 3000 ms",13.761584359527738
+never3,7,"batch, L 3000 ms block",386.74353039644484
+never3,7,"busy p50, L 10000 ms",2.899614
+never3,7,"busy >5 ms, L 10000 ms",27.046101309049515
+never3,7,"batch, L 10000 ms block",373.48812722731446
+never3,8,"busy p50, all L",3.228813
+never3,8,"busy >5 ms, all L",31.1376873688263
+never3,8,"quiet p50, all L",1.046601
+never3,8,"batch, whole load",400.87709339725495
+never3,8,"busy p50, L 10 ms",3.316949
+never3,8,"busy >5 ms, L 10 ms",31.0304114490161
+never3,8,"batch, L 10 ms block",414.33091499902997
+never3,8,"busy p50, L 30 ms",3.171441
+never3,8,"busy >5 ms, L 30 ms",27.16067129047328
+never3,8,"batch, L 30 ms block",376.2041450737736
+never3,8,"busy p50, L 100 ms",2.533138
+never3,8,"busy >5 ms, L 100 ms",17.334482263392218
+never3,8,"batch, L 100 ms block",398.9803857826822
+never3,8,"busy p50, L 300 ms",5.107958
+never3,8,"busy >5 ms, L 300 ms",50.76012615613594
+never3,8,"batch, L 300 ms block",376.2468172714985
+never3,8,"busy p50, L 1000 ms",2.881368
+never3,8,"busy >5 ms, L 1000 ms",29.11251924247306
+never3,8,"batch, L 1000 ms block",357.49453187696025
+never3,8,"busy p50, L 3000 ms",4.003929
+never3,8,"busy >5 ms, L 3000 ms",43.528627650120605
+never3,8,"batch, L 3000 ms block",373.54672291984474
+never3,8,"busy p50, L 10000 ms",2.97856
+never3,8,"busy >5 ms, L 10000 ms",25.596186681844053
+never3,8,"batch, L 10000 ms block",390.2866105053884
+never3,9,"busy p50, all L",4.731744
+never3,9,"busy >5 ms, all L",47.6406326970762
+never3,9,"quiet p50, all L",1.093182
+never3,9,"batch, whole load",389.32385277235613
+never3,9,"busy p50, L 10 ms",5.181847
+never3,9,"busy >5 ms, L 10 ms",51.49552772808587
+never3,9,"batch, L 10 ms block",398.7605122443321
+never3,9,"busy p50, L 30 ms",4.406562
+never3,9,"busy >5 ms, L 30 ms",44.446041614259535
+never3,9,"batch, L 30 ms block",362.6457797584372
+never3,9,"busy p50, L 100 ms",5.547604
+never3,9,"busy >5 ms, L 100 ms",54.441332758868306
+never3,9,"batch, L 100 ms block",375.48251544406344
+never3,9,"busy p50, L 300 ms",6.07499
+never3,9,"busy >5 ms, L 300 ms",57.21676884368688
+never3,9,"batch, L 300 ms block",388.89501857925546
+never3,9,"busy p50, L 1000 ms",4.714845
+never3,9,"busy >5 ms, L 1000 ms",47.34185372140479
+never3,9,"batch, L 1000 ms block",381.33768045554376
+never3,9,"busy p50, L 3000 ms",4.419626
+never3,9,"busy >5 ms, L 3000 ms",44.296686555795354
+never3,9,"batch, L 3000 ms block",354.7485500719429
+never3,9,"busy p50, L 10000 ms",4.239077
+never3,9,"busy >5 ms, L 10000 ms",42.45019920318725
+never3,9,"batch, L 10000 ms block",379.13010767973395
+never3,10,"busy p50, all L",4.249667
+never3,10,"busy >5 ms, all L",43.19718175759307
+never3,10,"quiet p50, all L",1.244544
+never3,10,"batch, whole load",319.8275567077924
+never3,10,"busy p50, L 10 ms",4.408131
+never3,10,"busy >5 ms, L 10 ms",44.67620751341681
+never3,10,"batch, L 10 ms block",293.86791657016215
+never3,10,"busy p50, L 30 ms",3.357828
+never3,10,"busy >5 ms, L 30 ms",26.269450533654364
+never3,10,"batch, L 30 ms block",336.15074839274627
+never3,10,"busy p50, L 100 ms",4.107226
+never3,10,"busy >5 ms, L 100 ms",38.611230791325575
+never3,10,"batch, L 100 ms block",269.87456076022266
+never3,10,"busy p50, L 300 ms",7.254443
+never3,10,"busy >5 ms, L 300 ms",63.33321520961054
+never3,10,"batch, L 300 ms block",353.11202167223666
+never3,10,"busy p50, L 1000 ms",2.780248
+never3,10,"busy >5 ms, L 1000 ms",20.84631081516486
+never3,10,"batch, L 1000 ms block",319.89112891709067
+never3,10,"busy p50, L 3000 ms",2.773756
+never3,10,"busy >5 ms, L 3000 ms",19.77592992255935
+never3,10,"batch, L 3000 ms block",324.0683752762304
+never3,10,"busy p50, L 10000 ms",8.847219
+never3,10,"busy >5 ms, L 10000 ms",62.42743312464428
+never3,10,"batch, L 10000 ms block",276.55804668090224
+pw1000r100,1,"busy p50, all L",1.598867
+pw1000r100,1,"busy >5 ms, all L",11.65546903783184
+pw1000r100,1,"quiet p50, all L",0.960692
+pw1000r100,1,"batch, whole load",335.2963244178258
+pw1000r100,1,"busy p50, L 10 ms",1.440033
+pw1000r100,1,"busy >5 ms, L 10 ms",5.094812164579606
+pw1000r100,1,"batch, L 10 ms block",327.7518909098352
+pw1000r100,1,"busy p50, L 30 ms",1.562763
+pw1000r100,1,"busy >5 ms, L 30 ms",8.020986811370252
+pw1000r100,1,"batch, L 30 ms block",329.45505820500733
+pw1000r100,1,"busy p50, L 100 ms",2.059806
+pw1000r100,1,"busy >5 ms, L 100 ms",21.470630475369813
+pw1000r100,1,"batch, L 100 ms block",288.6257945220161
+pw1000r100,1,"busy p50, L 300 ms",1.535018
+pw1000r100,1,"busy >5 ms, L 300 ms",10.000354371168362
+pw1000r100,1,"batch, L 300 ms block",348.14836370616587
+pw1000r100,1,"busy p50, L 1000 ms",1.470917
+pw1000r100,1,"busy >5 ms, L 1000 ms",9.61228654279884
+pw1000r100,1,"batch, L 1000 ms block",317.818841762891
+pw1000r100,1,"busy p50, L 3000 ms",1.5678
+pw1000r100,1,"busy >5 ms, L 3000 ms",10.454487749143075
+pw1000r100,1,"batch, L 3000 ms block",327.7660176380365
+pw1000r100,1,"busy p50, L 10000 ms",1.664684
+pw1000r100,1,"busy >5 ms, L 10000 ms",13.82896983494593
+pw1000r100,1,"batch, L 10000 ms block",310.217547450247
+pw1000r100,2,"busy p50, all L",1.404587
+pw1000r100,2,"busy >5 ms, all L",9.344328121571891
+pw1000r100,2,"quiet p50, all L",0.922386
+pw1000r100,2,"batch, whole load",355.1426267417526
+pw1000r100,2,"busy p50, L 10 ms",1.319641
+pw1000r100,2,"busy >5 ms, L 10 ms",5.288014311270126
+pw1000r100,2,"batch, L 10 ms block",349.1990018036979
+pw1000r100,2,"busy p50, L 30 ms",1.398536
+pw1000r100,2,"busy >5 ms, L 30 ms",7.675998131311316
+pw1000r100,2,"batch, L 30 ms block",353.66642769110274
+pw1000r100,2,"busy p50, L 100 ms",1.351131
+pw1000r100,2,"busy >5 ms, L 100 ms",6.836133850351859
+pw1000r100,2,"batch, L 100 ms block",350.50082519244035
+pw1000r100,2,"busy p50, L 300 ms",1.600783
+pw1000r100,2,"busy >5 ms, L 300 ms",13.56178461320387
+pw1000r100,2,"batch, L 300 ms block",331.9174782983309
+pw1000r100,2,"busy p50, L 1000 ms",1.297215
+pw1000r100,2,"busy >5 ms, L 1000 ms",5.019152973185838
+pw1000r100,2,"batch, L 1000 ms block",347.58108559389314
+pw1000r100,2,"busy p50, L 3000 ms",1.353538
+pw1000r100,2,"busy >5 ms, L 3000 ms",10.279928906944269
+pw1000r100,2,"batch, L 3000 ms block",329.3640151012083
+pw1000r100,2,"busy p50, L 10000 ms",1.525273
+pw1000r100,2,"busy >5 ms, L 10000 ms",12.218269778030734
+pw1000r100,2,"batch, L 10000 ms block",328.36592157950736
+pw1000r100,3,"busy p50, all L",1.5022
+pw1000r100,3,"busy >5 ms, all L",9.656454263585145
+pw1000r100,3,"quiet p50, all L",0.9683
+pw1000r100,3,"batch, whole load",341.51124117532
+pw1000r100,3,"busy p50, L 10 ms",1.417035
+pw1000r100,3,"busy >5 ms, L 10 ms",5.162790697674419
+pw1000r100,3,"batch, L 10 ms block",332.7334290604606
+pw1000r100,3,"busy p50, L 30 ms",1.642774
+pw1000r100,3,"busy >5 ms, L 30 ms",9.264383512415998
+pw1000r100,3,"batch, L 30 ms block",324.69484727067555
+pw1000r100,3,"busy p50, L 100 ms",1.632267
+pw1000r100,3,"busy >5 ms, L 100 ms",11.288237828522188
+pw1000r100,3,"batch, L 100 ms block",327.4548489292057
+pw1000r100,3,"busy p50, L 300 ms",1.52405
+pw1000r100,3,"busy >5 ms, L 300 ms",12.378184910875651
+pw1000r100,3,"batch, L 300 ms block",337.5404029628591
+pw1000r100,3,"busy p50, L 1000 ms",1.717946
+pw1000r100,3,"busy >5 ms, L 1000 ms",16.94769627322522
+pw1000r100,3,"batch, L 1000 ms block",305.7057414154197
+pw1000r100,3,"busy p50, L 3000 ms",1.455537
+pw1000r100,3,"busy >5 ms, L 3000 ms",8.381998222673607
+pw1000r100,3,"batch, L 3000 ms block",301.8940942604802
+pw1000r100,3,"busy p50, L 10000 ms",1.404023
+pw1000r100,3,"busy >5 ms, L 10000 ms",7.53272623790552
+pw1000r100,3,"batch, L 10000 ms block",335.3669041342078
+pw1000r100,4,"busy p50, all L",1.424321
+pw1000r100,4,"busy >5 ms, all L",9.023094850746578
+pw1000r100,4,"quiet p50, all L",0.968829
+pw1000r100,4,"batch, whole load",347.5356452900057
+pw1000r100,4,"busy p50, L 10 ms",1.346375
+pw1000r100,4,"busy >5 ms, L 10 ms",5.5813953488372094
+pw1000r100,4,"batch, L 10 ms block",328.78378201425045
+pw1000r100,4,"busy p50, L 30 ms",1.378376
+pw1000r100,4,"busy >5 ms, L 30 ms",3.349265102238833
+pw1000r100,4,"batch, L 30 ms block",344.9203342423919
+pw1000r100,4,"busy p50, L 100 ms",1.445462
+pw1000r100,4,"busy >5 ms, L 100 ms",7.209536119488726
+pw1000r100,4,"batch, L 100 ms block",330.4833827902793
+pw1000r100,4,"busy p50, L 300 ms",1.648331
+pw1000r100,4,"busy >5 ms, L 300 ms",13.016053013926786
+pw1000r100,4,"batch, L 300 ms block",345.54326405913116
+pw1000r100,4,"busy p50, L 1000 ms",1.341982
+pw1000r100,4,"busy >5 ms, L 1000 ms",4.893853148605592
+pw1000r100,4,"batch, L 1000 ms block",336.97622775639655
+pw1000r100,4,"busy p50, L 3000 ms",1.326638
+pw1000r100,4,"busy >5 ms, L 3000 ms",3.633997714866066
+pw1000r100,4,"batch, L 3000 ms block",339.0395962196974
+pw1000r100,4,"busy p50, L 10000 ms",1.569634
+pw1000r100,4,"busy >5 ms, L 10000 ms",15.81104154809334
+pw1000r100,4,"batch, L 10000 ms block",319.4340035537953
+pw1000r100,5,"busy p50, all L",1.434739
+pw1000r100,5,"busy >5 ms, all L",8.95768910745998
+pw1000r100,5,"quiet p50, all L",0.901542
+pw1000r100,5,"batch, whole load",365.0434518513179
+pw1000r100,5,"busy p50, L 10 ms",1.35124
+pw1000r100,5,"busy >5 ms, L 10 ms",4.121645796064401
+pw1000r100,5,"batch, L 10 ms block",350.8170088997523
+pw1000r100,5,"busy p50, L 30 ms",1.535661
+pw1000r100,5,"busy >5 ms, L 30 ms",9.052359219463112
+pw1000r100,5,"batch, L 30 ms block",347.627585244783
+pw1000r100,5,"busy p50, L 100 ms",1.53387
+pw1000r100,5,"busy >5 ms, L 100 ms",10.501938819474365
+pw1000r100,5,"batch, L 100 ms block",349.59494089126457
+pw1000r100,5,"busy p50, L 300 ms",1.359297
+pw1000r100,5,"busy >5 ms, L 300 ms",8.749424146851412
+pw1000r100,5,"batch, L 300 ms block",374.77049144816783
+pw1000r100,5,"busy p50, L 1000 ms",1.480352
+pw1000r100,5,"busy >5 ms, L 1000 ms",9.862886191959332
+pw1000r100,5,"batch, L 1000 ms block",347.65115410009753
+pw1000r100,5,"busy p50, L 3000 ms",1.490561
+pw1000r100,5,"busy >5 ms, L 3000 ms",10.517963691760823
+pw1000r100,5,"batch, L 3000 ms block",346.2388933987895
+pw1000r100,5,"busy p50, L 10000 ms",1.401943
+pw1000r100,5,"busy >5 ms, L 10000 ms",9.255833807626637
+pw1000r100,5,"batch, L 10000 ms block",342.19888052360034
+pw1000r100,6,"busy p50, all L",1.314853
+pw1000r100,6,"busy >5 ms, all L",7.413616813415628
+pw1000r100,6,"quiet p50, all L",0.910033
+pw1000r100,6,"batch, whole load",364.62981898300774
+pw1000r100,6,"busy p50, L 10 ms",1.286751
+pw1000r100,6,"busy >5 ms, L 10 ms",3.005366726296959
+pw1000r100,6,"batch, L 10 ms block",355.45842347488673
+pw1000r100,6,"busy p50, L 30 ms",1.31186
+pw1000r100,6,"busy >5 ms, L 30 ms",3.8595608581593415
+pw1000r100,6,"batch, L 30 ms block",348.07927792951625
+pw1000r100,6,"busy p50, L 100 ms",1.287148
+pw1000r100,6,"busy >5 ms, L 100 ms",2.689214419072239
+pw1000r100,6,"batch, L 100 ms block",354.3769796075105
+pw1000r100,6,"busy p50, L 300 ms",1.366029
+pw1000r100,6,"busy >5 ms, L 300 ms",10.404337503100749
+pw1000r100,6,"batch, L 300 ms block",358.27425669374185
+pw1000r100,6,"busy p50, L 1000 ms",1.239322
+pw1000r100,6,"busy >5 ms, L 1000 ms",2.8926359503096695
+pw1000r100,6,"batch, L 1000 ms block",352.3945361427256
+pw1000r100,6,"busy p50, L 3000 ms",1.515085
+pw1000r100,6,"busy >5 ms, L 3000 ms",20.429732131522155
+pw1000r100,6,"batch, L 3000 ms block",335.50274516887606
+pw1000r100,6,"busy p50, L 10000 ms",1.31406
+pw1000r100,6,"busy >5 ms, L 10000 ms",7.206886738759248
+pw1000r100,6,"batch, L 10000 ms block",351.4386510070314
+pw1000r100,7,"busy p50, all L",1.32512
+pw1000r100,7,"busy >5 ms, all L",8.865375938137758
+pw1000r100,7,"quiet p50, all L",0.928816
+pw1000r100,7,"batch, whole load",355.35153319032673
+pw1000r100,7,"busy p50, L 10 ms",1.301842
+pw1000r100,7,"busy >5 ms, L 10 ms",3.1019677996422184
+pw1000r100,7,"batch, L 10 ms block",346.88038122211486
+pw1000r100,7,"busy p50, L 30 ms",1.30668
+pw1000r100,7,"busy >5 ms, L 30 ms",3.378014158910411
+pw1000r100,7,"batch, L 30 ms block",353.3008254873331
+pw1000r100,7,"busy p50, L 100 ms",1.52565
+pw1000r100,7,"busy >5 ms, L 100 ms",10.132126956771506
+pw1000r100,7,"batch, L 100 ms block",314.79408420381236
+pw1000r100,7,"busy p50, L 300 ms",1.334444
+pw1000r100,7,"busy >5 ms, L 300 ms",13.600765441723661
+pw1000r100,7,"batch, L 300 ms block",349.4659276050026
+pw1000r100,7,"busy p50, L 1000 ms",1.338395
+pw1000r100,7,"busy >5 ms, L 1000 ms",15.265098628861919
+pw1000r100,7,"batch, L 1000 ms block",311.22298597254314
+pw1000r100,7,"busy p50, L 3000 ms",1.388877
+pw1000r100,7,"busy >5 ms, L 3000 ms",16.919512504760696
+pw1000r100,7,"batch, L 3000 ms block",320.3326733549375
+pw1000r100,7,"busy p50, L 10000 ms",1.255693
+pw1000r100,7,"busy >5 ms, L 10000 ms",4.77233921457029
+pw1000r100,7,"batch, L 10000 ms block",354.8438353457875
+pw1000r100,8,"busy p50, all L",1.273309
+pw1000r100,8,"busy >5 ms, all L",6.704088686876213
+pw1000r100,8,"quiet p50, all L",0.913814
+pw1000r100,8,"batch, whole load",385.93030224442407
+pw1000r100,8,"busy p50, L 10 ms",1.300948
+pw1000r100,8,"busy >5 ms, L 10 ms",8.053667262969588
+pw1000r100,8,"batch, L 10 ms block",341.2776032745368
+pw1000r100,8,"busy p50, L 30 ms",1.27023
+pw1000r100,8,"busy >5 ms, L 30 ms",3.0545872713551585
+pw1000r100,8,"batch, L 30 ms block",372.50899037380464
+pw1000r100,8,"busy p50, L 100 ms",1.242642
+pw1000r100,8,"busy >5 ms, L 100 ms",2.258365646991239
+pw1000r100,8,"batch, L 100 ms block",376.4372876516439
+pw1000r100,8,"busy p50, L 300 ms",1.268607
+pw1000r100,8,"busy >5 ms, L 300 ms",5.790424891030866
+pw1000r100,8,"batch, L 300 ms block",396.5958271768067
+pw1000r100,8,"busy p50, L 1000 ms",1.24304
+pw1000r100,8,"busy >5 ms, L 1000 ms",5.541832241434862
+pw1000r100,8,"batch, L 1000 ms block",368.4625802031444
+pw1000r100,8,"busy p50, L 3000 ms",1.224947
+pw1000r100,8,"busy >5 ms, L 3000 ms",5.074901612288943
+pw1000r100,8,"batch, L 3000 ms block",373.8356584468211
+pw1000r100,8,"busy p50, L 10000 ms",1.32371
+pw1000r100,8,"busy >5 ms, L 10000 ms",10.93340922026181
+pw1000r100,8,"batch, L 10000 ms block",364.20777836924697
+pw1000r100,9,"busy p50, all L",1.367197
+pw1000r100,9,"busy >5 ms, all L",10.034400109285546
+pw1000r100,9,"quiet p50, all L",0.950009
+pw1000r100,9,"batch, whole load",359.8508252813947
+pw1000r100,9,"busy p50, L 10 ms",1.338758
+pw1000r100,9,"busy >5 ms, L 10 ms",8.221824686940966
+pw1000r100,9,"batch, L 10 ms block",329.6328760048257
+pw1000r100,9,"busy p50, L 30 ms",1.354693
+pw1000r100,9,"busy >5 ms, L 30 ms",5.149674776296402
+pw1000r100,9,"batch, L 30 ms block",342.39249639632953
+pw1000r100,9,"busy p50, L 100 ms",1.314021
+pw1000r100,9,"busy >5 ms, L 100 ms",3.199052132701422
+pw1000r100,9,"batch, L 100 ms block",357.35574162317357
+pw1000r100,9,"busy p50, L 300 ms",1.390058
+pw1000r100,9,"busy >5 ms, L 300 ms",7.937914171303023
+pw1000r100,9,"batch, L 300 ms block",366.05579506224717
+pw1000r100,9,"busy p50, L 1000 ms",1.438182
+pw1000r100,9,"busy >5 ms, L 1000 ms",14.667239465864748
+pw1000r100,9,"batch, L 1000 ms block",322.7920532457524
+pw1000r100,9,"busy p50, L 3000 ms",1.237564
+pw1000r100,9,"busy >5 ms, L 3000 ms",1.8503237273073505
+pw1000r100,9,"batch, L 3000 ms block",358.12200424912703
+pw1000r100,9,"busy p50, L 10000 ms",1.522378
+pw1000r100,9,"busy >5 ms, L 10000 ms",18.067729083665338
+pw1000r100,9,"batch, L 10000 ms block",333.94865999210344
+pw1000r100,10,"busy p50, all L",1.676681
+pw1000r100,10,"busy >5 ms, all L",12.717691425638224
+pw1000r100,10,"quiet p50, all L",1.019512
+pw1000r100,10,"batch, whole load",319.22088215460684
+pw1000r100,10,"busy p50, L 10 ms",1.539854
+pw1000r100,10,"busy >5 ms, L 10 ms",7.602862254025045
+pw1000r100,10,"batch, L 10 ms block",295.48840594049676
+pw1000r100,10,"busy p50, L 30 ms",1.736445
+pw1000r100,10,"busy >5 ms, L 30 ms",12.74661300176088
+pw1000r100,10,"batch, L 30 ms block",304.1436653486785
+pw1000r100,10,"busy p50, L 100 ms",1.896539
+pw1000r100,10,"busy >5 ms, L 100 ms",13.898463306046244
+pw1000r100,10,"batch, L 100 ms block",293.4824421915767
+pw1000r100,10,"busy p50, L 300 ms",1.7163
+pw1000r100,10,"busy >5 ms, L 300 ms",14.965094439916369
+pw1000r100,10,"batch, L 300 ms block",326.98849436816863
+pw1000r100,10,"busy p50, L 1000 ms",1.544009
+pw1000r100,10,"busy >5 ms, L 1000 ms",9.88794615687538
+pw1000r100,10,"batch, L 1000 ms block",322.36260887811045
+pw1000r100,10,"busy p50, L 3000 ms",1.773334
+pw1000r100,10,"busy >5 ms, L 3000 ms",18.189031357115653
+pw1000r100,10,"batch, L 3000 ms block",286.1420312688699
+pw1000r100,10,"busy p50, L 10000 ms",1.650798
+pw1000r100,10,"busy >5 ms, L 10000 ms",12.041832669322709
+pw1000r100,10,"batch, L 10000 ms block",299.78247599593243

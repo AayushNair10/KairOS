@@ -42,6 +42,11 @@ These come from a 4-vCPU VM (Apple M2 host, Linux 7.0):
 `docs/RESEARCH_LOG.md` (section 6.32) has the full results and the
 rules set before the runs.
 
+![Latency against batch throughput per scheduler](docs/report/figures/tradeoff.png)
+
+Medians over 10 reps; whiskers show the interquartile range. Up and to
+the left is better.
+
 **Burst sweep** (busy 3,500 req/s and quiet 500 req/s phases, 10 ms to
 10 s long). Medians:
 
@@ -167,6 +172,15 @@ keep a laptop host awake and plugged in (e.g. `caffeinate` on macOS).
 ./analysis/byburst.py results/<date>-<name> --ref kairos          # burst sweep, per burst length
 ./analysis/bylevel.py results/<date>-<name> --ref kairos          # Azure replay, per load level
 ```
+
+The report's figures need matplotlib, which the other scripts don't:
+
+```sh
+python3 -m venv ~/kairos-data/venv && ~/kairos-data/venv/bin/pip install matplotlib
+~/kairos-data/venv/bin/python analysis/plots.py --png   # -> docs/report/figures/
+```
+
+`plots.py` keeps the per-run numbers it plots in `docs/report/figures/data/`.
 
 ## Layout
 
