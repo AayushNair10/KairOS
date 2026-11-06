@@ -4815,3 +4815,57 @@ comparisons with earlier experiments.
   3 CPUs nearly all the time, so a prediction has almost nothing left to
   decide.
 
+
+### 2026-11-05/06 — Starvation guard, E13's dependency rule; E13, E15, E5 scheduled
+**Did:**
+- `--max-wait-ms` (726ab2a). Tested it under forced starvation (GT) and
+  in a burst-sweep smoke run (GS).
+- `--preempt-dep-us` (36d7a7b), the E13 rule, plus a smoke run (DPS).
+- Configs:
+  - `e13-dep.conf`: 1, 3 and 10 ms windows, plus a guard config;
+  - `e15-pool-burst.conf` and `e15-pool-azure.conf`: pool headroom
+    1.5 vs 0.5 CPU;
+  - `e5-class.conf`: labels vs the run-time rule.
+- `experiments/e13_e15_e5.sh` runs them in priority order with a
+  deadline.
+- Decision rules set in 5.1 before any data.
+- A detached wrapper starts it at 03:00 (deadline 09:30), stopping the
+  apt timers before and starting them after. A loop that checks once a
+  minute reports when it ends; nothing else runs in the VM meanwhile.
+
+**Found:**
+- Under 8 LC busy loops on CPUs 0–2, a batch task got 0 ms in 10 s.
+  With the guard at 2 s it got 13 ms; the guard fired every ~2 s.
+- The guard never fired in the burst sweep.
+- `wait_max_us` can't show starvation: it only records waits that ended.
+- The dependency rule fires for most short LC wakeups: 3,000/s with a
+  1 ms window, 5,800/s with 10 ms.
+
+**Interpretation:**
+- The guard costs nothing measurable where nothing starves, and bounds
+  a wait at ~2 s where something does.
+- Whether the rule beats kairos-pw1000r100 is E13's question.
+  Indications from one rep: latency near kairos's, a few percent less
+  batch.
+
+**Decisions:**
+- (Aayush) The guard threshold is 2 s.
+- (Aayush) The E13 rule as proposed.
+- (Aayush) No more ML work.
+- (Aayush) Focus on this project; the OS is a separate later project.
+- (Aayush, 2026-11-06 01:20) Run the tests from 03:00 to 09:30, with
+  whatever is needed; I take that to include stopping the apt timers for
+  the window.
+
+**Problems:**
+- I rebuilt the binary while GS ran (a comment change only).
+- The first starvation test (4 loops) starved nothing; it needed 8.
+- DPS's 1 ms run was disturbed by host activity.
+
+**Next:**
+- After the run: run checks.
+- Then the stats under the 5.1 rules:
+  - E13 (and the guard check): `--ref kairos-pw1000r100`;
+  - E15: both parts;
+  - E5.
+- Pool sizes and counters, then the log.
