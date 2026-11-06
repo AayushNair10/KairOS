@@ -1061,6 +1061,10 @@ result directories and the rows below keep the labels they ran under
 | GT | 2026-11-05 | 726ab2a's code (run before the commit, which only added a comment) | kairos's main config without and with `--max-wait-ms=2000` | starvation test: 4, then 8 SCHED_NORMAL busy loops and 1 SCHED_BATCH busy loop on CPUs 0–2, 10 s each (`guard-test.sh`) | 1 | scratchpad only (copied to `~/kairos-data/scratchpad-2026-11-05/`) | 8 loops: without the guard the batch loop ran 0 ms in 10 s, with it 13 ms (the guard fired about every 2 s; longest wait 2.004 s). 4 loops starve nothing (section 6.33) |
 | GS | 2026-11-05 | 726ab2a (binary rebuilt during the run; only a comment changed) | kairos-guard, kairos-pw1000r100-guard (`--max-wait-ms=2000`) | `final-burst.conf` with 1 rep | 1 | `results/2026-11-05-guard-smoke/` | Smoke check. The guard fired 0 times in both runs; longest waits 362 and 537 ms; no failed requests (section 6.33) |
 | DPS | 2026-11-05 | 36d7a7b's code (run just before the commit) | kairos-pw1000r100 and with `--preempt-dep-us` 1,000 and 10,000 | `final-burst.conf` with 1 rep | 1 | `results/2026-11-05-dep-smoke/` | Smoke run, Mac in use. The rule fired 3,029/s (1 ms) and 5,840/s (10 ms); preemptions 794 → 3,056 → 5,261/s. The 1 ms run was disturbed (VM share 0.95, server 758 µs per request), so its latency and batch are unusable (section 6.34) |
+| E13 | 2026-11-06 | de9a99f | kairos, kairos-pw1000r100, kairos-pw1000r100-dep1000/-dep3000/-dep10000 (`--preempt-dep-us`), kairos-pw1000r100-guard (`--max-wait-ms=2000`); all with `--claim-borrower` | `e13-dep.conf` (E3's phases); `experiments/e13_e15_e5.sh`, 03:00–05:57, apt timers stopped | 10 | `results/2026-11-06-e13-dep/` | Flagged: kairos-pw1000r100-r10 (VM share 0.33), kairos-r10 (0.32; 14,001 swap-ins), -guard-r10 (3,951 swap-ins), so every comparison has n = 9. Reps 8–9 ran on a slower host that the checks don't catch (section 8). No window passes the rule; kairos-pw1000r100 stays (section 6.35). Guard check: no primary metric worse at p < 0.05, so the guard goes into the main configuration; it never fired (section 6.36) |
+| E15 (burst) | 2026-11-06 | de9a99f | kairos-pw1000r100 (`--lc-buffer-pct=150`), kairos-pw1000r100-buf50 (`--lc-buffer-pct=50`) | `e15-pool-burst.conf` (E3's phases); `experiments/e13_e15_e5.sh`, 05:57–06:52, apt timers stopped | 10 | `results/2026-11-06-e15-pool-burst/` | Flagged (swap-ins): buf50-r2 (14,838), buf50-r3 (7,179), so n = 8. Reps 4–5 and 8–10 on the slower host (section 8). No metric differs at p < 0.05 (section 6.37) |
+| E15 (Azure) | 2026-11-06 | de9a99f (from 07:00 the tree was dirty: RESEARCH_LOG.md only) | as E15 (burst) | `e15-pool-azure.conf` (E2a's replay); started again by hand at 06:57 after the host-speed check stopped it at 06:52 (`night3.sh` in the scratchpad), 06:57–07:38 | 10 | `results/2026-11-06-e15-pool-azure/` | No run flagged. Reps 1–3 on the slower host (section 8). No metric differs at p < 0.05. Pool sizing doesn't pay on this machine (section 6.37) |
+| E5 | 2026-11-06 | de9a99f (tree dirty: RESEARCH_LOG.md only) | kairos-pw1000r100 (`--class=policy`), kairos-pw1000r100-classrun (`--class=run`: batch = ran 20 ms of CPU since it last slept) | `e5-class.conf` (E3's phases); started by hand at 07:40 after the host-speed check stopped it at 06:52 and 07:38 (`night4.sh` in the scratchpad), 07:40–08:36 | 10 | `results/2026-11-06-e5-class/` | No run flagged; server CPU per request 680–762 µs throughout. In rep 1 this Claude session used 8–12% of a CPU (log edits). `--class=run`: busy p50 +120%, busy >5 ms 12.7% → 38.6%, batch +7%, all p ≤ 0.006. The automatic rule doesn't match the labels (section 6.38) |
 
 ### 5.1 Planned experiments
 | # | Experiment | Pattern | Shows |
@@ -2658,6 +2662,172 @@ second over the load:
 - **One rep decides nothing.** At 10 ms the busy p50 is near kairos's
   (F: 1.10 ms), for 4% less batch than kairos-pw1000r100 here.
 
+### 6.35 Dependency rule (E13; 2026-11-06)
+`results/2026-11-06-e13-dep/`, 03:00–05:57, burst sweep, 10 reps. The
+order of configs reverses every rep.
+
+**Run checks (F's):** three runs of rep 10 were flagged.
+- kairos-pw1000r100-r10: VM share 0.33.
+- kairos-r10: VM share 0.32 and 14,001 swap-ins.
+- kairos-pw1000r100-guard-r10: 3,951 swap-ins.
+
+The reference's rep 10 is out, so every comparison has n = 9 (reps 1–9).
+Reps 8 and 9 ran on a slower host, which these checks don't catch
+(section 8). By the rule they stay in.
+
+**Primary metrics**, medians over reps 1–9, against kairos-pw1000r100,
+Holm over the 4 comparisons:
+
+| config | busy p50 (ms) | vs ref, better in | Holm p | busy >5 ms | Holm p | batch (MB/s) | median paired diff | Holm p |
+|---|---|---|---|---|---|---|---|---|
+| kairos-pw1000r100 | 1.31 | | | 7.2% | | 407 | | |
+| kairos | 0.97 | −26%, 9/9 | 0.016 | 5.1% | 0.016 | 378 | −5.7% | 0.016 |
+| …-dep1000 | 1.16 | −17%, 8/9 | 0.39 | 6.0% | 0.39 | 373 | −4.5% | 0.016 |
+| …-dep3000 | 1.07 | −23%, 8/9 | 0.39 | 5.5% | 0.39 | 372 | −4.8% | 0.016 |
+| …-dep10000 | 1.06 | −25%, 8/9 | 0.39 | 6.0% | 0.39 | 371 | −4.9% | 0.027 |
+
+- **No window passes, so kairos-pw1000r100 stays the main
+  configuration.** Each window fails both conditions:
+  - busy p50 is not lower at Holm p < 0.05 (0.39);
+  - batch is 4.5–4.9% lower, past the 2% limit.
+- **The batch condition fails in every clean rep.** In each of reps 1–7,
+  every window had 2.4–10.8% less batch than kairos-pw1000r100 in the
+  same rep. So the outcome doesn't depend on the slowed reps.
+- **The windows sit between kairos-pw1000r100 and kairos.** Preemptions
+  per second, reps 1–7:
+
+  | config | preemptions/s |
+  |---|---|
+  | kairos-pw1000r100 | 797–901 |
+  | dep1000 | 3,436–3,956 |
+  | dep3000 | 4,220–4,673 |
+  | dep10000 | 4,553–5,539 |
+  | kairos | 7,214–8,032 |
+
+  Busy p50 and batch move with the preemption rate, toward kairos. On
+  both medians, dep10000 (1.06 ms, 371 MB/s) is no better than kairos
+  (0.97 ms, 378 MB/s). That pair wasn't tested.
+- **The rule fires for most short LC wakeups.** In reps 1–7:
+  - rule hits (`dep`) per second: 3,481–4,047 at 1 ms and 5,051–6,219
+    at 10 ms;
+  - delayed wakeups in kairos-pw1000r100 (`delayed`): 6,121–6,943 per
+    second.
+
+  `dep` can exceed `preempt`. A hit only means "don't wait". The wakeup
+  then queues if every borrower is already claimed
+  (`claim_victim()` returns −1).
+
+### 6.36 Starvation guard in the burst sweep (E13's guard check; 2026-11-06)
+kairos-pw1000r100-guard (`--max-wait-ms=2000`) against kairos-pw1000r100,
+in E13's runs (`stats.py --configs kairos-pw1000r100
+kairos-pw1000r100-guard`), n = 9, one comparison per metric:
+
+| metric | kairos-pw1000r100 | -guard | median paired diff [95% CI] | guard better in | p |
+|---|---|---|---|---|---|
+| busy p50 (ms) | 1.31 | 1.48 | +0.13 [−0.05, +0.65] | 2/9 | 0.13 |
+| busy >5 ms | 7.2% | 9.3% | +2.0 [−1.0, +8.9] points | 3/9 | 0.20 |
+| batch (MB/s) | 407 | 379 | −21 [−80, +11] | 2/9 | 0.13 |
+
+- **By the rule (5.1) the guard goes into the main configuration.** No
+  primary metric is worse at p < 0.05.
+- **It never fired.** `overdue` was 0 in all 10 guard runs. With nothing
+  overdue, the only difference from kairos-pw1000r100 is the check itself
+  (section 4):
+  - one `scx_bpf_dsq_peek()` of the other shared queue per dispatch;
+  - one task-storage lookup per dispatch.
+- **But it leans worse.** It was worse in 7 of 9 reps on busy p50 and on
+  batch. Most of the difference comes from three reps:
+  - **Reps 5 and 6.** The two guard runs ran back to back, 04:21–04:27,
+    because the order reverses every rep. In those runs:
+    - server CPU per request was 46 and 72 µs above the reference's in
+      the same rep;
+    - busy p50 was 0.55 and 0.66 ms higher.
+  - **Rep 9:** the slowed host (section 8).
+- **Guess:** the lean is a disturbance that hit both back-to-back runs,
+  not the check's cost. The check is two lookups per dispatch, on the
+  order of 100 ns. It can't plausibly add tens of µs of server CPU per
+  request. Not measured.
+- A dedicated overhead run (E7's method) would settle it.
+
+### 6.37 Does sizing the LC pool pay? (E15; 2026-11-06)
+kairos-pw1000r100 (`--lc-buffer-pct=150`: 1.5 CPUs of headroom, pool
+stays at 3) against -buf50 (0.5 CPU, pool can shrink). One comparison per
+metric per workload.
+
+**Pool size**, share of 1 s samples (`nr_lc`):
+
+| workload | config | 1 CPU | 2 CPUs | 3 CPUs | pool changes/s |
+|---|---|---|---|---|---|
+| burst sweep | kairos-pw1000r100 | 0 | 1.2% | 98.8% | 0.03 |
+| burst sweep | -buf50 | 1.0% | 18.5% | 80.5% | 2.69 |
+| Azure | kairos-pw1000r100 | 0 | 1.7% | 98.3% | 0.03 |
+| Azure | -buf50 | 1.5% | 29.3% | 69.2% | 1.42 |
+
+So with 0.5 CPU of headroom the pool does shrink: to 2 CPUs for a fifth
+to under a third of the time. The test exercises the mechanism.
+
+**Burst sweep**, n = 8. buf50-r2 and -r3 were flagged for swap-ins
+(14,838 and 7,179).
+
+| metric | kairos-pw1000r100 | -buf50 | median paired diff [95% CI] | buf50 better in | p |
+|---|---|---|---|---|---|
+| busy p50 (ms) | 1.72 | 1.79 | +0.03 [−0.39, +0.15] | 4/8 | 0.74 |
+| busy >5 ms | 11.8% | 13.2% | +0.6 [−5.0, +3.0] points | 3/8 | 1.00 |
+| batch (MB/s) | 339 | 339 | +6 [−19, +32] | 4/8 | 0.31 |
+
+**Azure replay**, n = 10, none flagged:
+
+| metric | kairos-pw1000r100 | -buf50 | median paired diff [95% CI] | buf50 better in | p |
+|---|---|---|---|---|---|
+| p50 (ms) | 1.08 | 1.08 | +0.00 [−0.03, +0.02] | 4/10 | 0.92 |
+| >5 ms | 1.5% | 2.0% | +0.6 [−1.6, +1.0] points | 3/10 | 0.85 |
+| batch (MB/s) | 480 | 478 | +0 [−10, +16] | 5/10 | 0.85 |
+
+Descriptive: p99 6.09 → 7.22 ms (p = 0.32).
+
+- **By the rule (5.1): sizing the pool to the load doesn't pay on this
+  machine.** On neither workload does -buf50 have more batch at
+  p < 0.05. Nothing else differs at p < 0.05 either. Two workloads gave
+  two chances.
+- **Latency is higher in both parts.** The burst sweep's medians (1.72
+  ms for kairos-pw1000r100) are higher than E13's (1.31). Some of its
+  reps ran on the slowed host (section 8). The pairs are interleaved, so
+  both configs saw it.
+
+### 6.38 Classification without labels (E5; 2026-11-06)
+`results/2026-11-06-e5-class/`, 07:40–08:36, burst sweep, 10 reps, no
+run flagged. kairos-pw1000r100 with labels (`--class=policy`: batch is
+SCHED_BATCH/SCHED_IDLE, which run.sh gives zstd) against the run-time
+rule (`--class=run`: batch once a task has run 20 ms of CPU since it last
+slept). One comparison per metric:
+
+| metric | `--class=policy` | `--class=run` | median paired diff [95% CI] | run better in | p |
+|---|---|---|---|---|---|
+| busy p50 (ms) | 1.73 | 3.78 | +2.07 [+1.50, +2.24] (+120%) | 0/10 | 0.002 |
+| busy >5 ms | 12.7% | 38.6% | +25.9 [+17.9, +27.4] points | 0/10 | 0.002 |
+| batch (MB/s) | 347 | 378 | +23 [+11, +43] (+7%) | 9/10 | 0.006 |
+
+Descriptive: quiet p50 1.04 → 1.19 ms (p = 0.002).
+
+**Counters**, medians of the runs' per-second means:
+
+| counter | `--class=policy` | `--class=run` |
+|---|---|---|
+| borrow starts | 2,903 | 203 |
+| preemptions | 718 | 177 |
+| delayed LC wakeups | 5,529 | 1,408 |
+| LC wakeups with nothing to preempt (`no_victim`) | 17,644 | 21,012 |
+| average wait (µs) | 134 | 226 |
+| class changes to batch | 29.9 | 18.7 |
+
+- **By the rule (5.1): the automatic rule doesn't match the labels.**
+  - It is worse on latency: busy p50 more than doubles, and the busy
+    share over 5 ms triples.
+  - It gives 7% more batch.
+  - Every config keeps `--class=policy`.
+- **Batch rarely borrows under `--class=run`:** 14 times fewer borrow
+  starts. So the LC wakeups have fewer borrowers to preempt.
+
 ## 7. Explanations and insights
 (The "why" behind each result. This is what the report is graded on.)
 
@@ -3350,6 +3520,50 @@ GOMAXPROCS 3 (section 6.31):
     reservation, strict LC priority and how borrowers are preempted.
     They don't come from sizing the pool to the load. With this buffer,
     F doesn't test pool sizing.
+- **Why the dependency rule doesn't single out the wakeups that matter**
+  (E13; the counts are from 6.35, the reason is a guess):
+  - The rule fires for most short wakeups. Measured as hits / (hits +
+    wakeups still delayed), in reps 1–7: 54–56% at 1 ms and 79–82% at
+    10 ms.
+  - **Guess:** in a Go server most threads wake another thread often.
+    The runtime hands work between its OS threads: the network poller,
+    idle threads woken to run new goroutines, worker handoffs. So "woke
+    an LC task in the last W" holds for most short LC tasks. The rule
+    can't tell a request's critical path from routine runtime wakeups.
+    Not checked per thread; E10's `--diag` could.
+  - In effect the rule only sets how many wakeups skip the wait. Each
+    window landed between kairos-pw1000r100 and kairos on the same
+    latency–batch trade-off, not at a better point.
+- **Why a smaller LC pool gains no batch** (E15; a reading of the design,
+  not measured per CPU):
+  - Batch already borrows idle LC CPUs. Shrinking the pool from 3 to 2
+    only moves one CPU from "batch borrows it when it's idle" to "batch
+    owns it".
+  - The gain is the batch work that LC wakeups would have preempted on
+    that CPU. Under kairos-pw1000r100 those preemptions are few: about
+    800/s in E13, against about 6,500 wakeups/s that waited instead.
+  - Against that small gain, the pool must grow back for bursts (2.7
+    changes/s on the burst sweep). Neither effect showed at p < 0.05.
+- **Why the run-time rule hurts latency** (E5; counters from 6.38, the
+  mechanism is a reading of the code):
+  - Under `--class=run` a zstd thread is LC for its first 20 ms of CPU
+    after each sleep or start. Only then is it batch.
+  - There were 18.7 changes to batch per second. Each one follows 20
+    ms run as LC, so about 0.37 CPU of zstd work ran as LC.
+  - While it is LC, a zstd thread:
+    - takes LC CPUs as an LC task, not as a borrower;
+    - can't be preempted by an LC wakeup (only borrowers can);
+    - queues in LC_DSQ by vtime alongside the server.
+  - That fits the counters. LC wakeups found nothing to preempt more
+    often (17,644 → 21,012/s), and the average wait rose from 134 to
+    226 µs.
+  - **Guess:** the extra batch has the same cause. While classed LC,
+    zstd runs on LC CPUs where wakeups can't preempt it. Not measured
+    per CPU.
+  - The labels avoid this because zstd is batch from its first
+    instruction. A better automatic rule would need to classify a task
+    from its history across sleeps, not since its last sleep. Not
+    tried.
 
 ---
 
@@ -3555,6 +3769,41 @@ GOMAXPROCS 3 (section 6.31):
 - **fixed3 doesn't test pool sizing on the burst sweep.** kairos's LC pool
   held 3 CPUs in every 1 s sample, so fixed3 ran the same pool (6.32). F
   has no pool-sizing ablation, and the Azure part has no fixed3.
+- **The host slowed during the night of 2026-11-06, and the run checks
+  missed it.**
+  - **The signal is server CPU per request.** The work per request is
+    fixed in iterations for a whole part, so on slower cores it costs
+    more CPU time:
+    - E13 runs: reps 1–7, 632–727 µs; rep 8, 692–743; rep 9, 736–1,190.
+    - E15 burst, rep medians: reps 1–3, 628–670 µs; reps 4–10, 685–829.
+    - E15 Azure, rep medians: reps 1–3, 916–1,068 µs; reps 4–10,
+      738–796.
+  - **The checks measure time, not speed.** VM share stayed at
+    0.98–1.02 in those runs: the VM got its time, but the time was
+    slower.
+  - **The host-speed check runs only when a part starts** (950
+    iterations/µs). It stopped E15 Azure and E5 at 06:52 (848–893) and
+    E5 again at 07:38 (930). It read 1,035 again 20 s to 3 min later.
+  - **Rep 10 of E13 is a separate problem** (05:41–05:57). There the VM
+    share was 0.32–0.33: the host held the VM back.
+  - **Cause unknown.** Calibration read full speed at 05:57, straight
+    after the slowed rep 9. So heat from the load seems a less likely
+    cause than other work on the Mac between about 05:00 and 07:40
+    (a guess).
+  - **Effect on the decisions:**
+    - E13's outcome holds in each clean rep (6.35).
+    - The guard's lean (6.36) can only shrink without rep 9.
+    - E15 shows no difference on either workload.
+    - No analysis without the slowed reps was run.
+  - **For later runs** (Aayush to decide before they run): also flag a
+    run whose server CPU per request is far above its part's median.
+    In E13's reps 1–7 the spread was about ±7% around the median.
+- **The order puts the same config back to back at rep boundaries.**
+  - The order reverses every rep, so the last config of one rep is the
+    first of the next (the guard at 04:21 and 04:24).
+  - A disturbance of a few minutes can then hit one config twice, as in
+    6.36.
+  - An order that rotates by one config each rep would avoid this.
 
 ---
 
@@ -4869,3 +5118,74 @@ comparisons with earlier experiments.
   - E15: both parts;
   - E5.
 - Pool sizes and counters, then the log.
+
+### 2026-11-06 — E13, the guard check, E15 and E5: runs and results
+**Did:**
+- The night run, 03:00–06:52: E13 with its guard config, then the E15
+  burst sweep.
+- E15 Azure and E5 didn't start at 06:52. The host-speed check read
+  848–893 iterations/µs, below the 950 minimum.
+- Restarted them by hand within the agreed 03:00–09:30 window:
+  - E15 Azure ran 06:57–07:38.
+  - E5 was refused again at 07:38 (930), then ran 07:40–08:36.
+  - The apt timers had been restarted at 06:52 and weren't due until
+    22:26, so they weren't stopped again.
+- Analysis:
+  - F's run checks, plus server CPU per request for every run;
+  - the stats under the 5.1 rules;
+  - pool sizes and counters.
+
+**Found:**
+- **E13:** no dependency window passes. Batch is 4.5–4.9% lower, past
+  the 2% limit, and busy p50 isn't lower at Holm p < 0.05 (0.39).
+- **Guard:** not worse at p < 0.05 on any primary metric (p = 0.13–0.20)
+  and it never fired. But it leans worse, in 7 of 9 reps.
+- **E15:** with 0.5 CPU of headroom the pool does shrink (2 CPUs in
+  18.5% and 29.3% of seconds). Nothing differs at p < 0.05 on either
+  workload.
+- **E5:** `--class=run` doubles busy p50 (1.73 → 3.78 ms) and gives 7%
+  more batch.
+- **The host:**
+  - From about 05:00 to 07:40 it slowed in a way the run checks don't
+    see: VM share stayed about 1.0 while server CPU per request rose by
+    up to 75%.
+  - In E13's rep 10 the host held the VM back (VM share 0.32–0.33).
+
+**Interpretation:**
+- None of the night's candidate changes beats kairos-pw1000r100's
+  latency–batch point:
+  - the dependency rule moves along the trade-off toward kairos;
+  - the run-time rule moves off it, toward much worse latency;
+  - pool sizing doesn't move it at all.
+- The guard is a safety bound, not a performance feature.
+
+**Decisions** (by the rules set in 5.1 before the data):
+- kairos-pw1000r100 stays the main configuration (E13).
+- The guard (`--max-wait-ms=2000`) goes into the main configuration (the
+  guard check). Aayush may want to look at its lean (6.36) before the
+  final configuration is fixed.
+- Pool sizing doesn't pay on this machine, so `--lc-buffer-pct` stays
+  at 150 (E15).
+- Every config keeps `--class=policy` (E5).
+
+**Problems:**
+- **The host slowdown** (section 8). As far as checked, no decision
+  depends on the slowed reps.
+- **My first waiter for the restarted runs watched the wrong PID.** It
+  watched `setsid`'s PID, which exits at once, so the waiter ended
+  immediately. A minute later I replaced it with one watching the
+  script.
+- **I edited this log while E15 Azure and E5 ran.**
+  - That's light work, but in E5's rep 1 this session used 8–12% of a
+    CPU.
+  - The tree was dirty (this file only) for those runs.
+
+**Next:**
+- Aayush: accept the guard's lean, or run a short overhead check.
+- Aayush: whether to add a run check on server CPU per request (section
+  8), set before the next runs.
+- The remaining non-evaluation work:
+  - the final configuration made easy to run, with the guard;
+  - README;
+  - PROJECT_PLAN update;
+  - write-ups, figures, report.
