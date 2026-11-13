@@ -163,8 +163,8 @@ version at the top of `docs/DESIGN_LOG.md`.
     the `Image` built in the VM (copy it out with `limactl copy`). Set up a
     script for whichever we choose.
 - **Kernel trees:** `~/linux-src` (tag matching `uname -r`) is used by the
-  scheduler build. **Don't modify it.** Kairos's kernel lives in its own tree
-  (`~/kairos-linux` or wherever component 0 decides).
+  scheduler build. **Don't modify it.** Kairos's kernel lives in its own tree,
+  `~/kairos-linux` (see "Repository layout").
 - **Resources:** kernel builds are heavy for 4 GB RAM. Use a trimmed config
   (start from `defconfig` and cut, or `tinyconfig` and add), `make -j4`, and
   check free disk space before the first build. If the VM needs more memory
@@ -172,15 +172,25 @@ version at the top of `docs/DESIGN_LOG.md`.
 - sched_ext: kernel must have `CONFIG_SCHED_CLASS_EXT=y` (plus BPF, BTF and
   its dependencies) for Kairos Scheduler to load.
 
-## Repository layout (proposed; update as component 0 decides)
+## Repository layout (decided in component 1; planned parts marked)
 ```
-kernel/        patches + config, or the kernel fork / submodule
-scheduler/     Kairos Scheduler (submodule or port)
-userspace/     init, shell, tools
-image/         initramfs / rootfs build scripts
-scripts/       build.sh, run-qemu.sh, helpers
-docs/          DESIGN_LOG.md, notes
+kernel/upstream  the pinned Linux version: its tag and commit id
+kernel/patches/  our kernel changes as a patch series (the source of truth)
+scheduler/       Kairos Scheduler, a git submodule at a pinned commit
+                 (its code is in scheduler/scheduler/)
+scripts/         kernel-fetch.sh, kernel-export.sh, kernel-check.sh, lib.sh
+docs/            DESIGN_LOG.md, notes
+userspace/       (planned) init, shell, tools
+image/           (planned) initramfs / rootfs build scripts
 ```
+- The Linux source isn't in this repo. `scripts/kernel-fetch.sh` builds the
+  working tree `~/kairos-linux` from `kernel/upstream` plus
+  `kernel/patches/` (`--from ~/linux-src` avoids the download).
+- A kernel change: commit it on the `kairos` branch of `~/kairos-linux`
+  (with `-s`), run `scripts/kernel-export.sh`, then
+  `scripts/kernel-check.sh`, then commit the patch file here.
+- Policy changes made for the OS go on a branch of the scheduler repo, so
+  its `main` stays as evaluated; then move the submodule pin.
 
 ## Coding rules
 - C for kernel and init code; follow kernel coding style for kernel changes
