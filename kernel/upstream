@@ -1,0 +1,9 @@
+# The Linux version Kairos is built on. Read by the scripts in scripts/.
+#
+# The tag is the release's name. The commit id is a hash of that release's
+# files and of all the history behind them, so the same id always means the
+# same source. A tag is only a name and could be moved; the scripts check
+# that the tag still points at this id.
+KERNEL_TAG=v7.0
+KERNEL_COMMIT=028ef9c96e96197026887c0f092424679298aae8
+KERNEL_URL=https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
