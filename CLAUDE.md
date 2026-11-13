@@ -47,11 +47,9 @@ there and wait for me.** Don't merge stages to save time.
 - What we are building next, in a few short paragraphs.
 - Why it comes next (what it depends on, what depends on it).
 - Where it sits in the OS (draw a small ASCII diagram if it helps).
-- **What Linux already does here:** the concept, the main subsystems,
-  structs and functions involved, and their paths in the kernel tree (e.g.
-  `init/main.c`, `kernel/sched/core.c`, `mm/`, `fs/`). Explain the flow
-  (who calls what, in what order, which data structures change), not the
-  code line by line.
+- **What Linux already does here:** the concept and the main subsystems, in
+  plain words. Explain the flow (what happens, in what order, what state
+  changes), not the code.
 
 ### 2. Design choices — STOP
 - Give **3 to 4 genuinely different design options**, labelled A, B, C, D.
@@ -114,6 +112,11 @@ End with "Ready to implement?" and **STOP**.
 - Update `docs/DESIGN_LOG.md` (template below), then commit.
 
 ### Other rules for the loop
+- **Explain in plain words.** This is a personal project, and I want the
+  concepts, not the code. Don't build explanations around function, struct
+  or variable names. Name a file or a function only when I need it to find
+  something. The names go in `docs/DESIGN_LOG.md` ("Linux concepts
+  learned"), as a reference.
 - If I ask a side question mid-component, answer it, then say which stage we
   were at and continue from there.
 - If a component turns out too big, propose splitting it before stage 2.
