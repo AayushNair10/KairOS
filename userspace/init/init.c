@@ -8,8 +8,9 @@
  * What it does:
  *   - mounts the file systems through which the kernel shows its own
  *     information;
- *   - starts the shell. With the word kairos.test on the kernel's command
- *     line it starts /selftest instead, for an unattended boot test;
+ *   - starts the shell, with the terminal behind the console as its own.
+ *     With the word kairos.test on the kernel's command line it starts
+ *     /selftest instead, for an unattended boot test;
  *   - collects every process that finishes, and starts a new shell when the
  *     shell was one of them.
  *
@@ -25,6 +26,7 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/ioctl.h>
 #include <sys/mount.h>
 #include <sys/utsname.h>
 #include <sys/wait.h>
@@ -102,16 +104,52 @@ static int on_command_line(const char *word)
 }
 
 /*
+ * Open the device behind the console. Returns a file descriptor, or -1.
+ *
+ * /dev/console is a stand-in name for "wherever the kernel's messages go".
+ * It can be read and written, but the kernel never lets it be a process's
+ * controlling terminal, and Ctrl-C only works through one. The kernel tells
+ * us which real device is behind it. Here that is the serial port, ttyAMA0.
+ */
+static int open_terminal(void)
+{
+	char names[256], path[300];
+	char *name;
+	ssize_t n;
+	int fd;
+
+	fd = open("/sys/class/tty/console/active", O_RDONLY);
+	if (fd < 0)
+		return -1;
+	n = read(fd, names, sizeof(names) - 1);
+	close(fd);
+	if (n <= 0)
+		return -1;
+	names[n] = '\0';
+	names[strcspn(names, "\n")] = '\0';
+
+	/* If there are several, the last one is behind /dev/console. */
+	name = strrchr(names, ' ');
+	name = name ? name + 1 : names;
+
+	snprintf(path, sizeof(path), "/dev/%s", name);
+	/* O_NOCTTY: just open it. Taking it as the terminal is a step apart. */
+	return open(path, O_RDWR | O_NOCTTY);
+}
+
+/*
  * Start a program as a new process. Returns the new process's id, or 0 if
  * there is no new process.
  *
  * Starting a program takes two steps. fork() makes a copy of this process.
- * The copy then replaces itself with the program, with execv().
+ * The copy then replaces itself with the program, with execv(). In between,
+ * the copy sets up what the program should find when it starts.
  */
 static pid_t start(const char *program)
 {
 	char *const argv[] = { (char *)program, NULL };
 	pid_t pid;
+	int tty;
 
 	pid = fork();
 	if (pid < 0) {
@@ -127,6 +165,33 @@ static pid_t start(const char *program)
 	 * starts. Lift it.
 	 */
 	sigprocmask(SIG_UNBLOCK, &wanted, NULL);
+
+	/*
+	 * Give the program a terminal of its own.
+	 *
+	 * A session is a group of processes that share one terminal: a shell
+	 * and what was started from it. setsid() makes this process the
+	 * leader of a new session, which has no terminal yet. TIOCSCTTY then
+	 * takes the device as the session's terminal; only a session leader
+	 * may do that. From then on Ctrl-C typed there becomes a signal to
+	 * whatever the shell is running in the foreground.
+	 *
+	 * Last, the device becomes the program's input, output and error
+	 * output. Init itself stays on /dev/console. When a session's leader
+	 * finishes, the kernel hangs up the terminal for everyone who has it
+	 * open, but not for those who opened it as the console.
+	 */
+	setsid();
+	tty = open_terminal();
+	if (tty >= 0 && ioctl(tty, TIOCSCTTY, 0) == 0) {
+		dup2(tty, STDIN_FILENO);
+		dup2(tty, STDOUT_FILENO);
+		dup2(tty, STDERR_FILENO);
+	} else {
+		say("no terminal for %s; Ctrl-C won't work", program);
+	}
+	if (tty > STDERR_FILENO)
+		close(tty);
 
 	execv(program, argv);
 	say("can't run %s: %s", program, strerror(errno));

@@ -23,6 +23,15 @@ echo "kairos.test: sched_ext $(cat /sys/kernel/sched_ext/state 2>/dev/null || ec
 sleep 1
 echo "kairos.test: leftovers $(cat /proc/[0-9]*/status 2>/dev/null | grep -c '^State:.Z')"
 
+# The terminal. /dev/tty stands for "the terminal of whoever opens it", and
+# a process that has none can't open it. Without a terminal, Ctrl-C has no
+# way to reach the programs a shell runs.
+if (: </dev/tty) 2>/dev/null; then
+	echo "kairos.test: terminal $(tty)"
+else
+	echo "kairos.test: terminal none"
+fi
+
 echo "kairos.test: done"
 
 # Init can't shut the system down yet, so cut the power from here.

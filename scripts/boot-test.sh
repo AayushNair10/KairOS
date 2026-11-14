@@ -18,6 +18,7 @@
 #   devices    the kernel filled in /dev
 #   sched_ext  the kernel can take a BPF scheduler, and none is loaded
 #   leftovers  init collected a finished process that it had adopted
+#   terminal   init gave the program it started a terminal of its own
 #   poweroff   the system powered off by itself, without a panic
 #
 # It exits with 0 only if every check passes.
@@ -114,6 +115,12 @@ if [ "$leftovers" = 0 ]; then
 else
 	bad leftovers "${leftovers:-unknown number of} finished process(es) not collected"
 fi
+
+terminal=$(fact terminal)
+case $terminal in
+/dev/*) ok terminal "init gave the self-test the terminal $terminal" ;;
+*) bad terminal "the self-test had no terminal" ;;
+esac
 
 if grep -q 'Kernel panic' "$log"; then
 	bad poweroff "$(grep -m 1 'Kernel panic' "$log" | tr -d '\r' | cut -c1-90)"
