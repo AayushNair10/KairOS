@@ -8,8 +8,8 @@
 #
 # The kernel is started with the word kairos.test on its command line. The
 # first program then runs /selftest in place of the shell, which prints a few
-# facts, and the system powers off (see image/selftest). The console's output
-# is kept in ~/kairos-build/boot-test.log.
+# facts, and shuts the system down when it ends (see image/selftest). The
+# console's output is kept in ~/kairos-build/boot-test.log.
 #
 # The checks:
 #   kernel     the kernel that booted calls itself "...-kairos"
@@ -19,6 +19,8 @@
 #   sched_ext  the kernel can take a BPF scheduler, and none is loaded
 #   leftovers  init collected a finished process that it had adopted
 #   terminal   init gave the program it started a terminal of its own
+#   shutdown   before the power went off, init asked a program that was
+#              still running to finish
 #   poweroff   the system powered off by itself, without a panic
 #
 # It exits with 0 only if every check passes.
@@ -121,6 +123,12 @@ case $terminal in
 /dev/*) ok terminal "init gave the self-test the terminal $terminal" ;;
 *) bad terminal "the self-test had no terminal" ;;
 esac
+
+if [ "$(fact shutdown)" = asked ]; then
+	ok shutdown "init asked a running program to finish first"
+else
+	bad shutdown "the power went off under a running program"
+fi
 
 if grep -q 'Kernel panic' "$log"; then
 	bad poweroff "$(grep -m 1 'Kernel panic' "$log" | tr -d '\r' | cut -c1-90)"

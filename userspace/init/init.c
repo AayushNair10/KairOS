@@ -12,7 +12,10 @@
  *     With the word kairos.test on the kernel's command line it starts
  *     /selftest instead, for an unattended boot test;
  *   - collects every process that finishes, and starts a new shell when the
- *     shell was one of them.
+ *     shell was one of them;
+ *   - shuts the system down in order when it is signalled to: asks every
+ *     process to finish, waits for them, and only then tells the kernel to
+ *     power off, reboot or halt.
  *
  * Process 1 must never finish. The kernel panics if it does.
  */
@@ -28,11 +31,15 @@
 #include <unistd.h>
 #include <sys/ioctl.h>
 #include <sys/mount.h>
+#include <sys/reboot.h>
 #include <sys/utsname.h>
 #include <sys/wait.h>
 
 #define SHELL		"/bin/sh"
 #define SELFTEST	"/selftest"
+
+/* How many seconds a process gets to finish when it is asked to. */
+#define PATIENCE	5
 
 /*
  * The signals init wants. It asks the kernel to hold them back ("blocks"
@@ -199,14 +206,15 @@ static pid_t start(const char *program)
 }
 
 /*
- * Collect every process that has finished.
+ * Collect every process that has finished. Returns 1 while other processes
+ * are still running, and 0 once there is no process left at all.
  *
  * A finished process stays in the kernel's process table, holding its exit
  * status, until its parent asks for it. Init is the parent of the process it
  * started and of every process whose own parent finished first: the kernel
  * hands those to process 1.
  */
-static void collect(void)
+static int collect(void)
 {
 	pid_t pid;
 
@@ -217,6 +225,89 @@ static void collect(void)
 	while ((pid = waitpid(-1, NULL, WNOHANG)) > 0)
 		if (pid == shell)
 			shell = 0;
+
+	/*
+	 * 0 means init still has children, all of them running. Otherwise it
+	 * has none. Every process without a parent becomes init's child, so
+	 * "init has no children" means "nothing else is running".
+	 */
+	return pid == 0;
+}
+
+/*
+ * Wait until no process is left, but no longer than limit seconds. Returns
+ * 1 if they all finished in time.
+ */
+static int all_finished_within(int limit)
+{
+	struct timespec now, left, end;
+	sigset_t finished;
+
+	sigemptyset(&finished);
+	sigaddset(&finished, SIGCHLD);
+
+	clock_gettime(CLOCK_MONOTONIC, &end);
+	end.tv_sec += limit;
+
+	while (collect()) {
+		clock_gettime(CLOCK_MONOTONIC, &now);
+		left.tv_sec = end.tv_sec - now.tv_sec;
+		left.tv_nsec = end.tv_nsec - now.tv_nsec;
+		if (left.tv_nsec < 0) {
+			left.tv_sec--;
+			left.tv_nsec += 1000000000L;
+		}
+		if (left.tv_sec < 0)
+			return 0;
+		/* Sleep until a process finishes or the time is up. */
+		sigtimedwait(&finished, NULL, &left);
+	}
+	return 1;
+}
+
+/*
+ * Shut the system down. This doesn't return.
+ *
+ * The kernel's reboot call does only the last step: it stops the machine
+ * there and then. It doesn't tell any process, and it doesn't write out data
+ * that is still only in memory. Doing those first is init's job.
+ */
+__attribute__((noreturn))
+static void shut_down(int how, const char *what)
+{
+	say("%s: asking every process to finish", what);
+	/*
+	 * -1 means every process except process 1. SIGTERM is the request to
+	 * finish; a program may catch it and tidy up first. SIGCONT wakes the
+	 * processes that were stopped (Ctrl-Z), which couldn't act on the
+	 * request otherwise.
+	 */
+	kill(-1, SIGTERM);
+	kill(-1, SIGCONT);
+	/*
+	 * A shell that someone is typing into ignores SIGTERM, so that a
+	 * stray one can't log them out. Tell ours that its session is over
+	 * with SIGHUP, the signal a shell gets when its terminal goes away.
+	 * When it finishes, the kernel passes the hang-up on to whatever the
+	 * shell was running in the foreground.
+	 */
+	if (shell)
+		kill(shell, SIGHUP);
+
+	if (all_finished_within(PATIENCE)) {
+		say("every process has finished");
+	} else {
+		say("some are still running after %d s; stopping them", PATIENCE);
+		kill(-1, SIGKILL);	/* this one can't be caught or refused */
+		all_finished_within(PATIENCE);
+	}
+
+	sync();		/* write out what the file systems hold only in memory */
+	reboot(how);
+
+	say("the kernel refused: %s", strerror(errno));
+	for (;;)
+		pause();
 }
 
 /* Seconds since the system started. */
@@ -249,18 +340,25 @@ int main(void)
 	uname(&kernel);
 	say("Kairos on Linux %s", kernel.release);
 
+	/*
+	 * The last three are what busybox's halt, poweroff and reboot
+	 * commands send to process 1.
+	 */
 	sigemptyset(&wanted);
 	sigaddset(&wanted, SIGCHLD);	/* a child process has finished */
+	sigaddset(&wanted, SIGUSR1);	/* halt */
+	sigaddset(&wanted, SIGUSR2);	/* power off */
+	sigaddset(&wanted, SIGTERM);	/* reboot */
 	sigprocmask(SIG_BLOCK, &wanted, NULL);
 
 	test = on_command_line("kairos.test");
 
 	for (;;) {
-		/*
-		 * No shell: start one. The self-test runs only once (it cuts
-		 * the power itself for now).
-		 */
-		if (!shell && !(test && started >= 0)) {
+		if (!shell) {
+			/* The self-test runs once, then the system powers off. */
+			if (test && started >= 0)
+				shut_down(RB_POWER_OFF, "power off");
+
 			if (started >= 0)
 				say("starting the shell again");
 			/* At most one start a second, in case it can't run. */
@@ -273,7 +371,16 @@ int main(void)
 		}
 
 		/* Sleep until one of the signals arrives. */
-		sigwaitinfo(&wanted, NULL);
-		collect();
+		switch (sigwaitinfo(&wanted, NULL)) {
+		case SIGCHLD:
+			collect();
+			break;
+		case SIGUSR1:
+			shut_down(RB_HALT_SYSTEM, "halt");
+		case SIGUSR2:
+			shut_down(RB_POWER_OFF, "power off");
+		case SIGTERM:
+			shut_down(RB_AUTOBOOT, "reboot");
+		}
 	}
 }

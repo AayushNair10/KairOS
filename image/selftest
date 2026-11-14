@@ -32,7 +32,25 @@ else
 	echo "kairos.test: terminal none"
 fi
 
-echo "kairos.test: done"
+# Shutdown. This leaves a program running after the script has ended. When
+# the system shuts down, init should ask it to finish (the TERM signal) and
+# give it time, and not cut the power under it. The program says when it is
+# asked.
+#
+# When this script ends, the kernel hangs up its terminal: programs still
+# using it get the HUP signal and can't write to it any more. So the program
+# ignores HUP, which it inherits from here, and writes to the console.
+#
+# The script ends right after this, and the shutdown follows at once. So it
+# waits until the program has said, by making a file, that it is ready for
+# the signal.
+trap '' HUP
+(
+	trap 'echo "kairos.test: shutdown asked"; exit 0' TERM
+	: >/selftest.ready
+	while :; do sleep 1; done
+) </dev/null >/dev/console 2>&1 &
+while [ ! -e /selftest.ready ]; do sleep 0.1; done
 
-# Init can't shut the system down yet, so cut the power from here.
-poweroff -f
+echo "kairos.test: done"
+# Init powers the system off when this script ends.
