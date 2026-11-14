@@ -9,15 +9,17 @@ It has three parts:
 
 - **The kernel:** upstream Linux at a pinned version, plus a short series of
   our own patches (`kernel/`).
-- **User space:** our own init and tools (planned).
+- **User space:** our own init (`userspace/init/`). The shell and tools are
+  busybox's for now.
 - **The scheduler:** a BPF program on Linux's sched_ext, kept in its own
   repository and pinned here (`scheduler/`).
 
 ## Status
 
-Early. A minimal Kairos kernel builds and boots in QEMU to a shell, and it
-can take a BPF scheduler. The scheduler isn't loaded yet, there are no
-kernel patches yet, and the shell and tools are busybox's for now. The
+Early. A minimal Kairos kernel builds and boots in QEMU, and Kairos's own
+init runs as its first process. The kernel can take a BPF scheduler, but the
+scheduler isn't loaded yet. There are no kernel patches yet, and the shell
+and tools are busybox's for now. The
 roadmap, and the reasoning behind each decision, are in
 [`docs/DESIGN_LOG.md`](docs/DESIGN_LOG.md).
 
@@ -27,7 +29,9 @@ roadmap, and the reasoning behind each decision, are in
 kernel/upstream    the pinned Linux version: its tag and commit id
 kernel/patches/    our kernel changes, one numbered patch file each
 kernel/config/     the kernel's config: a starting point and our switches
-image/             the first file system: its list of files, and /init
+userspace/init/    Kairos's init: the first program the kernel starts
+image/             the first file system: its list of files, the boot test's
+                   self-test, and a fallback first program
 scheduler/         Kairos Scheduler, a git submodule at a pinned commit
 scripts/           the scripts below
 docs/              DESIGN_LOG.md: the roadmap and one entry per component
@@ -42,9 +46,9 @@ qemu-system-arm busybox-static`.
 ```sh
 ./scripts/kernel-fetch.sh    # once: Linux at the pinned version + our patches
 ./scripts/kernel-build.sh    # put the config together and build the kernel
-./scripts/image-build.sh     # pack the first file system
+./scripts/image-build.sh     # compile init and pack the first file system
 ./scripts/boot-test.sh       # boot unattended and check what the console says
-./scripts/run-qemu.sh        # boot to a shell; "poweroff -f" leaves
+./scripts/run-qemu.sh        # boot to a shell; "poweroff" leaves
 ```
 
 Everything built goes to `~/kairos-build` (set `KAIROS_BUILD` for another
@@ -76,3 +80,21 @@ optional switch off. `kernel/config/kairos.config` holds our switches on top
 of it, each group with what it is for and what happened without it.
 `kernel-build.sh` stops if one of our switches doesn't make it into the
 final config.
+
+## Init
+
+`userspace/init/init.c` is the first program the kernel starts, and the
+parent of everything else. It:
+
+- mounts the file systems through which the kernel shows its own
+  information;
+- starts a shell, on the terminal behind the console, and starts a new one
+  when that shell ends;
+- collects every process that finishes, including the ones it adopted
+  because their parent finished first;
+- on `poweroff`, `reboot` or `halt`, asks every process to finish, waits,
+  stops by force what is left, and only then tells the kernel.
+
+`boot-test.sh` checks each of these on a running system. If init is ever
+broken, `./scripts/run-qemu.sh rdinit=/init.fallback` boots with a shell
+script in its place.

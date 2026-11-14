@@ -183,20 +183,29 @@ scheduler/       Kairos Scheduler, a git submodule at a pinned commit
                  (its code is in scheduler/scheduler/)
 kernel/config/   the kernel config: base (a starting point that ships with
                  Linux: allnoconfig) and kairos.config (our switches)
-image/           the first file system: initramfs.list (its files) and init
-                 (a busybox shell script for now)
+image/           the first file system: initramfs.list (its files), selftest
+                 (what a boot test runs in place of the shell) and
+                 init.fallback (a shell script that can stand in for init:
+                 boot with rdinit=/init.fallback)
 scripts/         kernel-fetch.sh, kernel-export.sh, kernel-check.sh,
                  kernel-build.sh, image-build.sh, run-qemu.sh, boot-test.sh,
                  lib.sh
 docs/            DESIGN_LOG.md, notes
-userspace/       (planned) init, shell, tools
+userspace/       init/init.c: Kairos's init, process 1, one statically
+                 linked C program. Planned: shell, tools
 ```
 - Build and boot: `scripts/kernel-build.sh` (config + build into
   `~/kairos-build`; `--config-only` to check the config),
-  `scripts/image-build.sh` (the initramfs archive), `scripts/boot-test.sh`
+  `scripts/image-build.sh` (compiles init, packs the initramfs archive
+  with busybox's tools linked into `/bin`), `scripts/boot-test.sh`
   (unattended boot, checks the console; `--smp N` and extra kernel
   command-line words are passed on), `scripts/run-qemu.sh` (a shell;
   `--log FILE` runs unattended).
+- A new behaviour of init gets a fact printed by `image/selftest` and a
+  check in `scripts/boot-test.sh`. Add the check first and show it failing,
+  then make the change. Words for user space on the kernel's command line
+  have a dot in them (`kairos.test`); the kernel doesn't pass those to init,
+  so init reads `/proc/cmdline`.
 - A new kernel switch goes in `kernel/config/kairos.config` with what it is
   for and what happened without it. `kernel-build.sh` stops if the config
   system drops it.

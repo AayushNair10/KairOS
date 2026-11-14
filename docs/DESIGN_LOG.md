@@ -14,7 +14,7 @@ and the scheduling policy as a BPF program on sched_ext.
 | 0 | What kind of OS Kairos is (done) | the boot path; scheduling classes | none |
 | 1 | Source layout: how Linux and the scheduler live in the repo (done) | how kernel changes are carried: tags, patch series, forks | none |
 | 2 | Kernel config and first boot in QEMU, to a busybox shell (done) | Kconfig, kbuild, device tree, initramfs, console | config only |
-| 3 | Our own init (PID 1) | processes: fork, exec, wait, signals, reaping; mounting /proc, /sys, /dev | none |
+| 3 | Our own init (PID 1) (done) | processes: fork, exec, wait, signals, reaping; sessions and terminals; orderly shutdown; mounting /proc, /sys, /dev | none |
 | 4 | Kairos Scheduler loaded and supervised by init | the bpf() syscall, struct_ops attach, BTF; what an ejection does | none |
 | 5 | Shell and a service manager that sets task classes | sessions and terminals, cgroups, scheduling policies | none |
 | 6 | Task class as a kernel concept (syscall or cgroup file, visible to BPF) | syscall entry, task_struct, user ABI, kfuncs | patch |
@@ -412,4 +412,178 @@ Open questions / next:
 - The scripts build for arm64 only.
 - With patches in the series the kernel will call itself `7.0.0-kairos+`;
   the build adds the plus when the tree isn't exactly at a release tag.
+- Disk: 8.1 GB free.
+
+---
+
+## 3. Our own init — 2026-11-14
+
+Options (what runs as process 1):
+- A: busybox's own init, driven by a short table of what to run at start,
+  what to keep running and what to do at shutdown. No code of ours.
+- B: a minimal init in C that does only what process 1 must: set up, start
+  one shell with a terminal, collect finished processes, restart the shell,
+  shut down in order. Service management is a separate program, later.
+- C: a full init in C with service management inside process 1 (service
+  descriptions, ordering, restart policies, LC or batch per service).
+
+My pick and reasoning:
+- A: "A seems to be good enough, since this is the core. Let us not take
+  risk. Also, I dont think there is much more to learn by coding this
+  through B and C."
+- After the verdict: "ok lets go with B".
+
+Verdict: B.
+- "No risk in the core" is the right principle in production, where a
+  crash of process 1 takes the machine down. Here a crash costs a
+  one-second reboot in an emulator, the boot test catches a broken init
+  before it is committed, and the old script stays in the image as a
+  fallback (`rdinit=/init.fallback`).
+- "Not much more to learn" was wrong for B: its code is almost all about
+  processes (starting, collecting, signals, terminals, shutdown), which is
+  the "processes" item of goal 1. It was partly right for C, where much of
+  the code is reading files and bookkeeping.
+- Right: rejecting C, which puts the most code where a bug is a panic.
+- Missed: Kairos was defined in component 0 as having "our own init and
+  user space". With A, user space is entirely busybox. A also can't mark a
+  program as batch: this busybox has no tool for setting a scheduling
+  class.
+
+Where the others fit:
+- A: systems where init isn't the point and proven code matters most:
+  embedded devices, Alpine.
+- C: systems whose value is in service management: systemd on the big
+  distributions, Android's init, launchd on macOS.
+- B's own relatives: tini in containers, and the small process 1 of runit
+  and s6.
+
+Linux concepts learned:
+- Starting a program: `fork()` makes a copy, `execv()` replaces the copy's
+  program. The copy sets itself up in between (signal mask, session,
+  terminal, input and output).
+- Finished processes: a process stays in the table (state Z,
+  `EXIT_ZOMBIE`) until its parent collects it with `waitpid()`.
+  `waitpid(-1, NULL, WNOHANG)` in a loop collects all that are ready.
+  `ECHILD` means the caller has no children.
+- Adoption: when a parent finishes first, `forget_original_parent()` and
+  `find_new_reaper()` in `kernel/exit.c` give its children to process 1
+  (or to a nearer process that asked for them with
+  `PR_SET_CHILD_SUBREAPER`).
+- The rules for process 1: `do_exit()` panics with "Attempted to kill
+  init!"; `sig_task_ignored()` in `kernel/signal.c` drops a signal whose
+  handling process 1 has left at the default (`SIGNAL_UNKILLABLE`), and
+  SIGKILL and SIGSTOP always; `sig_ignored()` keeps any signal that is
+  blocked.
+- Signals without handlers: `sigprocmask(SIG_BLOCK)` to hold signals back,
+  `sigwaitinfo()` and `sigtimedwait()` to take them one at a time. The mask
+  is inherited across `fork()` and `execv()`, so the child lifts it.
+  Several SIGCHLD can merge into one.
+- The kernel command line: `unknown_bootoption()` in `init/main.c` passes
+  unknown words to init as arguments, or as environment if they have "=".
+  Words with a dot are taken for module settings and dropped, so user
+  space reads them from `/proc/cmdline`.
+- Terminals: a session (`setsid()`) is a group of processes sharing one
+  controlling terminal; `ioctl(TIOCSCTTY)` takes one (`tiocsctty()` in
+  `drivers/tty/tty_jobctrl.c`; session leaders only). `tty_open()` in
+  `drivers/tty/tty_io.c` never makes `/dev/console` a controlling terminal.
+  `/sys/class/tty/console/active` names the device behind the console (the
+  last entry). `/dev/tty` is "my own terminal".
+- Hang-up: when a session's leader finishes, `disassociate_ctty()` and
+  `__tty_hangup()` send SIGHUP to the foreground group and cut off every
+  open file on the terminal, except the ones opened through
+  `/dev/console`.
+- Shutdown: `kill(-1, sig)` reaches every process except process 1
+  (`kill_something_info()`). The `reboot()` call (`kernel/reboot.c`:
+  `kernel_power_off()`, `kernel_restart()`, `kernel_halt()`) stops the
+  machine at once and tells no process. `sync()` writes out what file
+  systems hold in memory.
+- An interactive shell ignores SIGTERM and acts on SIGHUP.
+- Static linking: `cc -static` puts the C library into the program; the
+  image has no shared libraries.
+
+What changed: Kairos's first process is our own program, 386 lines of C of
+which about 200 are code. It mounts the kernel's information file systems.
+It starts the shell as the leader of a new session with the serial port as
+its terminal, so Ctrl-C works. It holds back four signals and sleeps until
+one arrives: on "a child finished" it collects every finished process,
+including the orphans the kernel handed to it, and starts a new shell if
+the shell was one of them; on the three signals that `halt`, `poweroff`
+and `reboot` send, it asks every process to finish, tells the shell its
+session is over, waits up to 5 seconds, stops by force what is left, has
+file systems write out their data, and then makes the kernel's reboot
+call. busybox's tool links are made when the image is packed. The old
+script stays in the image as a fallback first program.
+
+What each step fixed, in order:
+- set up and start the shell only: "can't access tty; job control turned
+  off"; a finished orphan stays in state Z with parent 1; after `exit`
+  nothing answers; `poweroff` does nothing.
+- collecting and restarting: the orphan is gone; `exit` gives "init:
+  starting the shell again"; `kill -9 1` does nothing; a shell that can't
+  run is retried once a second.
+- the terminal: no complaint; Ctrl-C stops `sleep 5` (before, it ran its
+  full 5 seconds).
+- shutdown: "init: power off: asking every process to finish", "init:
+  every process has finished", "reboot: Power down".
+
+Found on the way:
+- The plan said the kernel passes `kairos.test` to init as an argument. It
+  doesn't (the dot). Init reads `/proc/cmdline`.
+- Plain `reboot` from the shell waited the full 5 seconds: the shell
+  itself ignores SIGTERM. Init now also sends it SIGHUP.
+- The self-test's background program was sometimes signalled before it
+  had set up its reaction. The script now waits for a file the program
+  makes when it is ready.
+- The kernel's build has a folder `init/` in the build folder, so our
+  program is built as `~/kairos-build/userspace/init`.
+- The steps were reordered against the plan: the self-test hand-off went
+  into the first step, so the boot test passed at every commit and each
+  new check was seen failing first.
+
+How it's tested:
+- `./scripts/boot-test.sh`: nine lines (kernel, init, cpus, devices,
+  sched_ext, leftovers, terminal, shutdown, poweroff), all `ok`, exit
+  status 0. Passed 8 of 8 runs with 1, 2, 4, 8 and 16 CPUs.
+- Each new check failed before its change: `leftovers` reported 1 with
+  the init that didn't collect; `terminal` and `shutdown` failed with the
+  inits before those steps.
+- In a shell with commands fed over the serial port: `exit` gives a new
+  shell; `kill -9 1` leaves process 1 running; Ctrl-C works, also in a
+  restarted shell; `poweroff`, `reboot` ("Restarting system") and `halt`
+  ("System halted") work; a program that catches SIGTERM prints its
+  message before the power goes off; one that ignores it is stopped after
+  5 seconds ("some are still running after 5 s; stopping them").
+- `./scripts/run-qemu.sh rdinit=/init.fallback` gives a shell with busybox
+  as process 1. The boot test fails on it, after its 120 s limit.
+
+Interview questions:
+1. What is a zombie process, why does the kernel keep it, and why is
+   collecting them a job for process 1 in particular?
+2. In your OS, `poweroff` first did nothing while `poweroff -f` worked.
+   Why, and what does your init do between the request and the machine
+   stopping?
+3. Your shell started without a terminal and Ctrl-C did nothing. What has
+   to be set up between creating the process and running the shell, and
+   why couldn't the shell just use the console that init was given?
+
+Resume line: "Wrote the init (process 1) of Kairos in about 200 lines of C:
+it gives the shell a controlling terminal, reaps orphaned processes,
+restarts the shell, and shuts the system down in order; a QEMU boot test
+checks each behaviour on every run."
+
+Open questions / next:
+- Component 4: the scheduler loaded and supervised by init. Init starts
+  exactly one program today. The loader is a second kind of child, with
+  its own rule for what happens when it ends.
+- Shutdown doesn't unmount anything. Nothing is on a disk yet; with a
+  root file system on a disk (component 9) it has to.
+- The 5 seconds are fixed, and init doesn't say which processes it had to
+  stop by force.
+- Init doesn't react to Ctrl-Alt-Del or a power button; the kernel sends
+  process 1 a signal for each, and it hasn't asked for them.
+- One shell on one terminal, as root, with no login.
+- Init is 696 KB because it carries the C library. The kernel tree's own
+  small library (`tools/include/nolibc`) would make it a few KB.
+- No licence file yet, so init.c has no licence line; the kernel's style
+  checker warns about that and nothing else that applies to user space.
 - Disk: 8.1 GB free.

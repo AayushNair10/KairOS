@@ -16,8 +16,8 @@
 # kernel image and the initramfs archive into the machine's memory and starts
 # the kernel with a command line.
 #
-# Without --log the console is this terminal. Leave with "poweroff -f" in
-# the shell, or with Ctrl-A and then X.
+# Without --log the console is this terminal. Leave with "poweroff" in the
+# shell, or with Ctrl-A and then X.
 #
 # QEMU has no hardware virtualisation to use inside this VM, so it emulates
 # every instruction. A boot takes seconds.
