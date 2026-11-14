@@ -181,11 +181,25 @@ kernel/upstream  the pinned Linux version: its tag and commit id
 kernel/patches/  our kernel changes as a patch series (the source of truth)
 scheduler/       Kairos Scheduler, a git submodule at a pinned commit
                  (its code is in scheduler/scheduler/)
-scripts/         kernel-fetch.sh, kernel-export.sh, kernel-check.sh, lib.sh
+kernel/config/   the kernel config: base (a starting point that ships with
+                 Linux: allnoconfig) and kairos.config (our switches)
+image/           the first file system: initramfs.list (its files) and init
+                 (a busybox shell script for now)
+scripts/         kernel-fetch.sh, kernel-export.sh, kernel-check.sh,
+                 kernel-build.sh, image-build.sh, run-qemu.sh, boot-test.sh,
+                 lib.sh
 docs/            DESIGN_LOG.md, notes
 userspace/       (planned) init, shell, tools
-image/           (planned) initramfs / rootfs build scripts
 ```
+- Build and boot: `scripts/kernel-build.sh` (config + build into
+  `~/kairos-build`; `--config-only` to check the config),
+  `scripts/image-build.sh` (the initramfs archive), `scripts/boot-test.sh`
+  (unattended boot, checks the console; `--smp N` and extra kernel
+  command-line words are passed on), `scripts/run-qemu.sh` (a shell;
+  `--log FILE` runs unattended).
+- A new kernel switch goes in `kernel/config/kairos.config` with what it is
+  for and what happened without it. `kernel-build.sh` stops if the config
+  system drops it.
 - The Linux source isn't in this repo. `scripts/kernel-fetch.sh` builds the
   working tree `~/kairos-linux` from `kernel/upstream` plus
   `kernel/patches/` (`--from ~/linux-src` avoids the download).

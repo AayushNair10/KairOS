@@ -13,7 +13,7 @@ and the scheduling policy as a BPF program on sched_ext.
 |---|---|---|---|
 | 0 | What kind of OS Kairos is (done) | the boot path; scheduling classes | none |
 | 1 | Source layout: how Linux and the scheduler live in the repo (done) | how kernel changes are carried: tags, patch series, forks | none |
-| 2 | Kernel config and first boot in QEMU, to a busybox shell | Kconfig, kbuild, device tree, initramfs, console | config only |
+| 2 | Kernel config and first boot in QEMU, to a busybox shell (done) | Kconfig, kbuild, device tree, initramfs, console | config only |
 | 3 | Our own init (PID 1) | processes: fork, exec, wait, signals, reaping; mounting /proc, /sys, /dev | none |
 | 4 | Kairos Scheduler loaded and supervised by init | the bpf() syscall, struct_ops attach, BTF; what an ejection does | none |
 | 5 | Shell and a service manager that sets task classes | sessions and terminals, cgroups, scheduling policies | none |
@@ -272,3 +272,144 @@ Open questions / next:
 - `CLAUDE.md` stage 1 asks for the structs and functions involved. On
   2026-11-13 the request was for plain-word explanations in chat, without
   variable names; the names go in this log.
+
+---
+
+## 2. Kernel config and first boot — 2026-11-14
+
+Options (how to choose what goes into the kernel):
+- A: Linux's default config for arm64, its fragment for virtual machines,
+  and a small Kairos fragment. 2,008 switches built in, 587 modules.
+- B: Linux's smallest config, grown switch by switch. 382 built in.
+- C: Ubuntu's config for the dev VM, trimmed. 4,087 built in, 8,299
+  modules.
+- D: Linux's default, cut down by hand, booting after each cut.
+
+My pick and reasoning:
+- Between A and B, and asked for a suggestion.
+- For A: "ebpf will help us cover all the topics of OS, so the linux can be
+  implemented beforehand".
+- For B: "I will get a better understanding as we will be going one by
+  one. However, I do think it could be overkill".
+
+Verdict: B, with one adjustment: start from `allnoconfig` (every optional
+switch off), not from `tinyconfig`.
+- `tinyconfig` is `allnoconfig` plus the kernel's "expert" mode, which
+  strips standard basics (printing, users and groups, futexes, timers), and
+  it compiles for size. That suits a sensor, not a general-purpose OS.
+- B gives the shortest build-and-boot loop on this VM, and every line of
+  the config answers a failure that was seen.
+- Not overkill: the first switches were known from a probe, and A and B are
+  stored the same way (a named base plus a fragment), so backing out to A
+  means changing the base's name.
+- Right: B teaches more by going one by one.
+- Wrong: eBPF doesn't cover all OS topics. In Kairos it covers the
+  scheduling policy; boot, processes, memory, files and drivers come from
+  the later components.
+- Missed: the build cost on this VM, paid in every later component; and A
+  doesn't turn sched_ext on until a line removes the setting that blocks it
+  (reduced debug information).
+
+Where the others fit:
+- A: a kernel that must boot on hardware not known in advance; what kernel
+  developers and automated testing build.
+- C: systems that must stay compatible with a distribution's user space,
+  modules and support.
+- D: embedded products that start from a board maker's working config and
+  cut it down.
+
+Linux concepts learned:
+- Kconfig: about 21,000 switches; `make allnoconfig`, `tinyconfig`,
+  `defconfig`, `olddefconfig`; fragments merged with
+  `scripts/kconfig/merge_config.sh`; a switch whose dependencies aren't met
+  is dropped without an error. `EXPERT` selects `DEBUG_KERNEL`, and the
+  debug-information choice depends on `DEBUG_KERNEL`.
+- kbuild: `make O=dir Image`; `vmlinux` (ELF, 71 MB with debug info) and
+  `arch/arm64/boot/Image` (6.9 MB); only what changed is recompiled.
+- The device tree: QEMU's `virt` board describes itself to the kernel,
+  which starts the driver matching each entry (`SERIAL_AMBA_PL011` for the
+  serial port, `ttyAMA0`).
+- The first file system: `BLK_DEV_INITRD`; the kernel's built-in list
+  (`usr/default_cpio_list`: `/dev`, `/dev/console`, `/root`);
+  `usr/gen_init_cpio.c` packs an archive from a list, without root.
+- Program loaders: `BINFMT_ELF`, `BINFMT_SCRIPT`; error 8 (`ENOEXEC`)
+  without them.
+- `DEVTMPFS`: the kernel fills `/dev` itself.
+- sched_ext's chain: `SCHED_CLASS_EXT` needs `BPF_SYSCALL`, `BPF_JIT` and
+  `DEBUG_INFO_BTF`; BTF needs full DWARF debug information and `pahole`;
+  `resolve_btfids` runs at link time.
+- The kernel command line: `console=ttyAMA0`, `panic=-1` (reset on panic),
+  `rdinit=`, `nosmp`. Power-off and reset go through PSCI.
+- The order in which the kernel looks for its first program: `/init`, then
+  `/sbin/init`, `/etc/init`, `/bin/init`, `/bin/sh`.
+
+What changed: Kairos has a kernel of its own that boots. The config is two
+layers: Linux's "everything off" starting point and 13 lines of ours, each
+added for a failure that was seen. One script builds the kernel and stops
+if the config system dropped one of our lines. A second packs the first
+file system from a list. A third boots both in QEMU, and a fourth boots
+unattended and checks what the console says. The shell and tools are
+busybox's for now, and the first program is a short script.
+
+What each switch fixed, in order:
+- nothing of ours: no console output at all; the kernel runs and panics
+  unheard.
+- the serial port and console: 139 lines of messages, then "VFS: Unable to
+  mount root fs".
+- initramfs support: "Failed to execute /init (error -8)", "No working init
+  found".
+- the program loaders: a shell; `/dev` holds only `console`, "can't access
+  tty; job control turned off".
+- the device file system: 80 entries in `/dev`, the shell has a terminal.
+- BPF, type information, sched_ext: `/sys/kernel/sched_ext/state` goes from
+  missing to `disabled`.
+- the `-kairos` name: `uname -r` is `7.0.0-kairos`.
+
+How it's tested:
+- `./scripts/kernel-build.sh`: "allnoconfig + 13 switch(es) of ours = 508
+  switches on". The first build of the bare base took 93 s (107 MB of
+  output); with debug information a full rebuild takes 196 s and the output
+  is 662 MB.
+- `./scripts/boot-test.sh`: six lines (kernel, init, cpus, devices,
+  sched_ext, poweroff), all `ok`, exit status 0. A boot takes about 1 s.
+- `./scripts/boot-test.sh --smp 16`: "16 of 16 running".
+- The boot test fails when it should: `nosmp` (1 of 4 CPUs),
+  `rdinit=/nonexistent` (panic), and a kernel without the `-kairos` name.
+- The config check fails when it should: without the "kernel debugging"
+  line, `kernel-build.sh --config-only` reports three dropped switches and
+  exits with 1.
+- `./scripts/kernel-check.sh` still passes; the kernel tree is unchanged.
+
+Interview questions:
+1. You built a kernel config up from nothing. What does a Linux kernel need
+   before it can give you a shell, and what do you see at boot when each
+   piece is missing?
+2. How does the kernel know what hardware it is running on in your QEMU
+   machine, and why does that make the config matter for booting?
+3. You turned on a config option and it stayed off without an error. Why
+   does that happen, and how did you guard against it?
+
+Resume line: "Built a minimal Linux 7.0 kernel for Kairos from an empty
+config: 13 options on top of 'all off' give a console, an initramfs, a
+shell and sched_ext, and a script boots it in QEMU and checks the result in
+about a second."
+
+Open questions / next:
+- Component 3: our own init (PID 1).
+- The settings a scheduler feels are still the base's: 250 ticks a second,
+  ticking even when idle, no precise timers. Ubuntu's kernel has 1,000,
+  tickless and precise timers; the scheduler's 1 ms timer needs the last.
+  For component 4. The preemption mode (lazy) already matches Ubuntu's.
+- BPF's tracing support is off, which gives one build warning
+  (`resolve_btfids: unresolved symbol bpf_session_is_return`). The
+  scheduler's trace output would need it.
+- Initramfs support brought seven decompression formats with it that the
+  uncompressed archive doesn't use. They could be switched off.
+- No networking, no cgroups, no NUMA, no loadable modules yet. Each goes in
+  with the component that needs it.
+- busybox comes from the build machine (`busybox-static` 1.37.0), so the
+  archive isn't built from source yet.
+- The scripts build for arm64 only.
+- With patches in the series the kernel will call itself `7.0.0-kairos+`;
+  the build adds the plus when the tree isn't exactly at a release tag.
+- Disk: 8.1 GB free.
