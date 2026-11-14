@@ -1,0 +1,31 @@
+#!/bin/sh
+# Kairos's first program, for now.
+#
+# The kernel unpacks the initramfs archive into memory and starts this file
+# as process number 1. It sets up the few things a shell needs and then
+# becomes that shell. Our own init replaces it in component 3.
+#
+# With the word kairos.test on the kernel's command line it prints a few
+# facts about the system and powers off instead, so that a boot can be
+# checked unattended.
+
+# busybox is one program that acts as many tools, depending on the name it
+# is called by. This makes a link for each of those names.
+/bin/busybox --install -s /bin
+
+# The kernel's own information, shown as files.
+mount -t proc proc /proc	# processes and kernel state
+mount -t sysfs sysfs /sys	# devices and kernel settings
+
+if grep -qw kairos.test /proc/cmdline; then
+	echo "kairos.test: kernel $(uname -r)"
+	echo "kairos.test: cpus $(nproc)"
+	echo "kairos.test: done"
+	poweroff -f
+fi
+
+echo "Kairos: Linux $(uname -r), $(nproc) CPUs. 'poweroff -f' to leave."
+# Process 1 must never exit, so it turns into the shell instead of starting
+# one. setsid and cttyhack make the console the shell's terminal, which it
+# needs for Ctrl-C and Ctrl-Z to work.
+exec setsid cttyhack /bin/sh

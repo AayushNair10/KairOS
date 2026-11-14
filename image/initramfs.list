@@ -1,0 +1,21 @@
+# Everything in Kairos's first file system, one entry per line.
+# scripts/image-build.sh packs these into the initramfs archive with the
+# kernel's own packing tool (usr/gen_init_cpio.c in the kernel tree).
+#
+#   dir   <name> <mode> <user id> <group id>
+#   file  <name> <where the file comes from> <mode> <user id> <group id>
+#   slink <name> <what the link points at> <mode> <user id> <group id>
+#
+# ${BUSYBOX} and ${KAIROS_REPO} are filled in by scripts/image-build.sh.
+# The kernel adds /dev and /dev/console by itself.
+
+dir /bin 0755 0 0
+dir /proc 0555 0 0
+dir /sys 0555 0 0
+
+# The shell and the basic tools, all in one program (see image/init).
+file /bin/busybox ${BUSYBOX} 0755 0 0
+slink /bin/sh busybox 0777 0 0
+
+# The first program the kernel starts.
+file /init ${KAIROS_REPO}/image/init 0755 0 0
