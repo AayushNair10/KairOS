@@ -6,9 +6,10 @@
 #   --smp N    number of CPUs to give the machine (default 4)
 #   WORD...    extra words for the kernel's command line
 #
-# The kernel is started with the word kairos.test on its command line, which
-# makes /init print a few facts and power off (see image/init). The console's
-# output is kept in ~/kairos-build/boot-test.log.
+# The kernel is started with the word kairos.test on its command line. The
+# first program then runs /selftest in place of the shell, which prints a few
+# facts, and the system powers off (see image/selftest). The console's output
+# is kept in ~/kairos-build/boot-test.log.
 #
 # The checks:
 #   kernel     the kernel that booted calls itself "...-kairos"
@@ -60,8 +61,8 @@ bad() {
 	failed=1
 }
 
-# The value /init printed after "kairos.test: <name> ". The console ends its
-# lines with a carriage return, which is cut off.
+# The value /selftest printed after "kairos.test: <name> ". The console ends
+# its lines with a carriage return, which is cut off.
 fact() {
 	sed -n "s/^kairos\.test: $1 //p" "$log" | tr -d '\r' | head -n 1
 }
@@ -69,7 +70,7 @@ fact() {
 version=$(fact kernel)
 case $version in
 *-kairos*) ok kernel "Linux $version" ;;
-"") bad kernel "/init didn't report a kernel version" ;;
+"") bad kernel "the self-test didn't report a kernel version" ;;
 *) bad kernel "Linux $version doesn't call itself -kairos" ;;
 esac
 

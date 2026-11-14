@@ -5,9 +5,8 @@
 # as process number 1. It sets up the few things a shell needs and then
 # becomes that shell. Our own init replaces it in component 3.
 #
-# With the word kairos.test on the kernel's command line it prints a few
-# facts about the system and powers off instead, so that a boot can be
-# checked unattended.
+# With the word kairos.test on the kernel's command line it runs /selftest
+# and powers off instead, so that a boot can be checked unattended.
 
 # The kernel's own information, shown as files.
 mount -t proc proc /proc	# processes and kernel state
@@ -15,12 +14,7 @@ mount -t sysfs sysfs /sys	# devices and kernel settings
 mount -t devtmpfs devtmpfs /dev	# one entry per device, kept by the kernel
 
 if grep -qw kairos.test /proc/cmdline; then
-	echo "kairos.test: kernel $(uname -r)"
-	echo "kairos.test: cpus $(nproc)"
-	echo "kairos.test: devices $(ls /dev | wc -l) entries in /dev"
-	# "disabled" means the kernel can take a BPF scheduler and none is loaded.
-	echo "kairos.test: sched_ext $(cat /sys/kernel/sched_ext/state 2>/dev/null || echo missing)"
-	echo "kairos.test: done"
+	/selftest
 	poweroff -f
 fi
 
