@@ -16,10 +16,12 @@
 # The kernel's own information, shown as files.
 mount -t proc proc /proc	# processes and kernel state
 mount -t sysfs sysfs /sys	# devices and kernel settings
+mount -t devtmpfs devtmpfs /dev	# one entry per device, kept by the kernel
 
 if grep -qw kairos.test /proc/cmdline; then
 	echo "kairos.test: kernel $(uname -r)"
 	echo "kairos.test: cpus $(nproc)"
+	echo "kairos.test: devices $(ls /dev | wc -l) entries in /dev"
 	echo "kairos.test: done"
 	poweroff -f
 fi
