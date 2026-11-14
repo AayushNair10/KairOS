@@ -6,7 +6,8 @@
 #   file  <name> <where the file comes from> <mode> <user id> <group id>
 #   slink <name> <what the link points at> <mode> <user id> <group id>
 #
-# ${BUSYBOX} and ${KAIROS_REPO} are filled in by scripts/image-build.sh.
+# ${BUSYBOX}, ${INIT} and ${KAIROS_REPO} are filled in by
+# scripts/image-build.sh.
 # The kernel adds /dev and /dev/console by itself.
 
 dir /bin 0755 0 0
@@ -17,8 +18,13 @@ dir /sys 0555 0 0
 # adds a link in /bin for each tool it holds, /bin/sh among them.
 file /bin/busybox ${BUSYBOX} 0755 0 0
 
-# The first program the kernel starts.
-file /init ${KAIROS_REPO}/image/init 0755 0 0
+# The first program the kernel starts: our init, compiled from
+# userspace/init/init.c.
+file /init ${INIT} 0755 0 0
+
+# A shell script that can stand in for it:
+# scripts/run-qemu.sh rdinit=/init.fallback
+file /init.fallback ${KAIROS_REPO}/image/init.fallback 0755 0 0
 
 # What a boot test runs in place of the shell.
 file /selftest ${KAIROS_REPO}/image/selftest 0755 0 0

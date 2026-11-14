@@ -8,8 +8,13 @@
 # whether the boot passed.
 
 echo "kairos.test: kernel $(uname -r)"
+# The program running as process 1. Ours is /init.
+echo "kairos.test: init $(readlink /proc/1/exe)"
 echo "kairos.test: cpus $(nproc)"
 echo "kairos.test: devices $(ls /dev | wc -l) entries in /dev"
 # "disabled" means the kernel can take a BPF scheduler and none is loaded.
 echo "kairos.test: sched_ext $(cat /sys/kernel/sched_ext/state 2>/dev/null || echo missing)"
 echo "kairos.test: done"
+
+# Init can't shut the system down yet, so cut the power from here.
+poweroff -f

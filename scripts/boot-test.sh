@@ -13,7 +13,7 @@
 #
 # The checks:
 #   kernel     the kernel that booted calls itself "...-kairos"
-#   init       the kernel started /init from the initramfs
+#   init       process 1 is our init, started from the initramfs
 #   cpus       all the machine's CPUs are running
 #   devices    the kernel filled in /dev
 #   sched_ext  the kernel can take a BPF scheduler, and none is loaded
@@ -74,8 +74,13 @@ case $version in
 *) bad kernel "Linux $version doesn't call itself -kairos" ;;
 esac
 
-if grep -q '^Run /init as init process' "$log"; then
-	ok init "the kernel started /init"
+first=$(fact init)
+if [ "$first" = /init ]; then
+	ok init "process 1 is our init"
+elif [ -n "$first" ]; then
+	bad init "process 1 is $first, not our init"
+elif grep -q '^Run /init as init process' "$log"; then
+	bad init "the kernel started /init, but the self-test didn't run"
 else
 	bad init "the kernel never started /init"
 fi

@@ -1,0 +1,21 @@
+#!/bin/sh
+# A fallback first program: a shell and nothing else.
+#
+# If our init (userspace/init/init.c) is broken, the system can still be
+# started with this script in its place:
+#
+#   scripts/run-qemu.sh rdinit=/init.fallback
+#
+# It sets up the few things a shell needs and then becomes that shell.
+# Leave with "poweroff -f".
+
+# The kernel's own information, shown as files.
+mount -t proc proc /proc	# processes and kernel state
+mount -t sysfs sysfs /sys	# devices and kernel settings
+mount -t devtmpfs devtmpfs /dev	# one entry per device, kept by the kernel
+
+echo "Kairos (fallback): Linux $(uname -r), $(nproc) CPUs. 'poweroff -f' to leave."
+# Process 1 must never exit, so it turns into the shell instead of starting
+# one. setsid and cttyhack make the console the shell's terminal, which it
+# needs for Ctrl-C and Ctrl-Z to work.
+exec setsid cttyhack /bin/sh
