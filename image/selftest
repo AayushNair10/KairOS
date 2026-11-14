@@ -14,6 +14,15 @@ echo "kairos.test: cpus $(nproc)"
 echo "kairos.test: devices $(ls /dev | wc -l) entries in /dev"
 # "disabled" means the kernel can take a BPF scheduler and none is loaded.
 echo "kairos.test: sched_ext $(cat /sys/kernel/sched_ext/state 2>/dev/null || echo missing)"
+
+# Leftovers: finished processes that nobody collected. The brackets start a
+# process that puts "true" in the background and finishes at once, so "true"
+# loses its parent and init adopts it. When it finishes, init has to collect
+# it; until then it stays in the process table in state Z.
+(true &)
+sleep 1
+echo "kairos.test: leftovers $(cat /proc/[0-9]*/status 2>/dev/null | grep -c '^State:.Z')"
+
 echo "kairos.test: done"
 
 # Init can't shut the system down yet, so cut the power from here.

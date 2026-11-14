@@ -17,6 +17,7 @@
 #   cpus       all the machine's CPUs are running
 #   devices    the kernel filled in /dev
 #   sched_ext  the kernel can take a BPF scheduler, and none is loaded
+#   leftovers  init collected a finished process that it had adopted
 #   poweroff   the system powered off by itself, without a panic
 #
 # It exits with 0 only if every check passes.
@@ -105,6 +106,13 @@ if [ "$state" = disabled ]; then
 	ok sched_ext "present, no scheduler loaded"
 else
 	bad sched_ext "${state:-not reported}"
+fi
+
+leftovers=$(fact leftovers)
+if [ "$leftovers" = 0 ]; then
+	ok leftovers "init collected the finished process it adopted"
+else
+	bad leftovers "${leftovers:-unknown number of} finished process(es) not collected"
 fi
 
 if grep -q 'Kernel panic' "$log"; then

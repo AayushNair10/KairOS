@@ -10,23 +10,44 @@
  *     information;
  *   - starts the shell. With the word kairos.test on the kernel's command
  *     line it starts /selftest instead, for an unattended boot test;
- *   - sleeps.
+ *   - collects every process that finishes, and starts a new shell when the
+ *     shell was one of them.
  *
  * Process 1 must never finish. The kernel panics if it does.
  */
 
 #include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 #include <sys/mount.h>
 #include <sys/utsname.h>
+#include <sys/wait.h>
 
 #define SHELL		"/bin/sh"
 #define SELFTEST	"/selftest"
+
+/*
+ * The signals init wants. It asks the kernel to hold them back ("blocks"
+ * them) and takes them one at a time in main(), when it is ready for the
+ * next one. So no code here ever runs in the middle of other code, the way
+ * a signal handler would.
+ *
+ * Holding them back is also what makes the kernel keep them: a signal that
+ * process 1 hasn't asked for is dropped.
+ */
+static sigset_t wanted;
+
+/*
+ * The process init started itself: the shell, or the self-test in its place.
+ * 0 while it isn't running.
+ */
+static pid_t shell;
 
 /* Print one line on the console, marked as coming from init. */
 __attribute__((format(printf, 1, 2)))
@@ -81,7 +102,8 @@ static int on_command_line(const char *word)
 }
 
 /*
- * Start a program as a new process. Returns the new process's id, or -1.
+ * Start a program as a new process. Returns the new process's id, or 0 if
+ * there is no new process.
  *
  * Starting a program takes two steps. fork() makes a copy of this process.
  * The copy then replaces itself with the program, with execv().
@@ -94,20 +116,58 @@ static pid_t start(const char *program)
 	pid = fork();
 	if (pid < 0) {
 		say("can't make a new process: %s", strerror(errno));
-		return -1;
+		return 0;
 	}
 	if (pid > 0)
 		return pid;	/* still init */
 
-	/* The copy. */
+	/*
+	 * The copy. It has inherited init's hold on the signals, and the
+	 * program would inherit it in turn, along with everything the program
+	 * starts. Lift it.
+	 */
+	sigprocmask(SIG_UNBLOCK, &wanted, NULL);
+
 	execv(program, argv);
 	say("can't run %s: %s", program, strerror(errno));
 	_exit(127);
 }
 
+/*
+ * Collect every process that has finished.
+ *
+ * A finished process stays in the kernel's process table, holding its exit
+ * status, until its parent asks for it. Init is the parent of the process it
+ * started and of every process whose own parent finished first: the kernel
+ * hands those to process 1.
+ */
+static void collect(void)
+{
+	pid_t pid;
+
+	/*
+	 * One signal can stand for several finished processes, so go on until
+	 * none is left. WNOHANG: don't wait for a process to finish.
+	 */
+	while ((pid = waitpid(-1, NULL, WNOHANG)) > 0)
+		if (pid == shell)
+			shell = 0;
+}
+
+/* Seconds since the system started. */
+static long seconds(void)
+{
+	struct timespec now;
+
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	return now.tv_sec;
+}
+
 int main(void)
 {
 	struct utsname kernel;
+	long started = -1;	/* when the shell was last started */
+	int test;
 
 	if (getpid() != 1) {
 		fprintf(stderr, "init: this is the system's first program; it can't be run by hand\n");
@@ -124,8 +184,31 @@ int main(void)
 	uname(&kernel);
 	say("Kairos on Linux %s", kernel.release);
 
-	start(on_command_line("kairos.test") ? SELFTEST : SHELL);
+	sigemptyset(&wanted);
+	sigaddset(&wanted, SIGCHLD);	/* a child process has finished */
+	sigprocmask(SIG_BLOCK, &wanted, NULL);
 
-	for (;;)
-		pause();
+	test = on_command_line("kairos.test");
+
+	for (;;) {
+		/*
+		 * No shell: start one. The self-test runs only once (it cuts
+		 * the power itself for now).
+		 */
+		if (!shell && !(test && started >= 0)) {
+			if (started >= 0)
+				say("starting the shell again");
+			/* At most one start a second, in case it can't run. */
+			if (seconds() == started)
+				sleep(1);
+			started = seconds();
+			shell = start(test ? SELFTEST : SHELL);
+			if (!shell)
+				continue;
+		}
+
+		/* Sleep until one of the signals arrives. */
+		sigwaitinfo(&wanted, NULL);
+		collect();
+	}
 }
