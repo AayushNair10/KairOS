@@ -9,10 +9,6 @@
 # facts about the system and powers off instead, so that a boot can be
 # checked unattended.
 
-# busybox is one program that acts as many tools, depending on the name it
-# is called by. This makes a link for each of those names.
-/bin/busybox --install -s /bin
-
 # The kernel's own information, shown as files.
 mount -t proc proc /proc	# processes and kernel state
 mount -t sysfs sysfs /sys	# devices and kernel settings

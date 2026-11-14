@@ -30,12 +30,25 @@ if [ ! -x "$tool" ] || [ "$KAIROS_LINUX/usr/gen_init_cpio.c" -nt "$tool" ]; then
 	cc -O2 -o "$tool" "$KAIROS_LINUX/usr/gen_init_cpio.c"
 fi
 
+# busybox is one program that acts as many tools, depending on the name it
+# is called by. Add a link in /bin for each of those names to the list. The
+# full list that gets packed is kept next to the archive.
+list=$KAIROS_BUILD/initramfs.list
+{
+	cat "$REPO_ROOT/image/initramfs.list"
+	echo
+	echo "# One link per tool in busybox, added by scripts/image-build.sh."
+	"$BUSYBOX" --list | while IFS= read -r name; do
+		[ "$name" = busybox ] || echo "slink /bin/$name busybox 0777 0 0"
+	done
+} >"$list"
+
 # The list refers to these two.
 export BUSYBOX KAIROS_REPO=$REPO_ROOT
 
 # -t 0: give every file the same fixed date, so the same input always makes
 # the same archive.
-"$tool" -t 0 "$REPO_ROOT/image/initramfs.list" >"$INITRAMFS.tmp"
+"$tool" -t 0 "$list" >"$INITRAMFS.tmp"
 mv "$INITRAMFS.tmp" "$INITRAMFS"
 
-echo "initramfs  $INITRAMFS ($(du -h "$INITRAMFS" | cut -f1)), busybox $("$BUSYBOX" 2>&1 | sed -n '1s/^BusyBox \(v[^ ]*\).*/\1/p')"
+echo "initramfs  $INITRAMFS ($(du -h "$INITRAMFS" | cut -f1)), busybox $("$BUSYBOX" 2>&1 | sed -n '1s/^BusyBox \(v[^ ]*\).*/\1/p') with $(grep -c '^slink /bin/' "$list") tools"
