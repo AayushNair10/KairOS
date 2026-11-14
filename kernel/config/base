@@ -1,0 +1,10 @@
+# The starting point of Kairos's kernel config: one of the ready-made configs
+# that ship with Linux, named as the kernel calls it.
+#
+# allnoconfig turns every optional switch off. What stays on is what Linux
+# can't be built without on this architecture, plus the standard basics that
+# are optional only in the kernel's "expert" mode: printing messages, users
+# and groups, the lock that threads use, timers.
+#
+# kairos.config, next to this file, holds our switches on top of it.
+allnoconfig

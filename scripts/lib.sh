@@ -23,6 +23,17 @@ KAIROS_LINUX=${KAIROS_LINUX:-$HOME/kairos-linux}
 # version.
 BRANCH=kairos
 
+# The kernel's config: a starting point (base) and our switches on top of it
+# (kairos.config).
+CONFIG_DIR=$REPO_ROOT/kernel/config
+
+# Everything that gets built goes here: the kernel and its image, the
+# initramfs archive, the boot logs. It is outside this repository and outside
+# the kernel tree, so both stay clean.
+KAIROS_BUILD=${KAIROS_BUILD:-$HOME/kairos-build}
+KERNEL_IMAGE=$KAIROS_BUILD/arch/arm64/boot/Image
+INITRAMFS=$KAIROS_BUILD/initramfs.cpio
+
 die() {
 	echo "error: $*" >&2
 	exit 1
