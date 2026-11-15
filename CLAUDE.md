@@ -98,6 +98,10 @@ End with "Ready to implement?" and **STOP**.
 - After each step: build it, boot or run it in QEMU, and show me the
   evidence (relevant output, `dmesg` lines). Never claim something works
   without having run it; if you couldn't run it, say so.
+- **Then stop and let me run it.** After each step, give me the command to
+  boot it and two or three things to type, with what I should see, and wait
+  for my reply before starting the next step. Watching your output doesn't
+  stick for me; typing it does.
 - Explain non-obvious code briefly in comments or the reply: kernel locking
   and context rules (atomic vs process context, RCU, preemption), memory
   ordering, kbuild/Kconfig wiring, verifier constraints.
