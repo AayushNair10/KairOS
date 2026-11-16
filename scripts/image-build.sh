@@ -5,8 +5,10 @@
 # usage: image-build.sh
 #
 # image/initramfs.list names every file. The archive is written to
-# ~/kairos-build/initramfs.cpio (or under $KAIROS_BUILD). Our init is
-# compiled first, from userspace/init/init.c.
+# ~/kairos-build/initramfs.cpio (or under $KAIROS_BUILD). Two programs of
+# ours are built first: init, from userspace/init/init.c, and Kairos
+# Scheduler's loader, with scripts/scheduler-build.sh. The loader is built
+# against the kernel, so run scripts/kernel-build.sh before this.
 #
 # The shell and tools come from the machine's own busybox for now
 # ($BUSYBOX to use another one). It has to be linked statically, because the
@@ -51,8 +53,12 @@ INIT=$KAIROS_BUILD/userspace/init
 mkdir -p "$KAIROS_BUILD/userspace"
 cc -static -O2 -Wall -Wextra -Werror -o "$INIT" "$REPO_ROOT/userspace/init/init.c"
 
-# The list refers to these three.
-export BUSYBOX INIT KAIROS_REPO=$REPO_ROOT
+# Kairos Scheduler's loader. A run that finds nothing changed takes a
+# fraction of a second.
+"$REPO_ROOT/scripts/scheduler-build.sh"
+
+# The list refers to these four.
+export BUSYBOX INIT SCHEDULER KAIROS_REPO=$REPO_ROOT
 
 # -t 0: give every file the same fixed date, so the same input always makes
 # the same archive.

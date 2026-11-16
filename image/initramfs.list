@@ -6,7 +6,7 @@
 #   file  <name> <where the file comes from> <mode> <user id> <group id>
 #   slink <name> <what the link points at> <mode> <user id> <group id>
 #
-# ${BUSYBOX}, ${INIT} and ${KAIROS_REPO} are filled in by
+# ${BUSYBOX}, ${INIT}, ${SCHEDULER} and ${KAIROS_REPO} are filled in by
 # scripts/image-build.sh.
 # The kernel adds /dev and /dev/console by itself.
 
@@ -22,7 +22,11 @@ file /bin/busybox ${BUSYBOX} 0755 0 0
 # userspace/init/init.c.
 file /init ${INIT} 0755 0 0
 
-# A shell script that can stand in for it:
+# Kairos Scheduler's loader: the program that hands the scheduling policy to
+# the kernel. Built by scripts/scheduler-build.sh from scheduler/scheduler/.
+file /bin/scx_kairos ${SCHEDULER} 0755 0 0
+
+# A shell script that can stand in for init:
 # scripts/run-qemu.sh rdinit=/init.fallback
 file /init.fallback ${KAIROS_REPO}/image/init.fallback 0755 0 0
 
