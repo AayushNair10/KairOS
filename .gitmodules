@@ -1,3 +1,4 @@
 [submodule "scheduler"]
 	path = scheduler
 	url = https://github.com/AayushNair10/KairOS-Scheduler.git
+	branch = kairos-os
