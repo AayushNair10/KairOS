@@ -8,6 +8,8 @@
  * What it does:
  *   - mounts the file systems through which the kernel shows its own
  *     information;
+ *   - starts Kairos Scheduler's loader, and waits until the kernel runs the
+ *     scheduler before it starts anything else;
  *   - starts the shell, with the terminal behind the console as its own.
  *     With the word kairos.test on the kernel's command line it starts
  *     /selftest instead, for an unattended boot test;
@@ -38,8 +40,20 @@
 #define SHELL		"/bin/sh"
 #define SELFTEST	"/selftest"
 
+/*
+ * Kairos Scheduler's loader: the program that hands the scheduling policy to
+ * the kernel and holds it there for as long as it runs.
+ */
+#define SCHEDULER	"/bin/scx_kairos"
+
 /* How many seconds a process gets to finish when it is asked to. */
 #define PATIENCE	5
+
+/*
+ * How many seconds init waits for the kernel to run the scheduler before it
+ * starts the shell anyway.
+ */
+#define SCHEDULER_WAIT	10
 
 /*
  * The signals init wants. It asks the kernel to hold them back ("blocks"
@@ -57,6 +71,9 @@ static sigset_t wanted;
  * 0 while it isn't running.
  */
 static pid_t shell;
+
+/* The scheduler's loader. 0 while it isn't running. */
+static pid_t scheduler;
 
 /* Print one line on the console, marked as coming from init. */
 __attribute__((format(printf, 1, 2)))
@@ -145,16 +162,20 @@ static int open_terminal(void)
 }
 
 /*
- * Start a program as a new process. Returns the new process's id, or 0 if
- * there is no new process.
+ * Start a program as a new process: argv[0] with the arguments after it.
+ * Returns the new process's id, or 0 if there is no new process.
  *
  * Starting a program takes two steps. fork() makes a copy of this process.
  * The copy then replaces itself with the program, with execv(). In between,
  * the copy sets up what the program should find when it starts.
+ *
+ * With terminal, the program gets the console's terminal as its own, as a
+ * shell needs. Without, it reads from nowhere and writes to the console, as
+ * init does.
  */
-static pid_t start(const char *program)
+static pid_t start(char *const argv[], int terminal)
 {
-	char *const argv[] = { (char *)program, NULL };
+	const char *program = argv[0];
 	pid_t pid;
 	int tty;
 
@@ -174,31 +195,51 @@ static pid_t start(const char *program)
 	sigprocmask(SIG_UNBLOCK, &wanted, NULL);
 
 	/*
-	 * Give the program a terminal of its own.
-	 *
 	 * A session is a group of processes that share one terminal: a shell
 	 * and what was started from it. setsid() makes this process the
-	 * leader of a new session, which has no terminal yet. TIOCSCTTY then
-	 * takes the device as the session's terminal; only a session leader
-	 * may do that. From then on Ctrl-C typed there becomes a signal to
-	 * whatever the shell is running in the foreground.
+	 * leader of a new session, which has no terminal yet.
 	 *
-	 * Last, the device becomes the program's input, output and error
-	 * output. Init itself stays on /dev/console. When a session's leader
-	 * finishes, the kernel hangs up the terminal for everyone who has it
-	 * open, but not for those who opened it as the console.
+	 * Every program gets a session of its own, so that what is typed at
+	 * the shell can never reach the others: Ctrl-C becomes a signal only
+	 * within the session whose terminal it was typed on.
 	 */
 	setsid();
-	tty = open_terminal();
-	if (tty >= 0 && ioctl(tty, TIOCSCTTY, 0) == 0) {
-		dup2(tty, STDIN_FILENO);
-		dup2(tty, STDOUT_FILENO);
-		dup2(tty, STDERR_FILENO);
+
+	if (!terminal) {
+		/*
+		 * Input from nowhere. Output stays where init's goes, on
+		 * /dev/console, which no hang-up of the terminal affects.
+		 */
+		tty = open("/dev/null", O_RDONLY);
+		if (tty > STDIN_FILENO) {
+			dup2(tty, STDIN_FILENO);
+			close(tty);
+		}
 	} else {
-		say("no terminal for %s; Ctrl-C won't work", program);
+		/*
+		 * Give the program a terminal of its own. TIOCSCTTY takes the
+		 * device as the session's terminal; only a session leader may
+		 * do that, and only one session can have it. From then on
+		 * Ctrl-C typed there becomes a signal to whatever the shell is
+		 * running in the foreground.
+		 *
+		 * Last, the device becomes the program's input, output and
+		 * error output. Init itself stays on /dev/console. When a
+		 * session's leader finishes, the kernel hangs up the terminal
+		 * for everyone who has it open, but not for those who opened
+		 * it as the console.
+		 */
+		tty = open_terminal();
+		if (tty >= 0 && ioctl(tty, TIOCSCTTY, 0) == 0) {
+			dup2(tty, STDIN_FILENO);
+			dup2(tty, STDOUT_FILENO);
+			dup2(tty, STDERR_FILENO);
+		} else {
+			say("no terminal for %s; Ctrl-C won't work", program);
+		}
+		if (tty > STDERR_FILENO)
+			close(tty);
 	}
-	if (tty > STDERR_FILENO)
-		close(tty);
 
 	execv(program, argv);
 	say("can't run %s: %s", program, strerror(errno));
@@ -222,9 +263,12 @@ static int collect(void)
 	 * One signal can stand for several finished processes, so go on until
 	 * none is left. WNOHANG: don't wait for a process to finish.
 	 */
-	while ((pid = waitpid(-1, NULL, WNOHANG)) > 0)
+	while ((pid = waitpid(-1, NULL, WNOHANG)) > 0) {
 		if (pid == shell)
 			shell = 0;
+		if (pid == scheduler)
+			scheduler = 0;
+	}
 
 	/*
 	 * 0 means init still has children, all of them running. Otherwise it
@@ -319,8 +363,86 @@ static long seconds(void)
 	return now.tv_sec;
 }
 
+/* Milliseconds since the system started. */
+static long milliseconds(void)
+{
+	struct timespec now;
+
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	return now.tv_sec * 1000 + now.tv_nsec / 1000000;
+}
+
+/*
+ * Is the kernel running a BPF scheduler? The kernel's own answer is one word
+ * in a file: "enabled" while it runs one. The others are "disabled" and,
+ * while it switches every task over, "enabling" and "disabling".
+ */
+static int scheduler_running(void)
+{
+	char state[16];
+	ssize_t n;
+	int fd;
+
+	fd = open("/sys/kernel/sched_ext/state", O_RDONLY);
+	if (fd < 0)
+		return 0;
+	n = read(fd, state, sizeof(state) - 1);
+	close(fd);
+	if (n <= 0)
+		return 0;
+	state[n] = '\0';
+	return !strcmp(state, "enabled\n");
+}
+
+/*
+ * Start Kairos Scheduler, and return once the kernel runs it, its loader has
+ * ended, or SCHEDULER_WAIT seconds have passed.
+ *
+ * Waiting means that no program init starts ever runs under the kernel's
+ * default scheduler; only init and the loader do, for the second or so the
+ * loader takes. Nothing tells init when the scheduler is in place, so it
+ * looks at the kernel's state every 10 ms, and stops looking at once when
+ * the loader finishes.
+ */
+static void start_scheduler(void)
+{
+	/*
+	 * --main-config: the configuration the scheduler's evaluation chose.
+	 * --quiet: no statistics on the console every second.
+	 */
+	char *const argv[] = { SCHEDULER, "--main-config", "--quiet", NULL };
+	const struct timespec step = { 0, 10 * 1000 * 1000 };
+	long began = milliseconds();
+	sigset_t finished;
+
+	sigemptyset(&finished);
+	sigaddset(&finished, SIGCHLD);
+
+	say("starting Kairos Scheduler");
+	scheduler = start(argv, 0);
+
+	while (scheduler) {
+		if (scheduler_running()) {
+			say("Kairos Scheduler is running, after %ld ms",
+			    milliseconds() - began);
+			return;
+		}
+		if (milliseconds() - began >= SCHEDULER_WAIT * 1000L) {
+			say("Kairos Scheduler isn't running after %d s; going on without waiting",
+			    SCHEDULER_WAIT);
+			return;
+		}
+		/* Sleep 10 ms, or less if a process finishes. */
+		if (sigtimedwait(&finished, NULL, &step) == SIGCHLD)
+			collect();
+	}
+	say("Kairos Scheduler didn't start; the kernel's own scheduler runs everything");
+}
+
 int main(void)
 {
+	char *const sh[] = { SHELL, NULL };
+	char *const selftest[] = { SELFTEST, NULL };
 	struct utsname kernel;
 	long started = -1;	/* when the shell was last started */
 	int test;
@@ -353,6 +475,8 @@ int main(void)
 
 	test = on_command_line("kairos.test");
 
+	start_scheduler();
+
 	for (;;) {
 		if (!shell) {
 			/* The self-test runs once, then the system powers off. */
@@ -365,7 +489,7 @@ int main(void)
 			if (seconds() == started)
 				sleep(1);
 			started = seconds();
-			shell = start(test ? SELFTEST : SHELL);
+			shell = start(test ? selftest : sh, 1);
 			if (!shell)
 				continue;
 		}

@@ -16,11 +16,16 @@
 #   init       process 1 is our init, started from the initramfs
 #   cpus       all the machine's CPUs are running
 #   devices    the kernel filled in /dev
-#   sched_ext  the kernel can take a BPF scheduler, and none is loaded
+#   sched_ext  the kernel can take a BPF scheduler
+#   scheduler  Kairos Scheduler was running before init started its first
+#              program
+#   loader     its loader is init's child and has no terminal
 #   leftovers  init collected a finished process that it had adopted
 #   terminal   init gave the program it started a terminal of its own
 #   shutdown   before the power went off, init asked a program that was
 #              still running to finish
+#   unload     at power off, the loader unloaded the scheduler when it was
+#              asked to
 #   poweroff   the system powered off by itself, without a panic
 #
 # It exits with 0 only if every check passes.
@@ -105,11 +110,27 @@ else
 fi
 
 state=$(fact sched_ext)
-if [ "$state" = disabled ]; then
-	ok sched_ext "present, no scheduler loaded"
+case $state in
+missing | "") bad sched_ext "the kernel can't take a BPF scheduler" ;;
+*) ok sched_ext "present, $state" ;;
+esac
+
+# How long init waited for it, from init's own line on the console.
+waited=$(sed -n 's/^init: Kairos Scheduler is running, after \([0-9]* ms\).*/\1/p' "$log" |
+	tr -d '\r' | head -n 1)
+scheduler=$(fact scheduler)
+if [ "$state" = enabled ] && [ "$scheduler" = kairos ]; then
+	ok scheduler "Kairos Scheduler ran before the first program${waited:+ (attached after $waited)}"
 else
-	bad sched_ext "${state:-not reported}"
+	bad scheduler "the scheduler was ${scheduler:-not reported} (state ${state:-not reported}) when the first program started"
 fi
+
+loader=$(fact loader)
+case $loader in
+"parent 1 terminal 0") ok loader "init's child, no terminal" ;;
+"") bad loader "not reported" ;;
+*) bad loader "$loader" ;;
+esac
 
 leftovers=$(fact leftovers)
 if [ "$leftovers" = 0 ]; then
@@ -128,6 +149,15 @@ if [ "$(fact shutdown)" = asked ]; then
 	ok shutdown "init asked a running program to finish first"
 else
 	bad shutdown "the power went off under a running program"
+fi
+
+# The kernel's own line when a loader closes its hold on the scheduler, and
+# the loader's when it then ends. Both come before the power goes off.
+if sed '/^reboot: /q' "$log" | grep -q 'disabled (unregistered from user space)' &&
+	sed '/^reboot: /q' "$log" | grep -q '^EXIT: unregistered from user space'; then
+	ok unload "the loader unloaded the scheduler when asked"
+else
+	bad unload "the scheduler wasn't unloaded on request before the power went off"
 fi
 
 if grep -q 'Kernel panic' "$log"; then

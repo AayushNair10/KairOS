@@ -12,8 +12,24 @@ echo "kairos.test: kernel $(uname -r)"
 echo "kairos.test: init $(readlink /proc/1/exe)"
 echo "kairos.test: cpus $(nproc)"
 echo "kairos.test: devices $(ls /dev | wc -l) entries in /dev"
-# "disabled" means the kernel can take a BPF scheduler and none is loaded.
+# The state of the kernel's BPF scheduler: "enabled" while one runs,
+# "disabled" when none does. The file is missing in a kernel that can't take
+# one.
 echo "kairos.test: sched_ext $(cat /sys/kernel/sched_ext/state 2>/dev/null || echo missing)"
+# The name of the BPF scheduler that runs. The folder "root" exists only
+# while one does. These lines are the first thing the self-test does, so
+# they show what init left running before it started its first program.
+echo "kairos.test: scheduler $(cat /sys/kernel/sched_ext/root/ops 2>/dev/null || echo none)"
+# The scheduler's loader: who started it (process 1 is init) and whether it
+# has a terminal. It shouldn't: Ctrl-C typed at the shell must not reach it.
+loader=$(pidof scx_kairos)
+if [ -n "$loader" ]; then
+	set -- $(cat "/proc/$loader/stat" | sed 's/^.*) //')
+	# Fields after the name: state, parent, group, session, terminal.
+	echo "kairos.test: loader parent $2 terminal $5"
+else
+	echo "kairos.test: loader none"
+fi
 
 # Leftovers: finished processes that nobody collected. The brackets start a
 # process that puts "true" in the background and finishes at once, so "true"
