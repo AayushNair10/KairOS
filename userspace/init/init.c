@@ -9,7 +9,8 @@
  *   - mounts the file systems through which the kernel shows its own
  *     information;
  *   - starts Kairos Scheduler's loader, and waits until the kernel runs the
- *     scheduler before it starts anything else;
+ *     scheduler before it starts anything else. When the loader ends, it
+ *     starts it again, unless it was stopped on purpose or keeps failing;
  *   - starts the shell, with the terminal behind the console as its own.
  *     With the word kairos.test on the kernel's command line it starts
  *     /selftest instead, for an unattended boot test;
@@ -56,6 +57,16 @@
 #define SCHEDULER_WAIT	10
 
 /*
+ * The restart rule. A run of the scheduler that ends within SCHEDULER_STEADY
+ * seconds counts as a failure. Init then waits before it starts it again:
+ * 1 s after the first such failure, 2 s after the second, 4, 8. After
+ * SCHEDULER_TRIES failures in a row it gives up. A run that lasted longer
+ * starts the count afresh and is followed by a new start at once.
+ */
+#define SCHEDULER_STEADY	60
+#define SCHEDULER_TRIES		5
+
+/*
  * The signals init wants. It asks the kernel to hold them back ("blocks"
  * them) and takes them one at a time in main(), when it is ready for the
  * next one. So no code here ever runs in the middle of other code, the way
@@ -74,6 +85,20 @@ static pid_t shell;
 
 /* The scheduler's loader. 0 while it isn't running. */
 static pid_t scheduler;
+
+/* When the loader was last started, in milliseconds since boot. */
+static long scheduler_started;
+
+/* When to start it again, in milliseconds since boot. -1: no new start. */
+static long scheduler_due = -1;
+
+/* Runs in a row that ended within SCHEDULER_STEADY seconds. */
+static int scheduler_failures;
+
+/* Set once the system is shutting down: then nothing is started again. */
+static int stopping;
+
+static void scheduler_ended(int status);
 
 /* Print one line on the console, marked as coming from init. */
 __attribute__((format(printf, 1, 2)))
@@ -258,16 +283,21 @@ static pid_t start(char *const argv[], int terminal)
 static int collect(void)
 {
 	pid_t pid;
+	int status;
 
 	/*
 	 * One signal can stand for several finished processes, so go on until
-	 * none is left. WNOHANG: don't wait for a process to finish.
+	 * none is left. WNOHANG: don't wait for a process to finish. status
+	 * receives how the process ended: its exit status, or the signal that
+	 * killed it.
 	 */
-	while ((pid = waitpid(-1, NULL, WNOHANG)) > 0) {
+	while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
 		if (pid == shell)
 			shell = 0;
-		if (pid == scheduler)
+		if (pid == scheduler) {
 			scheduler = 0;
+			scheduler_ended(status);
+		}
 	}
 
 	/*
@@ -319,6 +349,7 @@ static int all_finished_within(int limit)
 __attribute__((noreturn))
 static void shut_down(int how, const char *what)
 {
+	stopping = 1;
 	say("%s: asking every process to finish", what);
 	/*
 	 * -1 means every process except process 1. SIGTERM is the request to
@@ -395,8 +426,118 @@ static int scheduler_running(void)
 }
 
 /*
- * Start Kairos Scheduler, and return once the kernel runs it, its loader has
- * ended, or SCHEDULER_WAIT seconds have passed.
+ * Wait for one of the signals init wants, but only until the time due (in
+ * milliseconds since boot). Returns the signal, or -1 if the time came first.
+ */
+static int sleep_until(long due)
+{
+	long left = due - milliseconds();
+	struct timespec wait;
+
+	if (left < 0)
+		left = 0;
+	wait.tv_sec = left / 1000;
+	wait.tv_nsec = left % 1000 * 1000000;
+	return sigtimedwait(&wanted, NULL, &wait);
+}
+
+/* Start the scheduler's loader, without waiting for anything. */
+static void launch_scheduler(void)
+{
+	/*
+	 * --main-config: the configuration the scheduler's evaluation chose.
+	 * --quiet: no statistics on the console every second.
+	 */
+	char *const argv[] = { SCHEDULER, "--main-config", "--quiet", NULL };
+
+	scheduler_started = milliseconds();
+	scheduler = start(argv, 0);
+}
+
+/*
+ * What the loader's exit status says about how the scheduler ended. The
+ * loader lists its statuses in its --help. 127 is init's own: the program
+ * couldn't be run at all (see start()).
+ *
+ * *on_purpose is set when someone meant it to stop: a signal asked the
+ * loader to finish (0), or the kernel unloaded the scheduler without an
+ * error (3), which in this kernel means the reset key or the policy itself
+ * asking to stop.
+ */
+static const char *how_it_ended(int status, int *on_purpose)
+{
+	static char text[80];
+	int sig;
+
+	*on_purpose = 0;
+	if (WIFSIGNALED(status)) {
+		sig = WTERMSIG(status);
+		snprintf(text, sizeof(text), "was killed by signal %d (%s)",
+			 sig, strsignal(sig));
+		return text;
+	}
+	switch (WEXITSTATUS(status)) {
+	case 0:
+		*on_purpose = 1;
+		return "was stopped on request";
+	case 1:
+		return "didn't start";
+	case 3:
+		*on_purpose = 1;
+		return "was unloaded by the kernel, without an error";
+	case 4:
+		return "was unloaded by the kernel after an error";
+	case 5:
+		return "was unloaded by the kernel's watchdog: a task waited too long";
+	case 127:
+		return "couldn't be run";
+	}
+	snprintf(text, sizeof(text), "ended with status %d",
+		 WEXITSTATUS(status));
+	return text;
+}
+
+/*
+ * The loader has ended; status says how. Say so, and decide by the restart
+ * rule whether and when to start it again. The start itself happens in
+ * main(), whose wait for signals ends when the time has come.
+ */
+static void scheduler_ended(int status)
+{
+	long ran = (milliseconds() - scheduler_started) / 1000;
+	const char *how;
+	int on_purpose, delay;
+
+	if (stopping)
+		return;
+
+	how = how_it_ended(status, &on_purpose);
+	say("Kairos Scheduler %s, after %ld s", how, ran);
+
+	if (on_purpose) {
+		say("leaving it stopped; the kernel's own scheduler runs everything");
+		return;
+	}
+	if (ran >= SCHEDULER_STEADY) {
+		scheduler_failures = 0;
+		scheduler_due = milliseconds();
+		say("starting it again");
+		return;
+	}
+	if (++scheduler_failures >= SCHEDULER_TRIES) {
+		say("it ended within %d s of starting %d times in a row; giving up, and the kernel's own scheduler runs everything",
+		    SCHEDULER_STEADY, scheduler_failures);
+		return;
+	}
+	delay = 1 << (scheduler_failures - 1);
+	scheduler_due = milliseconds() + delay * 1000L;
+	say("starting it again in %d s (%d of %d failures before init gives up)",
+	    delay, scheduler_failures, SCHEDULER_TRIES);
+}
+
+/*
+ * Start Kairos Scheduler at boot, and return once the kernel runs it, its
+ * loader has ended, or SCHEDULER_WAIT seconds have passed.
  *
  * Waiting means that no program init starts ever runs under the kernel's
  * default scheduler; only init and the loader do, for the second or so the
@@ -406,11 +547,6 @@ static int scheduler_running(void)
  */
 static void start_scheduler(void)
 {
-	/*
-	 * --main-config: the configuration the scheduler's evaluation chose.
-	 * --quiet: no statistics on the console every second.
-	 */
-	char *const argv[] = { SCHEDULER, "--main-config", "--quiet", NULL };
 	const struct timespec step = { 0, 10 * 1000 * 1000 };
 	long began = milliseconds();
 	sigset_t finished;
@@ -419,7 +555,7 @@ static void start_scheduler(void)
 	sigaddset(&finished, SIGCHLD);
 
 	say("starting Kairos Scheduler");
-	scheduler = start(argv, 0);
+	launch_scheduler();
 
 	while (scheduler) {
 		if (scheduler_running()) {
@@ -436,7 +572,7 @@ static void start_scheduler(void)
 		if (sigtimedwait(&finished, NULL, &step) == SIGCHLD)
 			collect();
 	}
-	say("Kairos Scheduler didn't start; the kernel's own scheduler runs everything");
+	/* The loader has ended, and scheduler_ended() has said what's next. */
 }
 
 int main(void)
@@ -494,8 +630,20 @@ int main(void)
 				continue;
 		}
 
-		/* Sleep until one of the signals arrives. */
-		switch (sigwaitinfo(&wanted, NULL)) {
+		/* The scheduler's new start, when its time has come. */
+		if (scheduler_due >= 0 && milliseconds() >= scheduler_due) {
+			scheduler_due = -1;
+			launch_scheduler();
+		}
+
+		/*
+		 * Sleep until one of the signals arrives, or, with a new start
+		 * of the scheduler planned, until it is due. Init never sleeps
+		 * through a wait in one go: it has to keep answering the other
+		 * signals meanwhile, a shutdown request among them.
+		 */
+		switch (scheduler_due >= 0 ? sleep_until(scheduler_due) :
+			sigwaitinfo(&wanted, NULL)) {
 		case SIGCHLD:
 			collect();
 			break;

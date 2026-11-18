@@ -48,6 +48,33 @@ else
 	echo "kairos.test: terminal none"
 fi
 
+# Restart. Kill the scheduler's loader outright, as a crash would. The
+# kernel unloads the scheduler as soon as its loader is gone, and init
+# should start it again. Wait up to 20 s for a new loader with the
+# scheduler running, and say how long it took and who started it.
+old=$(pidof scx_kairos)
+new=
+if [ -n "$old" ]; then
+	kill -9 "$old"
+	tenths=0
+	while [ $tenths -lt 200 ]; do
+		sleep 0.1
+		tenths=$((tenths + 1))
+		new=$(pidof scx_kairos)
+		if [ -n "$new" ] && [ "$new" != "$old" ] &&
+			[ "$(cat /sys/kernel/sched_ext/state)" = enabled ]; then
+			break
+		fi
+		new=
+	done
+fi
+if [ -n "$new" ]; then
+	set -- $(sed 's/^.*) //' "/proc/$new/stat")
+	echo "kairos.test: restart $((tenths / 10)).$((tenths % 10)) s parent $2"
+else
+	echo "kairos.test: restart none"
+fi
+
 # Shutdown. This leaves a program running after the script has ended. When
 # the system shuts down, init should ask it to finish (the TERM signal) and
 # give it time, and not cut the power under it. The program says when it is

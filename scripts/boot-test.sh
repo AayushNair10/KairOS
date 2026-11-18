@@ -22,6 +22,7 @@
 #   loader     its loader is init's child and has no terminal
 #   leftovers  init collected a finished process that it had adopted
 #   terminal   init gave the program it started a terminal of its own
+#   restart    after its loader was killed, init started the scheduler again
 #   shutdown   before the power went off, init asked a program that was
 #              still running to finish
 #   unload     at power off, the loader unloaded the scheduler when it was
@@ -143,6 +144,13 @@ terminal=$(fact terminal)
 case $terminal in
 /dev/*) ok terminal "init gave the self-test the terminal $terminal" ;;
 *) bad terminal "the self-test had no terminal" ;;
+esac
+
+restart=$(fact restart)
+case $restart in
+*" s parent 1") ok restart "running again ${restart% parent 1} after its loader was killed" ;;
+none | "") bad restart "not running again 20 s after its loader was killed" ;;
+*) bad restart "$restart" ;;
 esac
 
 if [ "$(fact shutdown)" = asked ]; then
