@@ -29,6 +29,11 @@
 #              asked to
 #   poweroff   the system powered off by itself, without a panic
 #
+# With the word kairos.noscheduler, which tells init to leave the scheduler
+# off, the four checks about it expect it off: scheduler (init said so and
+# the kernel has none), loader and restart (no loader was ever started) and
+# unload (the kernel never had a BPF scheduler to unload).
+#
 # It exits with 0 only if every check passes.
 
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -54,6 +59,14 @@ while [ $# -gt 0 ]; do
 		shift
 		;;
 	esac
+done
+
+# Is the scheduler meant to be off?
+off=0
+for word in "${words[@]}"; do
+	if [ "$word" = kairos.noscheduler ]; then
+		off=1
+	fi
 done
 
 log=$KAIROS_BUILD/boot-test.log
@@ -120,18 +133,35 @@ esac
 waited=$(sed -n 's/^init: Kairos Scheduler is running, after \([0-9]* ms\).*/\1/p' "$log" |
 	tr -d '\r' | head -n 1)
 scheduler=$(fact scheduler)
-if [ "$state" = enabled ] && [ "$scheduler" = kairos ]; then
+if [ $off = 1 ]; then
+	if [ "$state" = disabled ] && [ "$scheduler" = none ] &&
+		grep -q '^init: kairos.noscheduler: leaving Kairos Scheduler off' "$log"; then
+		ok scheduler "off, as kairos.noscheduler asks; init said so"
+	elif [ "$state" = disabled ] && [ "$scheduler" = none ]; then
+		bad scheduler "off, but init didn't say it left it off"
+	else
+		bad scheduler "the scheduler was ${scheduler:-not reported} (state ${state:-not reported}) despite kairos.noscheduler"
+	fi
+elif [ "$state" = enabled ] && [ "$scheduler" = kairos ]; then
 	ok scheduler "Kairos Scheduler ran before the first program${waited:+ (attached after $waited)}"
 else
 	bad scheduler "the scheduler was ${scheduler:-not reported} (state ${state:-not reported}) when the first program started"
 fi
 
 loader=$(fact loader)
-case $loader in
-"parent 1 terminal 0") ok loader "init's child, no terminal" ;;
-"") bad loader "not reported" ;;
-*) bad loader "$loader" ;;
-esac
+if [ $off = 1 ]; then
+	case $loader in
+	none) ok loader "none running" ;;
+	"") bad loader "not reported" ;;
+	*) bad loader "running despite kairos.noscheduler: $loader" ;;
+	esac
+else
+	case $loader in
+	"parent 1 terminal 0") ok loader "init's child, no terminal" ;;
+	"") bad loader "not reported" ;;
+	*) bad loader "$loader" ;;
+	esac
+fi
 
 leftovers=$(fact leftovers)
 if [ "$leftovers" = 0 ]; then
@@ -147,11 +177,21 @@ case $terminal in
 esac
 
 restart=$(fact restart)
-case $restart in
-*" s parent 1") ok restart "running again ${restart% parent 1} after its loader was killed" ;;
-none | "") bad restart "not running again 20 s after its loader was killed" ;;
-*) bad restart "$restart" ;;
-esac
+if [ $off = 1 ]; then
+	# Nothing to kill, so the self-test reports none. Init must also never
+	# have started the loader, at any point in the run.
+	if [ "$restart" = none ] && ! grep -q '^init: starting Kairos Scheduler' "$log"; then
+		ok restart "init never started the loader"
+	else
+		bad restart "init started the loader despite kairos.noscheduler"
+	fi
+else
+	case $restart in
+	*" s parent 1") ok restart "running again ${restart% parent 1} after its loader was killed" ;;
+	none | "") bad restart "not running again 20 s after its loader was killed" ;;
+	*) bad restart "$restart" ;;
+	esac
+fi
 
 if [ "$(fact shutdown)" = asked ]; then
 	ok shutdown "init asked a running program to finish first"
@@ -161,7 +201,15 @@ fi
 
 # The kernel's own line when a loader closes its hold on the scheduler, and
 # the loader's when it then ends. Both come before the power goes off.
-if sed '/^reboot: /q' "$log" | grep -q 'disabled (unregistered from user space)' &&
+# The kernel prints a line starting "sched_ext: BPF scheduler" whenever one
+# is enabled or disabled; with the scheduler off there must be none.
+if [ $off = 1 ]; then
+	if grep -q 'sched_ext: BPF scheduler' "$log"; then
+		bad unload "the kernel had a BPF scheduler despite kairos.noscheduler"
+	else
+		ok unload "nothing to unload: the kernel never had a BPF scheduler"
+	fi
+elif sed '/^reboot: /q' "$log" | grep -q 'disabled (unregistered from user space)' &&
 	sed '/^reboot: /q' "$log" | grep -q '^EXIT: unregistered from user space'; then
 	ok unload "the loader unloaded the scheduler when asked"
 else

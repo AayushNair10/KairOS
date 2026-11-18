@@ -10,7 +10,10 @@
  *     information;
  *   - starts Kairos Scheduler's loader, and waits until the kernel runs the
  *     scheduler before it starts anything else. When the loader ends, it
- *     starts it again, unless it was stopped on purpose or keeps failing;
+ *     starts it again, unless it was stopped on purpose or keeps failing.
+ *     With the word kairos.noscheduler on the kernel's command line it
+ *     leaves the scheduler off, and the kernel's own scheduler runs
+ *     everything: the way to boot when the scheduler is what's broken;
  *   - starts the shell, with the terminal behind the console as its own.
  *     With the word kairos.test on the kernel's command line it starts
  *     /selftest instead, for an unattended boot test;
@@ -611,7 +614,15 @@ int main(void)
 
 	test = on_command_line("kairos.test");
 
-	start_scheduler();
+	/*
+	 * The off switch. Without a start here, nothing else ever starts the
+	 * scheduler: the restart rule only acts when a loader init started
+	 * has ended.
+	 */
+	if (on_command_line("kairos.noscheduler"))
+		say("kairos.noscheduler: leaving Kairos Scheduler off; the kernel's own scheduler runs everything");
+	else
+		start_scheduler();
 
 	for (;;) {
 		if (!shell) {
