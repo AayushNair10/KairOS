@@ -15,7 +15,7 @@ and the scheduling policy as a BPF program on sched_ext.
 | 1 | Source layout: how Linux and the scheduler live in the repo (done) | how kernel changes are carried: tags, patch series, forks | none |
 | 2 | Kernel config and first boot in QEMU, to a busybox shell (done) | Kconfig, kbuild, device tree, initramfs, console | config only |
 | 3 | Our own init (PID 1) (done) | processes: fork, exec, wait, signals, reaping; sessions and terminals; orderly shutdown; mounting /proc, /sys, /dev | none |
-| 4 | Kairos Scheduler loaded and supervised by init | the bpf() syscall, struct_ops attach, BTF; what an ejection does | none |
+| 4 | Kairos Scheduler loaded and supervised by init (done) | the bpf() syscall, struct_ops attach, BTF; what an ejection does | config only |
 | 5 | Shell and a service manager that sets task classes | sessions and terminals, cgroups, scheduling policies | none |
 | 6 | Task class as a kernel concept (syscall or cgroup file, visible to BPF) | syscall entry, task_struct, user ABI, kfuncs | patch |
 | 7 | LC and batch pools that follow CPU topology | sched domains, NUMA, CPU capacity | policy; maybe a patch |
@@ -587,3 +587,245 @@ Open questions / next:
 - No licence file yet, so init.c has no licence line; the kernel's style
   checker warns about that and nothing else that applies to user space.
 - Disk: 8.1 GB free.
+
+---
+
+## 4. Kairos Scheduler loaded and supervised by init — 2026-11-18
+
+Options (all need the same kernel switches and the same build of the
+policy; they differ in who holds the scheduler and who reacts when it goes
+away):
+- A: init starts the loader, unchanged, as a second child beside the
+  shell, and starts it again by a rule written in init.
+- B: init is the loader. The BPF library and the compiled policy are
+  linked into init, which attaches the scheduler before any other process
+  and holds it.
+- C: a one-shot loader attaches the scheduler, pins it in the BPF file
+  system and ends. No process holds it; a watcher reads the kernel's state
+  file and loads it again after an ejection.
+- D: a separate supervisor program of ours between init and the loader,
+  holding the restart rule.
+
+My pick and reasoning:
+- B: "B makes the most sense for me, since the loader being in init feels
+  right. Since init is called before, the loader also gets called."
+- After the verdict: "ok lets go with A".
+
+Verdict: A.
+- "Init runs first, so the loader does too" is true, but just as true of
+  A, C and D: under A the loader is the first thing init starts. The order
+  comes from what init starts first, not from what is inside init.
+- "Feels right" pointed the wrong way. The scheduler being central is a
+  reason to keep it running, not to put it in process 1, the one program
+  whose crash is a kernel panic.
+- Missed, B's costs: the BPF library is 37,900 lines in 21 files, all of
+  which would run in process 1, and the loader handles errors by printing
+  a message and exiting, in 7 places; in process 1, exiting is a panic.
+  The first failure of step 1 ("Function not implemented") would have
+  been a panic under B. Under A it was one line on the console.
+- What B really buys is small here. Under A only init and the loader run
+  before the scheduler attaches, and component 8 takes over early attach.
+  B's one real gain was that init would know why the scheduler was thrown
+  out; the loader then ended with status 0 after an ejection, as after a
+  clean stop. Step 4 closed that gap with an exit status.
+
+Where the others fit:
+- B: a single-purpose appliance whose init is the only long-lived program.
+  From memory, systemd's process 1 loads small BPF programs through the
+  same library for per-service restrictions. No system I know of puts a
+  scheduler there.
+- C: BPF programs with no user-space half, such as filters and counters.
+  From memory, Android pins them at boot with a one-shot loader.
+- D: systems with many services. s6 and runit keep a tiny process 1 above a
+  supervisor tree, and distributions run sched_ext schedulers as a
+  systemd service.
+
+Linux concepts learned:
+- Loading: the loader makes `bpf()` calls for the maps
+  (`BPF_MAP_CREATE`) and the programs (`BPF_PROG_LOAD`: the verifier
+  checks every path, the JIT compiles it). The table of callbacks is a map
+  of type `BPF_MAP_TYPE_STRUCT_OPS`. `BPF_LINK_CREATE` goes through
+  `bpf_struct_ops_link_create()` (`kernel/bpf/bpf_struct_ops.c`) to
+  `bpf_scx_reg()` and `scx_enable()` (`kernel/sched/ext.c`).
+- Lifetime through a handle: the link is a file descriptor. When its last
+  copy closes, by `close()` or because the process was killed,
+  `bpf_scx_unreg()` calls `scx_disable(SCX_EXIT_UNREG)`. A pin in the BPF
+  file system is the other way to hold it.
+- The fallback: `scx_disable_workfn()` first switches to bypass mode (the
+  kernel queues tasks itself and stops calling the policy), then moves
+  every task back to the class of its own policy (`scx_setscheduler_class()`:
+  EEVDF for ordinary tasks), then lets the policy go.
+- When the kernel unloads a BPF scheduler by itself (`enum scx_exit_kind`
+  in `kernel/sched/ext_internal.h`):
+  - the link closes (UNREG);
+  - the policy breaks a rule that the kernel checks as it runs: an invalid
+    CPU, a queue that doesn't exist, a task sent to a CPU it may not run on
+    (`scx_error()`, ERROR);
+  - the policy asks: `scx_bpf_error()` (ERROR_BPF) or `scx_bpf_exit()`
+    (UNREG_BPF). Kairos Scheduler calls the first only while starting
+    (more CPUs than it supports, or its queues or timer can't be made);
+  - the watchdog: a runnable task waited longer than the timeout, 30 s
+    unless the policy asks for less (`check_rq_for_timeouts()`, from
+    `scx_watchdog_workfn()`, ERROR_STALL), or the watchdog itself didn't
+    run (`scx_tick()`);
+  - an RCU stall (`scx_rcu_cpu_stall()`, called from
+    `kernel/rcu/tree_stall.h`), or a soft or hard lockup (`scx_softlockup()`
+    and `scx_hardlockup()`, from `kernel/watchdog.c`; Kairos has no lockup
+    detector);
+  - a CPU coming or going, when the policy has no callbacks for that
+    (`handle_hotplug()`, UNREG_KERN with a restart code; Kairos has no CPU
+    hot-plug);
+  - SysRq-S (`sysrq_handle_sched_ext_reset()`, SYSRQ; Kairos has no SysRq).
+  - Suspend doesn't unload it: `scx_pm_handler()` only bypasses it
+    meanwhile (Kairos has no suspend).
+- A policy can't hang or crash the kernel: the verifier proved that its
+  memory accesses are safe and that its loops end. It can make bad choices,
+  which is what the watchdog is for.
+- Types by name: the policy names kernel fields, and they are matched
+  against the running kernel's BTF at load time. The loader reads the exit
+  kinds' values the same way (`__COMPAT_ENUM_OR_ZERO` in
+  `tools/sched_ext/include/scx/compat.h`).
+- What the BPF library needs from the kernel: `memfd_create()` for
+  placeholder maps (`create_placeholder_fd()` in `tools/lib/bpf/libbpf.c`);
+  socket filters for its feature probes (`bpf_object__probe_loading()`;
+  `probe_kern_global_data()` in `tools/lib/bpf/features.c`, whose failure
+  silently leaves out the maps for global variables). The helper
+  `bpf_get_current_task_btf()` is in `kernel/trace/bpf_trace.c`, built only
+  with `CONFIG_BPF_EVENTS`. The tools' `SCX_OPS_OPEN` names the cgroup
+  callbacks, which exist only with `CONFIG_EXT_GROUP_SCHED`.
+- The tick: a slice that has run out is noticed on the next tick
+  (`task_tick_scx()` then `resched_curr()`), so a busy task runs up to one
+  tick past its slice. `CONFIG_HZ` sets the rate; `HIGH_RES_TIMERS` lets a
+  timer fire at its own time (resolution in `/proc/timer_list`);
+  `NO_HZ_IDLE` stops the tick on an idle CPU.
+- The kernel's state for user space: `/sys/kernel/sched_ext/state` and
+  `/sys/kernel/sched_ext/root/ops`. The kernel also sends a uevent with
+  `SCXOPS=` when a scheduler is enabled; init doesn't listen for it.
+- Exit status: `waitpid()` gives `WIFEXITED()` and `WEXITSTATUS()` for a
+  program that ended itself, `WIFSIGNALED()` and `WTERMSIG()` for one a
+  signal killed. `sigtimedwait()` waits for a signal with a deadline.
+
+What changed: Kairos boots with Kairos Scheduler running. The loader is
+built from the pinned kernel tree as one static program and packed into
+the image. Init starts it before anything else, in a session of its own
+with no terminal, and waits until the kernel reports the scheduler enabled
+(at most 10 s) before it starts the shell. The loader holds the scheduler
+through a file descriptor, so whenever it ends the kernel puts every task
+back on EEVDF. On a branch of the scheduler repository, the loader now ends
+with a status that says why: 0 stopped on request, 1 didn't start, 3 the
+kernel unloaded it without an error, 4 after an error, 5 the watchdog.
+Init acts on it: after 0 or 3 it leaves the scheduler stopped; otherwise it
+starts it again, at once if it had run 60 s, or else after 1, 2, 4 and 8 s,
+and gives up after five such short runs in a row. While it waits, it keeps
+answering signals. `kairos.noscheduler` on the kernel's command line boots
+without it. The kernel config gained 14 lines: what the BPF library and the
+policy need, and precise timers, 1,000 ticks a second and no tick on idle
+CPUs, each measured first.
+
+What each step did, in order:
+1. Build the loader: `scripts/scheduler-build.sh` builds the BPF library,
+   bpftool and a header of the kernel's types from the pinned tree, then
+   the loader, statically linked (2.9 MB). It didn't compile against our
+   kernel until group scheduling was on. On Kairos it stopped at "failed to
+   initialize skeleton BPF object 'scx_kairos': -38".
+2. Kernel switches, one failure at a time: in-memory files and
+   `memfd_create`; then "Couldn't load trivial BPF program" (networking);
+   then "program of this type cannot use helper
+   bpf_get_current_task_btf#158" (BPF tracing). Then it attached by hand,
+   and Ctrl-C detached it.
+3. Timers and tick, measured before and after: timer resolution 4 ms, then
+   1 ns; the policy's 1 ms timer fired at most 250 times a second, then
+   about 870. Two busy tasks on one CPU with a 3 ms slice ran 4.0 ms at a
+   time at 250 ticks a second and 3.7 ms at 1,000. No tick on idle CPUs:
+   about 785 timer interrupts a second on each idle CPU before, fewer than
+   6 after.
+4. The loader, on the scheduler repository's branch `kairos-os`: `--quiet`
+   and the exit statuses. Statuses 0, 1 and 3 seen on the VM's own kernel
+   (3 with SysRq-S).
+5. Init starts the loader before the shell: checks `scheduler` and
+   `loader`.
+6. The restart rule: check `restart`, which kills the loader.
+7. The off switch: the boot test switches its four scheduler checks when
+   given the word.
+
+Found on the way:
+- The plan said the policy compiled against Kairos's types and the loader
+  linked statically. Each was true alone; together, the loader didn't
+  compile until the cgroup switches were on.
+- Removing networking as unneeded gave "fd 9 is not pointing to valid
+  bpf_map": the BPF library's probe for global variables failed and it
+  quietly left out their maps. Networking went back in.
+- A 3 ms slice runs about 4 ms even at 1,000 ticks a second: it has a few
+  microseconds left at the third tick, so it ends on the fourth. The kernel
+  the scheduler was evaluated on gives 4.0 ms too. Recorded in the
+  scheduler's research log on `kairos-os`.
+- With precise timers, QEMU sometimes prints "hrtimer: interrupt took N
+  ns": the emulator stalled. Harmless.
+- A second loader started by hand fails with "Device or resource busy":
+  the kernel takes one BPF scheduler at a time.
+- In this kernel, an unload without an error (status 3) comes only from
+  SysRq-S, the policy asking, or CPU hot-plug, and in the last case the
+  loader restarts itself without ending.
+- One kernel build failed once ("Deleting file 'kernel/bpf/btf.o'"); the
+  rerun passed. Cause not found.
+
+How it's tested:
+- `./scripts/boot-test.sh`: 13 lines (kernel, init, cpus, devices,
+  sched_ext, scheduler, loader, leftovers, terminal, restart, shutdown,
+  unload, poweroff), all `ok`, exit status 0. Passed with 1, 2, 4, 8 and
+  16 CPUs. The scheduler attached 0.6 to 1.7 s after init started the
+  loader and was running again 1.3 to 1.6 s after its loader was killed.
+- `./scripts/boot-test.sh kairos.noscheduler`: the same 13 lines; the four
+  about the scheduler expect it off. Passed with 1, 4 and 16 CPUs.
+- Each new check failed first: `scheduler` and `loader` with the old
+  init, `restart` with the init that didn't restart, and the four
+  off-switch checks with the init before the off switch.
+- In the shell: `kill -9` on the loader 4 s after boot brings it back
+  after 1 s ("1 of 5"); a plain `kill` leaves it stopped; killed after
+  62 s it is started again at once, and the next early kill shows "1 of
+  5" again; with a loader started by hand holding the kernel's place,
+  init's starts end with "didn't start" after 1, 2, 4 and 8 s, and it
+  gives up after the fifth; `poweroff` during a wait is answered at once.
+  With `kairos.noscheduler`: the state is `disabled`, no loader runs, and
+  one started by hand attaches but isn't init's to look after.
+- With scratch images: no loader file ("couldn't be run" five times, then
+  init gives up and the shell works); a loader that never attaches (init
+  goes on after 10 s); a stand-in that fails at once.
+- Not seen from the real scheduler: an unload after an error or by the
+  watchdog (statuses 4 and 5). Init's handling of them was tried with the
+  stand-in.
+
+Interview questions:
+1. Your scheduler is a BPF program and its loader is killed with
+   SIGKILL. What happens to every task on the machine, and why doesn't the
+   kernel need the loader's help to do it?
+2. Why does your init start the loader as a child and restart it, instead
+   of loading the BPF program itself? How does it decide whether to start
+   it again?
+3. A 3 ms slice ran for about 4 ms even with 1,000 ticks a second. Why,
+   and what would make slices end on time?
+
+Resume line: "Made Kairos boot with its own sched_ext scheduler: built the
+BPF loader as one static binary for a minimal kernel, traced each load
+failure to a missing kernel feature, and wrote init's supervision of it (a
+restart rule driven by the loader's exit status, with back-off and a
+boot-time off switch); a QEMU boot test checks attach, restart and
+fallback on every run."
+
+Open questions / next:
+- Push: the scheduler repository's branch `kairos-os` (a40a1ff) isn't on
+  GitHub yet, and this repo's submodule pin needs it. That repository's
+  `main` also has one unpushed commit.
+- After a stop on request nothing starts the scheduler again but a
+  reboot, and a loader started by hand isn't supervised. Component 5's
+  service manager is the place for both.
+- Init looks at the state file every 10 ms while it waits at boot. The
+  kernel's uevent could tell it instead.
+- Statuses 4 and 5 haven't been seen from the real scheduler.
+- The cost of no tick on idle CPUs to wake-up latency isn't measured;
+  neither is whether the 4 ms slice changes the scheduler's evaluated
+  results.
+- Networking and BPF tracing are in only for the BPF library and one
+  helper; they add about 3.8 MB to the kernel image.
+- From component 3: shutdown doesn't unmount; no licence file.
+- Disk: 6.3 GB free.
