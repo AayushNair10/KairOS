@@ -106,6 +106,9 @@ static int scheduler_failures;
 /* Set once the system is shutting down: then nothing is started again. */
 static int stopping;
 
+/* Set when the control groups, lc and batch are in place. */
+static int class_groups;
+
 static void scheduler_ended(int status);
 
 /* Print one line on the console, marked as coming from init. */
@@ -153,28 +156,38 @@ static int mount_info(const char *type, const char *where)
  * root's children, lc and batch among them. Writing "+cpu" to the root's
  * cgroup.subtree_control does that.
  */
-static void make_group(const char *path)
+static int make_group(const char *path)
 {
-	if (mkdir(path, 0755) < 0 && errno != EEXIST)
+	if (mkdir(path, 0755) < 0 && errno != EEXIST) {
 		say("can't make the control group %s: %s", path, strerror(errno));
+		return -1;
+	}
+	return 0;
+}
+
+static int switch_on_cpu_controller(void)
+{
+	int fd, ret = 0;
+
+	fd = open(CGROUPS "/cgroup.subtree_control", O_WRONLY);
+	if (fd < 0 || write(fd, "+cpu", 4) < 0) {
+		say("can't switch on the CPU controller in %s: %s", CGROUPS,
+		    strerror(errno));
+		ret = -1;
+	}
+	if (fd >= 0)
+		close(fd);
+	return ret;
 }
 
 static void make_class_groups(void)
 {
-	int fd;
-
-	if (mount_info("cgroup2", CGROUPS) < 0)
-		return;
-
-	make_group(CGROUPS "/lc");
-	make_group(CGROUPS "/batch");
-
-	fd = open(CGROUPS "/cgroup.subtree_control", O_WRONLY);
-	if (fd < 0 || write(fd, "+cpu", 4) < 0)
-		say("can't switch on the CPU controller in %s: %s", CGROUPS,
-		    strerror(errno));
-	if (fd >= 0)
-		close(fd);
+	class_groups = mount_info("cgroup2", CGROUPS) == 0 &&
+		       make_group(CGROUPS "/lc") == 0 &&
+		       make_group(CGROUPS "/batch") == 0 &&
+		       switch_on_cpu_controller() == 0;
+	if (!class_groups)
+		say("without its control groups, Kairos Scheduler takes a task's class from its scheduling policy");
 }
 
 /*
@@ -500,12 +513,20 @@ static void launch_scheduler(void)
 {
 	/*
 	 * --main-config: the configuration the scheduler's evaluation chose.
+	 * --class=cgroup and --batch-cgroup, after it, change one part of it:
+	 * a task is batch if it is in the batch group or below it, or has
+	 * lowered its own scheduling policy to batch or idle. Without the
+	 * groups, --main-config's own rule applies: the policy alone.
 	 * --quiet: no statistics on the console every second.
 	 */
-	char *const argv[] = { SCHEDULER, "--main-config", "--quiet", NULL };
+	char *const by_group[] = {
+		SCHEDULER, "--main-config", "--class=cgroup",
+		"--batch-cgroup=" CGROUPS "/batch", "--quiet", NULL
+	};
+	char *const by_policy[] = { SCHEDULER, "--main-config", "--quiet", NULL };
 
 	scheduler_started = milliseconds();
-	scheduler = start(argv, 0);
+	scheduler = start(class_groups ? by_group : by_policy, 0);
 }
 
 /*

@@ -21,7 +21,8 @@
 #   sched_ext  the kernel can take a BPF scheduler
 #   scheduler  Kairos Scheduler was running before init started its first
 #              program
-#   loader     its loader is init's child and has no terminal
+#   loader     its loader is init's child, has no terminal, and takes a
+#              task's class from the batch control group
 #   leftovers  init collected a finished process that it had adopted
 #   terminal   init gave the program it started a terminal of its own
 #   restart    after its loader was killed, init started the scheduler again
@@ -177,8 +178,15 @@ if [ $off = 1 ]; then
 	*) bad loader "running despite kairos.noscheduler: $loader" ;;
 	esac
 else
+	rule=$(fact "loader class")
 	case $loader in
-	"parent 1 terminal 0") ok loader "init's child, no terminal" ;;
+	"parent 1 terminal 0")
+		if [ "$rule" = "cgroup /sys/fs/cgroup/batch" ]; then
+			ok loader "init's child, no terminal, batch = the batch group"
+		else
+			bad loader "init's child, but the class rule is ${rule:-not reported}"
+		fi
+		;;
 	"") bad loader "not reported" ;;
 	*) bad loader "$loader" ;;
 	esac

@@ -39,6 +39,12 @@ if [ -n "$loader" ]; then
 	set -- $(cat "/proc/$loader/stat" | sed 's/^.*) //')
 	# Fields after the name: state, parent, group, session, terminal.
 	echo "kairos.test: loader parent $2 terminal $5"
+	# Its class rule: the --class and --batch-cgroup options it was given.
+	# Without --class, --main-config's rule applies: the policy.
+	args=$(tr '\0' '\n' <"/proc/$loader/cmdline")
+	class=$(echo "$args" | sed -n 's/^--class=//p' | tail -n 1)
+	group=$(echo "$args" | sed -n 's/^--batch-cgroup=//p' | tail -n 1)
+	echo "kairos.test: loader class ${class:-policy} ${group:-none}"
 else
 	echo "kairos.test: loader none"
 fi
