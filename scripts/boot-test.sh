@@ -16,6 +16,8 @@
 #   init       process 1 is our init, started from the initramfs
 #   cpus       all the machine's CPUs are running
 #   devices    the kernel filled in /dev
+#   cgroups    the control groups are mounted, with Kairos's two class
+#              groups (lc and batch) and the CPU controller on for both
 #   sched_ext  the kernel can take a BPF scheduler
 #   scheduler  Kairos Scheduler was running before init started its first
 #              program
@@ -121,6 +123,25 @@ if [ "${devices:-0}" -gt 1 ]; then
 	ok devices "$devices entries in /dev"
 else
 	bad devices "${devices:-0} entries in /dev"
+fi
+
+# Is "cpu" one of the words in $1?
+has_cpu() {
+	case " $1 " in
+	*" cpu "*) return 0 ;;
+	esac
+	return 1
+}
+
+cgtype=$(fact cgroups)
+lc=$(fact "cgroup lc")
+batch=$(fact "cgroup batch")
+if [ "$cgtype" != cgroup2 ]; then
+	bad cgroups "/sys/fs/cgroup is ${cgtype:-nothing}, not the control groups"
+elif has_cpu "$lc" && has_cpu "$batch"; then
+	ok cgroups "mounted; lc and batch have the CPU controller"
+else
+	bad cgroups "mounted, but lc: ${lc:-no controllers}; batch: ${batch:-no controllers}"
 fi
 
 state=$(fact sched_ext)

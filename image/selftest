@@ -12,6 +12,18 @@ echo "kairos.test: kernel $(uname -r)"
 echo "kairos.test: init $(readlink /proc/1/exe)"
 echo "kairos.test: cpus $(nproc)"
 echo "kairos.test: devices $(ls /dev | wc -l) entries in /dev"
+# Control groups: the type of file system mounted at /sys/fs/cgroup
+# ("cgroup2" for control groups), and Kairos's two class groups. For each
+# group, the controllers that apply to it; "cpu" means the scheduler sees a
+# task in that group as being in it.
+echo "kairos.test: cgroups $(awk '$2 == "/sys/fs/cgroup" { print $3 }' /proc/mounts)"
+for class in lc batch; do
+	if [ -d "/sys/fs/cgroup/$class" ]; then
+		echo "kairos.test: cgroup $class $(cat "/sys/fs/cgroup/$class/cgroup.controllers")"
+	else
+		echo "kairos.test: cgroup $class missing"
+	fi
+done
 # The state of the kernel's BPF scheduler: "enabled" while one runs,
 # "disabled" when none does. The file is missing in a kernel that can't take
 # one.

@@ -7,7 +7,8 @@
  *
  * What it does:
  *   - mounts the file systems through which the kernel shows its own
- *     information;
+ *     information, and the control groups, with a group for each of the
+ *     two classes of work that Kairos Scheduler tells apart;
  *   - starts Kairos Scheduler's loader, and waits until the kernel runs the
  *     scheduler before it starts anything else. When the loader ends, it
  *     starts it again, unless it was stopped on purpose or keeps failing.
@@ -38,6 +39,7 @@
 #include <sys/ioctl.h>
 #include <sys/mount.h>
 #include <sys/reboot.h>
+#include <sys/stat.h>
 #include <sys/utsname.h>
 #include <sys/wait.h>
 
@@ -49,6 +51,9 @@
  * the kernel and holds it there for as long as it runs.
  */
 #define SCHEDULER	"/bin/scx_kairos"
+
+/* Where the control groups are mounted: the usual place on Linux. */
+#define CGROUPS		"/sys/fs/cgroup"
 
 /* How many seconds a process gets to finish when it is asked to. */
 #define PATIENCE	5
@@ -120,10 +125,56 @@ static void say(const char *fmt, ...)
  * Mount one of the kernel's information file systems. They hold no data on
  * any disk: the kernel makes up their contents when they are read.
  */
-static void mount_info(const char *type, const char *where)
+static int mount_info(const char *type, const char *where)
 {
-	if (mount(type, where, type, 0, NULL) < 0)
+	if (mount(type, where, type, 0, NULL) < 0) {
 		say("can't mount %s on %s: %s", type, where, strerror(errno));
+		return -1;
+	}
+	return 0;
+}
+
+/*
+ * The control groups, and Kairos's two class groups.
+ *
+ * A control group is a set of processes that the kernel treats as one: it
+ * counts their CPU time together, can limit them together and can stop
+ * them all at once. The groups are folders in a file system of their own.
+ * At first every process is in the root folder, and a new process starts
+ * in its parent's group; writing a process number into a group's
+ * cgroup.procs file moves that process.
+ *
+ * Kairos makes two groups, lc and batch, one for each class of work that
+ * Kairos Scheduler tells apart.
+ *
+ * The scheduler sees groups only through the CPU controller: to it, a task
+ * is in the nearest group, going up from the task's own, that the CPU
+ * controller applies to. So the CPU controller is switched on for the
+ * root's children, lc and batch among them. Writing "+cpu" to the root's
+ * cgroup.subtree_control does that.
+ */
+static void make_group(const char *path)
+{
+	if (mkdir(path, 0755) < 0 && errno != EEXIST)
+		say("can't make the control group %s: %s", path, strerror(errno));
+}
+
+static void make_class_groups(void)
+{
+	int fd;
+
+	if (mount_info("cgroup2", CGROUPS) < 0)
+		return;
+
+	make_group(CGROUPS "/lc");
+	make_group(CGROUPS "/batch");
+
+	fd = open(CGROUPS "/cgroup.subtree_control", O_WRONLY);
+	if (fd < 0 || write(fd, "+cpu", 4) < 0)
+		say("can't switch on the CPU controller in %s: %s", CGROUPS,
+		    strerror(errno));
+	if (fd >= 0)
+		close(fd);
 }
 
 /*
@@ -594,6 +645,7 @@ int main(void)
 	mount_info("proc", "/proc");		/* processes and kernel state */
 	mount_info("sysfs", "/sys");		/* devices and kernel settings */
 	mount_info("devtmpfs", "/dev");		/* one entry per device */
+	make_class_groups();			/* /sys/fs/cgroup, lc, batch */
 
 	/* Where the shell looks for programs. Everything is in /bin. */
 	setenv("PATH", "/bin", 1);
