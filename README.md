@@ -110,6 +110,10 @@ own scheduling policy to batch or idle. Everything else is LC. The kernel
 tells the policy a task's group when the task is created and whenever it
 moves to another group, so the class costs nothing at each wakeup.
 
+The boot test checks this end to end. With crunch keeping every CPU busy,
+a small LC program's median wake-up delay was 4 to 10 times shorter with
+crunch as batch than with crunch as LC (in QEMU, on 1 to 4 CPUs).
+
 ### When something fails
 
 | What happens | Who notices | What follows |

@@ -188,27 +188,38 @@ scheduler/       Kairos Scheduler, a git submodule at a pinned commit
 kernel/config/   the kernel config: base (a starting point that ships with
                  Linux: allnoconfig) and kairos.config (our switches)
 image/           the first file system: initramfs.list (its files), selftest
-                 (what a boot test runs in place of the shell) and
-                 init.fallback (a shell script that can stand in for init:
-                 boot with rdinit=/init.fallback)
+                 (what a boot test runs in place of the shell),
+                 services/ (one description per service: class, start,
+                 run; packed into /etc/kairos/services) and init.fallback
+                 (a shell script that can stand in for init: boot with
+                 rdinit=/init.fallback)
 scripts/         kernel-fetch.sh, kernel-export.sh, kernel-check.sh,
                  kernel-build.sh, scheduler-build.sh, image-build.sh,
                  run-qemu.sh, boot-test.sh, lib.sh
 docs/            DESIGN_LOG.md, notes
 userspace/       init/init.c: Kairos's init, process 1, one statically
-                 linked C program. It starts Kairos Scheduler's loader
-                 first and restarts it by a rule. Planned: shell, tools
+                 linked C program. It mounts the control groups (lc,
+                 batch), starts Kairos Scheduler's loader first and
+                 restarts it by a rule, then the service manager.
+                 service/service.c: the service manager (each service in
+                 a control group under its class), the service command
+                 and batch (the same program). probe/probe.c: the demo LC
+                 program. Planned (optional): our own shell
 ```
 - Build and boot: `scripts/kernel-build.sh` (config + build into
   `~/kairos-build`; `--config-only` to check the config),
-  `scripts/image-build.sh` (compiles init, runs
-  `scripts/scheduler-build.sh` to build the loader statically from the
-  pinned kernel tree, packs the initramfs archive with busybox's tools
-  linked into `/bin` and the loader as `/bin/scx_kairos`),
+  `scripts/image-build.sh` (compiles init, the service manager and the
+  probe, runs `scripts/scheduler-build.sh` to build the loader statically
+  from the pinned kernel tree, packs the initramfs archive with busybox's
+  tools linked into `/bin` and the loader as `/bin/scx_kairos`),
   `scripts/boot-test.sh`
   (unattended boot, checks the console; `--smp N` and extra kernel
   command-line words are passed on), `scripts/run-qemu.sh` (a shell;
   `--log FILE` runs unattended).
+- Timing measured in QEMU is emulated (no KVM): compare configurations
+  against each other in the same run, never against real hardware, and
+  don't judge timing when the machine has more CPUs than the VM (each
+  emulated CPU is a thread on the VM's CPUs).
 - A new behaviour of init gets a fact printed by `image/selftest` and a
   check in `scripts/boot-test.sh`. Add the check first and show it failing,
   then make the change. Words for user space on the kernel's command line

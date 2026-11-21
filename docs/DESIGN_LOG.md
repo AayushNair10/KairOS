@@ -16,7 +16,8 @@ and the scheduling policy as a BPF program on sched_ext.
 | 2 | Kernel config and first boot in QEMU, to a busybox shell (done) | Kconfig, kbuild, device tree, initramfs, console | config only |
 | 3 | Our own init (PID 1) (done) | processes: fork, exec, wait, signals, reaping; sessions and terminals; orderly shutdown; mounting /proc, /sys, /dev | none |
 | 4 | Kairos Scheduler loaded and supervised by init (done) | the bpf() syscall, struct_ops attach, BTF; what an ejection does | config only |
-| 5 | Shell and a service manager that sets task classes | sessions and terminals, cgroups, scheduling policies | none |
+| 5 | A service manager that sets task classes (done; the shell was split off, see 5b) | cgroups, scheduling policies, event loops | none (a scheduler change on its `kairos-os` branch) |
+| 5b | Our own shell (optional, not scheduled) | parsing, pipes, process groups, job control | none |
 | 6 | Task class as a kernel concept (syscall or cgroup file, visible to BPF) | syscall entry, task_struct, user ABI, kfuncs | patch |
 | 7 | LC and batch pools that follow CPU topology | sched domains, NUMA, CPU capacity | policy; maybe a patch |
 | 8 | Scheduler attached before PID 1 | initcalls, kernel threads, loading BPF from inside the kernel | patch (not sized) |
@@ -829,3 +830,226 @@ Open questions / next:
   helper; they add about 3.8 MB to the kernel image.
 - From component 3: shutdown doesn't unmount; no licence file.
 - Disk: 6.3 GB free.
+
+---
+
+## 5. A service manager that sets task classes — 2026-11-21
+
+Split before the options: the roadmap's component 5 was "shell and a
+service manager". The two share nothing but the name, and nothing later
+depends on our own shell, so the shell became an optional component 5b
+and busybox's shell stays.
+
+Options (all with a description per service and its class, LC or batch):
+- A: services inside init: init's table grows from the scheduler and the
+  shell to every service, with a control channel into process 1.
+- B: a separate service manager, started and restarted by init; the
+  class is the thread's scheduling policy (batch or idle), which the
+  scheduler already reads; a subreaper gets detached orphans back.
+- C: like B, but each service in a control group of its own, under one
+  group per class; the scheduler takes the class from the group (a
+  change on its `kairos-os` branch).
+- D: busybox's runit tools, rebuilt from source with `chrt`: a run script
+  per service, no C of ours.
+
+My pick and reasoning:
+- "I am confused between B and C. It all depends on whether LC and batch
+  are supposed to be classified differently. If so, we can go ahead with
+  C. If not, B is the best solution."
+- After the verdict and plan: "yes".
+
+Verdict: C.
+- Right: the question that separates B and C (is the class its own
+  concept, or Linux's scheduling policy reused?), set up as "if yes, C".
+- Missed: answering it. It is yes: the policy already means something to
+  EEVDF (batch doesn't preempt on wakeup; idle gets a weight of 3 against
+  1,024), and Kairos runs on EEVDF in its first second, in back-offs and
+  with the off switch; the class belongs to the service, not to each
+  thread, which can change its own policy with one call; and component 6
+  makes the class a kernel concept.
+- Missed: tracking. Knowing which processes belong to a service favours
+  groups whatever the class is: a detached daemon, stopping all of a
+  service, counting its CPU time.
+- B's real strengths: no change to the scheduler, and less code. The
+  evaluated rule stays available: the group rule is a new option, and
+  `--main-config` is unchanged.
+- A correction to my options: "changing a running service's class: move
+  one group" was wrong. Version 2 groups can't be renamed or moved
+  (`kernel/cgroup/cgroup.c`, "rename(2) is disallowed"); the class changes
+  by restarting the service in the other group.
+
+Where the others fit:
+- A: small systems with a fixed set of services: the `respawn` lines of
+  System V init and busybox's init.
+- B: supervisors of foreground services without grouping: s6, runit.
+- C: systemd (a control group per service), container runtimes.
+- D: Void Linux (runit as init and supervisor), embedded busybox systems.
+
+Linux concepts learned:
+- Control groups, version 2 (`kernel/cgroup/cgroup.c`): one tree, a file
+  system mounted at `/sys/fs/cgroup`; a group is a folder. Writing a
+  process number to `cgroup.procs` moves the process with all its
+  threads; "0" means the writer. A forked child starts in its parent's
+  group. `cgroup.subtree_control` switches controllers on for a group's
+  children ("+cpu"). `cgroup.events` says "populated 1" while the group or
+  one below it holds a process; a change wakes `poll()` with POLLPRI
+  (`cgroup_file_notify()`, `kernfs_notify()`, `kernfs_generic_poll()`).
+  `cgroup.kill` kills everything in the group at once, including what is
+  forked meanwhile. `cpu.stat` counts CPU time in every group. Groups
+  can't be renamed or moved. A group's id is its folder's inode number on
+  a 64-bit machine (`kernfs_id_ino()`).
+- The no-internal-processes rule (`cgroup_vet_subtree_control_enable()`):
+  a group with controllers on for its children may not hold processes,
+  except the root. It binds domain controllers (memory, I/O), not threaded
+  ones such as cpu, which split CPU between a group's processes and its
+  children themselves.
+- kernfs counts a newly opened file as changed until it is first read
+  (`atomic_set(&on->event, 1)` in `fs/kernfs/file.c`): read, then poll.
+- The scheduler's view of groups is the CPU controller's: a task's
+  `sched_task_group`, its nearest group the CPU controller applies to.
+  sched_ext passes it to `ops.init_task()` (`args->cgroup`, with
+  `CONFIG_EXT_GROUP_SCHED`) and to `ops.cgroup_move()`.
+  `scx_bpf_task_cgroup()` may only be called with the task's run-queue
+  lock held, which `init_task()` doesn't have.
+- BPF: `bpf_cgroup_ancestor()` is `KF_RCU`: it takes only a trusted
+  pointer, such as a callback's argument. A pointer read from a field of
+  an argument isn't one ("R1 must be a rcu pointer"); plain loads through
+  it are allowed, so read the id and take a reference with
+  `bpf_cgroup_from_id()`.
+- EEVDF and the policies (`kernel/sched/fair.c`): "BATCH and IDLE tasks do
+  not preempt others"; idle's weight is 3 (`WEIGHT_IDLEPRIO`); a thread
+  may ask for its own slice, 0.1 to 100 ms (`sched_attr.sched_runtime`,
+  `__setparam_fair()`). No label is set by the kernel itself.
+- One wait for everything: `signalfd()` turns signals into a file
+  descriptor, so `poll()` waits on signals, a named pipe and the groups'
+  event files together. A named pipe opened for reading and writing never
+  reports "every writer has gone"; opened for writing with O_NONBLOCK and
+  no reader, it fails with ENXIO; a write of fewer than PIPE_BUF bytes
+  arrives whole. `rename()` replaces a file in one step.
+- `clock_nanosleep()` to an absolute time keeps a periodic schedule from
+  drifting. CLOCK_MONOTONIC is the same clock in every process.
+- `cgroup_disable=cpu` on the kernel's command line switches a controller
+  off.
+- Under QEMU without KVM, each emulated CPU is a thread on the host; with
+  more emulated CPUs than real ones, timing measures the host's sharing.
+
+What changed: init mounts the control groups, makes `lc` and `batch` and
+switches the CPU controller on, then starts Kairos Scheduler with a new
+class rule from its `kairos-os` branch: a task is batch if it is in the
+batch group or below it (or has lowered its own policy), LC otherwise.
+The policy notes the class when a task is created and when it moves, so
+a wakeup costs nothing extra. Init then starts the service manager, a new
+program of 930 lines, and restarts it if it ends. The manager runs each
+service in a group of its own under its class; a service runs while its
+group holds a process and has ended once the group is empty, whatever
+its processes did. It restarts services with init's back-off rule, finds
+services that are already running when it starts, and answers `service
+status`, `start` and `stop` through a named pipe and a state file per
+service; stopping sends TERM to the group and empties it with
+`cgroup.kill` after 5 s. `batch COMMAND` runs one command in a fresh
+group below `batch`. Two demo services: `probe` (LC, a new 150-line
+program that measures its own wake-up delays) and `crunch` (batch, a
+busy loop per CPU, started on request).
+
+What each step did, in order:
+1. Control groups at boot (`f8154dd`): mount, `lc`, `batch`, CPU
+   controller.
+2. Class by group (`04c9517` on `kairos-os`, then `05c58c4`, `674fe8e`):
+   the scheduler reads the group; init passes the rule, or falls back to
+   the policy rule if the groups couldn't be made.
+3. The service manager and the probe (`478a030`).
+4. Control: status, start, stop, start-on-request services, `batch`
+   (`32905a4`).
+5. The end-to-end measurement in the boot test (`0a80fea`).
+Plus the README's design section with diagrams (`ea8415e`).
+
+Found on the way:
+- The plan said a group with controllers on for its children can't hold
+  processes. True only for domain controllers; cpu is threaded.
+- The verifier refused `bpf_cgroup_ancestor()` on `init_task()`'s
+  `args->cgroup` ("R1 must be a rcu pointer"); fixed by looking the group
+  up by id first.
+- A service started on request was taken for ended at once: its group's
+  freshly opened events file counted as changed, `poll()` woke before the
+  new process had joined, and the manager read "populated 0". Fixed by
+  reading the file once after opening it, and by calling a service ended
+  only if its group is empty and it had begun (a process was seen in the
+  group, or its first process has finished).
+- `service start` of an unknown service waited 10 s for a state that
+  never came; the command now checks for the description first.
+- In emulation, EEVDF gave the probe shorter delays (192 us median, crunch
+  "as batch", 4 CPUs) than Kairos Scheduler did (234 to 578 us). A guess,
+  not checked: preempting a task on another CPU means an inter-processor
+  interrupt, slow under emulation, while EEVDF preempts on the CPU where
+  the probe's timer fired. This probe is not the evaluation's workload.
+
+How it's tested:
+- `./scripts/boot-test.sh`: 19 lines, all `ok`. Passed with 1, 2, 3, 4, 8
+  and 16 CPUs, and with 4 and 2 CPUs and `kairos.noscheduler`. New checks,
+  each seen failing first: `cgroups`, `loader` (now also the class rule),
+  `services`, `respawn`, `stop`, `batch`, `class`.
+- `class`: with crunch busy on every CPU, the probe's median wake-up delay
+  as batch / as LC / without crunch: 1 CPU 273 / 2686 / 403 us; 2 CPUs
+  170 / 702 / 358; 3 CPUs 437 / 1952 / 333; 4 CPUs 578 / 2499 / 305,
+  430 / 2180 / 399 and 234 / 2297 / 402. The check wants as batch at most
+  half of as LC. Its negative control: booted with `cgroup_disable=cpu`
+  (classes from the policy only), 2370 / 1696 us, and `class` fails. Not
+  judged with more emulated CPUs than real ones (8 CPUs: 3472 / 3935 us)
+  or under EEVDF.
+- The scheduler's own counters, loader started by hand with `--stats`:
+  4 busy loops in the root group, 4 LC CPUs and 0 borrows a second; moved
+  into `batch`, 2 LC CPUs and 2 borrows; moved back, 4 and 0; started in
+  `batch` before the scheduler loaded, 2 and 2 to 3.
+- In the shell: `service status`, `start` and `stop`; a service whose
+  first process leaves behind one that ignores TERM is stopped after
+  5.1 s; killing only a service's first process leaves the service
+  running; after `kill -9` on the manager, a new one adopts the running
+  services; a failing service is retried after 1, 2, 4 and 8 s and given
+  up; `batch` returns the command's exit status and removes its group;
+  `cgroup_disable=cpu` makes init start the scheduler with the policy
+  rule.
+
+Interview questions:
+1. Your service manager decides that a service has ended when its control
+   group is empty, not when the process it started exits. Why, and what
+   goes wrong with the simpler rule?
+2. How does your BPF scheduler know whether a task is LC or batch, when
+   does it find out, and why does a process the service forks a minute
+   later get the same class?
+3. In your emulated test, Linux's own scheduler gave the probe shorter
+   delays than yours. What would you need before trusting a latency
+   comparison between two schedulers, and why can't QEMU without hardware
+   acceleration give it?
+
+Resume line: "Built a service manager for Kairos in C that runs each
+service in its own cgroup v2 group under a latency-critical or batch
+parent, tracks services by group occupancy rather than PIDs, restarts
+them with back-off and stops them with cgroup.kill; extended the
+sched_ext scheduler to classify tasks by cgroup through its init_task and
+cgroup_move callbacks, and checked the whole path in a QEMU boot test (an
+LC program's median wake-up delay 4 to 10 times shorter when the CPU hog
+is labelled batch, in emulation)."
+
+Open questions / next:
+- Component 6, task class as a kernel concept. The class is now a naming
+  convention (being below the folder `batch`); component 6 could make it
+  a kernel interface, for instance a file in each control group, or a
+  system call.
+- Push: step 4, the README's design, step 5 and this entry aren't on
+  GitHub yet. The scheduler's `kairos-os` branch (04c9517) is.
+- The EEVDF result above is unexplained; component 12 (measurement at
+  real speed) is the place to compare.
+- A running service's class changes only by restarting it in the other
+  group; moving its processes isn't implemented.
+- From memory, not tried: the kernel can start a process directly in a
+  group (`CLONE_INTO_CGROUP`, through glibc's posix_spawn), which would
+  remove the moment a new service process runs outside its group.
+- With the CPU controller on, EEVDF shares CPU between groups by weight
+  whenever Kairos Scheduler isn't running. Not measured.
+- Services' logs grow in memory without limit; init restarts a failing
+  manager once a second forever; services have no start order; nothing
+  checks who sends commands (everything runs as root).
+- The policy half of the class rule (a task lowering itself to batch)
+  wasn't tried: the image has no `chrt`.
+- From component 3: shutdown doesn't unmount; no licence file.
+- Disk: 4.7 GB free (6.3 GB at the end of component 4).
