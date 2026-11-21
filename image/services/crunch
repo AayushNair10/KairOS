@@ -1,4 +1,6 @@
 # Batch work: one busy loop per CPU, forever. The loops are the shell's
-# children, so they are born in the service's group too.
+# children, so they are born in the service's group too. It keeps every CPU
+# busy, so it starts only when asked: service start crunch.
 class batch
+start manual
 run for i in $(seq $(nproc)); do while :; do :; done & done; wait

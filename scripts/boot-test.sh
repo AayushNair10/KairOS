@@ -26,10 +26,15 @@
 #   leftovers  init collected a finished process that it had adopted
 #   terminal   init gave the program it started a terminal of its own
 #   services   the service manager, init's child, runs the two demo
-#              services in their groups: probe in lc, and crunch in batch
-#              with all its children (one busy loop per CPU)
+#              services in their groups: probe in lc, and crunch (started
+#              with "service start") in batch with all its children (one
+#              busy loop per CPU); "service status" shows probe running
 #   respawn    after every process of crunch was killed, the manager
 #              started it again
+#   stop       "service stop" stopped a service whose only process was
+#              left behind by its first and ignores the request to finish
+#   batch      "batch COMMAND" ran the command in a group below batch, and
+#              removed the group afterwards
 #   restart    after its loader was killed, init started the scheduler again
 #   shutdown   before the power went off, init asked a program that was
 #              still running to finish
@@ -213,10 +218,15 @@ esac
 manager=$(fact manager)
 probe=$(fact "service probe")
 crunch=$(fact "service crunch")
+status=$(fact "status probe")
 if [ "$manager" != "parent 1" ]; then
 	bad services "the service manager: ${manager:-not reported}"
 elif [ "$probe" = "1 in lc" ] && [ "$crunch" = "$((smp + 1)) in batch" ]; then
-	ok services "probe in lc; crunch in batch, with its $smp loops"
+	if [ "$status" = "lc running" ]; then
+		ok services "probe in lc; crunch in batch, with its $smp loops; status agrees"
+	else
+		bad services "running, but service status says probe is \"${status}\""
+	fi
 else
 	bad services "probe: ${probe:-not reported}; crunch: ${crunch:-not reported} (want 1 in lc, $((smp + 1)) in batch)"
 fi
@@ -225,6 +235,25 @@ respawn=$(fact respawn)
 case $respawn in
 *" s") ok respawn "crunch running again $respawn after all its processes were killed" ;;
 *) bad respawn "crunch not running again 10 s after all its processes were killed" ;;
+esac
+
+stop=$(fact stop)
+case $stop in
+"1 before, 0 after, stopped, "*) ok stop "the process left behind was gone, after ${stop##*, }" ;;
+*) bad stop "${stop:-not reported} (want: 1 before, 0 after, stopped)" ;;
+esac
+
+batch=$(fact batch)
+left=$(fact "batch groups left")
+case $batch in
+"0::/batch/cmd-"*)
+	if [ "$left" = 0 ]; then
+		ok batch "ran in ${batch#0::}; the group was removed after"
+	else
+		bad batch "ran in ${batch#0::}, but ${left:-unknown} group(s) left behind"
+	fi
+	;;
+*) bad batch "ran in: ${batch:-not reported}" ;;
 esac
 
 restart=$(fact restart)

@@ -33,6 +33,9 @@ file /bin/scx_kairos ${SCHEDULER} 0755 0 0
 # starts it. The services it runs are described in /etc/kairos/services,
 # one file each, from image/services/.
 file /bin/service ${SERVICE} 0755 0 0
+# The same program under another name: batch COMMAND runs one command as
+# batch work.
+slink /bin/batch service 0777 0 0
 dir /etc 0755 0 0
 dir /etc/kairos 0755 0 0
 dir /etc/kairos/services 0755 0 0
