@@ -66,6 +66,51 @@ else
 	echo "kairos.test: terminal none"
 fi
 
+# Services. The service manager is init's child. It starts each service in a
+# control group of its own, below the group for its class. The two demo
+# services: probe (LC, one process) and crunch (batch: a shell with one busy
+# loop per CPU, its children). The manager starts after the scheduler, so
+# allow it up to 10 s to have both running, with all of crunch's loops.
+procs() {
+	cat "/sys/fs/cgroup/$1/cgroup.procs" 2>/dev/null | wc -l
+}
+tenths=0
+while [ $tenths -lt 100 ] &&
+	{ [ "$(procs lc/probe)" = 0 ] || [ "$(procs batch/crunch)" -le "$(nproc)" ]; }; do
+	sleep 0.1
+	tenths=$((tenths + 1))
+done
+manager=$(pidof service)
+if [ -n "$manager" ]; then
+	set -- $(sed 's/^.*) //' "/proc/$manager/stat")
+	echo "kairos.test: manager parent $2"
+else
+	echo "kairos.test: manager none"
+fi
+echo "kairos.test: service probe $(procs lc/probe) in lc"
+echo "kairos.test: service crunch $(procs batch/crunch) in batch"
+
+# Respawn. Kill every process of crunch at once, with the group's own kill
+# file, and wait up to 10 s for the manager to start it again: its group has
+# a process again, and not one of the old ones.
+old=" $(cat /sys/fs/cgroup/batch/crunch/cgroup.procs 2>/dev/null | tr '\n' ' ') "
+back=
+if [ "$old" != "  " ]; then
+	echo 1 >/sys/fs/cgroup/batch/crunch/cgroup.kill
+	tenths=0
+	while [ $tenths -lt 100 ]; do
+		sleep 0.1
+		tenths=$((tenths + 1))
+		new=$(head -n 1 /sys/fs/cgroup/batch/crunch/cgroup.procs)
+		[ -n "$new" ] || continue
+		case $old in
+		*" $new "*) ;;
+		*) back="$((tenths / 10)).$((tenths % 10)) s"; break ;;
+		esac
+	done
+fi
+echo "kairos.test: respawn ${back:-none}"
+
 # Restart. Kill the scheduler's loader outright, as a crash would. The
 # kernel unloads the scheduler as soon as its loader is gone, and init
 # should start it again. Wait up to 20 s for a new loader with the

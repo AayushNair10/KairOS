@@ -6,13 +6,16 @@
 #   file  <name> <where the file comes from> <mode> <user id> <group id>
 #   slink <name> <what the link points at> <mode> <user id> <group id>
 #
-# ${BUSYBOX}, ${INIT}, ${SCHEDULER} and ${KAIROS_REPO} are filled in by
-# scripts/image-build.sh.
+# ${BUSYBOX}, ${INIT}, ${SCHEDULER}, ${SERVICE}, ${PROBE} and ${KAIROS_REPO}
+# are filled in by scripts/image-build.sh.
 # The kernel adds /dev and /dev/console by itself.
 
 dir /bin 0755 0 0
 dir /proc 0555 0 0
 dir /sys 0555 0 0
+# Files that programs make while the system runs, such as the services'
+# logs. Like everything here, it is kept in memory.
+dir /run 0755 0 0
 
 # The shell and the basic tools, all in one program. scripts/image-build.sh
 # adds a link in /bin for each tool it holds, /bin/sh among them.
@@ -25,6 +28,20 @@ file /init ${INIT} 0755 0 0
 # Kairos Scheduler's loader: the program that hands the scheduling policy to
 # the kernel. Built by scripts/scheduler-build.sh from scheduler/scheduler/.
 file /bin/scx_kairos ${SCHEDULER} 0755 0 0
+
+# The service manager, compiled from userspace/service/service.c; init
+# starts it. The services it runs are described in /etc/kairos/services,
+# one file each, from image/services/.
+file /bin/service ${SERVICE} 0755 0 0
+dir /etc 0755 0 0
+dir /etc/kairos 0755 0 0
+dir /etc/kairos/services 0755 0 0
+file /etc/kairos/services/probe ${KAIROS_REPO}/image/services/probe 0644 0 0
+file /etc/kairos/services/crunch ${KAIROS_REPO}/image/services/crunch 0644 0 0
+
+# The demo LC program that the probe service runs, compiled from
+# userspace/probe/probe.c.
+file /bin/probe ${PROBE} 0755 0 0
 
 # A shell script that can stand in for init:
 # scripts/run-qemu.sh rdinit=/init.fallback

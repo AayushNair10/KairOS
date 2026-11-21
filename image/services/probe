@@ -1,0 +1,5 @@
+# A small latency-critical program (userspace/probe/probe.c). It wakes up
+# every 10 ms, does 200 us of work, and every 10 s writes to its log how
+# late its wakeups were: /run/service/probe/log.
+class lc
+run /bin/probe

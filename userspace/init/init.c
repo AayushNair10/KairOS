@@ -15,6 +15,8 @@
  *     With the word kairos.noscheduler on the kernel's command line it
  *     leaves the scheduler off, and the kernel's own scheduler runs
  *     everything: the way to boot when the scheduler is what's broken;
+ *   - starts the service manager, once the scheduler runs, and starts it
+ *     again whenever it ends;
  *   - starts the shell, with the terminal behind the console as its own.
  *     With the word kairos.test on the kernel's command line it starts
  *     /selftest instead, for an unattended boot test;
@@ -51,6 +53,12 @@
  * the kernel and holds it there for as long as it runs.
  */
 #define SCHEDULER	"/bin/scx_kairos"
+
+/*
+ * The service manager: it starts the services, each in a control group
+ * below the group for its class, and starts them again when they end.
+ */
+#define MANAGER		"/bin/service"
 
 /* Where the control groups are mounted: the usual place on Linux. */
 #define CGROUPS		"/sys/fs/cgroup"
@@ -93,6 +101,9 @@ static pid_t shell;
 
 /* The scheduler's loader. 0 while it isn't running. */
 static pid_t scheduler;
+
+/* The service manager. 0 while it isn't running. */
+static pid_t manager;
 
 /* When the loader was last started, in milliseconds since boot. */
 static long scheduler_started;
@@ -361,6 +372,17 @@ static int collect(void)
 	while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
 		if (pid == shell)
 			shell = 0;
+		if (pid == manager) {
+			manager = 0;
+			if (stopping)
+				;	/* it was asked to, with everything else */
+			else if (WIFSIGNALED(status))
+				say("the service manager was killed by signal %d (%s)",
+				    WTERMSIG(status), strsignal(WTERMSIG(status)));
+			else
+				say("the service manager ended with status %d",
+				    WEXITSTATUS(status));
+		}
 		if (pid == scheduler) {
 			scheduler = 0;
 			scheduler_ended(status);
@@ -654,6 +676,8 @@ int main(void)
 {
 	char *const sh[] = { SHELL, NULL };
 	char *const selftest[] = { SELFTEST, NULL };
+	char *const svc[] = { MANAGER, "manager", NULL };
+	long manager_started = -1;	/* when the manager was last started */
 	struct utsname kernel;
 	long started = -1;	/* when the shell was last started */
 	int test;
@@ -698,6 +722,22 @@ int main(void)
 		start_scheduler();
 
 	for (;;) {
+		/*
+		 * The service manager: started here once, before the shell,
+		 * and again whenever it ends, at most once a second. The
+		 * services it started keep running meanwhile; a new manager
+		 * finds them by their groups and looks after them.
+		 */
+		if (!manager) {
+			if (manager_started >= 0) {
+				say("starting the service manager again");
+				if (seconds() == manager_started)
+					sleep(1);
+			}
+			manager_started = seconds();
+			manager = start(svc, 0);
+		}
+
 		if (!shell) {
 			/* The self-test runs once, then the system powers off. */
 			if (test && started >= 0)

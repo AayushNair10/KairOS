@@ -53,12 +53,18 @@ INIT=$KAIROS_BUILD/userspace/init
 mkdir -p "$KAIROS_BUILD/userspace"
 cc -static -O2 -Wall -Wextra -Werror -o "$INIT" "$REPO_ROOT/userspace/init/init.c"
 
+# The service manager, and the demo LC program one of the services runs.
+SERVICE=$KAIROS_BUILD/userspace/service
+cc -static -O2 -Wall -Wextra -Werror -o "$SERVICE" "$REPO_ROOT/userspace/service/service.c"
+PROBE=$KAIROS_BUILD/userspace/probe
+cc -static -O2 -Wall -Wextra -Werror -o "$PROBE" "$REPO_ROOT/userspace/probe/probe.c"
+
 # Kairos Scheduler's loader. A run that finds nothing changed takes a
 # fraction of a second.
 "$REPO_ROOT/scripts/scheduler-build.sh"
 
-# The list refers to these four.
-export BUSYBOX INIT SCHEDULER KAIROS_REPO=$REPO_ROOT
+# The list refers to these six.
+export BUSYBOX INIT SCHEDULER SERVICE PROBE KAIROS_REPO=$REPO_ROOT
 
 # -t 0: give every file the same fixed date, so the same input always makes
 # the same archive.
@@ -66,4 +72,5 @@ export BUSYBOX INIT SCHEDULER KAIROS_REPO=$REPO_ROOT
 mv "$INITRAMFS.tmp" "$INITRAMFS"
 
 echo "init       $INIT ($(du -h "$INIT" | cut -f1))"
+echo "service    $SERVICE ($(du -h "$SERVICE" | cut -f1)), probe $PROBE ($(du -h "$PROBE" | cut -f1))"
 echo "initramfs  $INITRAMFS ($(du -h "$INITRAMFS" | cut -f1)), busybox $("$BUSYBOX" 2>&1 | sed -n '1s/^BusyBox \(v[^ ]*\).*/\1/p') with $(grep -c '^slink /bin/' "$list") tools"

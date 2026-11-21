@@ -1,0 +1,4 @@
+# Batch work: one busy loop per CPU, forever. The loops are the shell's
+# children, so they are born in the service's group too.
+class batch
+run for i in $(seq $(nproc)); do while :; do :; done & done; wait

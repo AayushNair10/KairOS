@@ -25,6 +25,11 @@
 #              task's class from the batch control group
 #   leftovers  init collected a finished process that it had adopted
 #   terminal   init gave the program it started a terminal of its own
+#   services   the service manager, init's child, runs the two demo
+#              services in their groups: probe in lc, and crunch in batch
+#              with all its children (one busy loop per CPU)
+#   respawn    after every process of crunch was killed, the manager
+#              started it again
 #   restart    after its loader was killed, init started the scheduler again
 #   shutdown   before the power went off, init asked a program that was
 #              still running to finish
@@ -203,6 +208,23 @@ terminal=$(fact terminal)
 case $terminal in
 /dev/*) ok terminal "init gave the self-test the terminal $terminal" ;;
 *) bad terminal "the self-test had no terminal" ;;
+esac
+
+manager=$(fact manager)
+probe=$(fact "service probe")
+crunch=$(fact "service crunch")
+if [ "$manager" != "parent 1" ]; then
+	bad services "the service manager: ${manager:-not reported}"
+elif [ "$probe" = "1 in lc" ] && [ "$crunch" = "$((smp + 1)) in batch" ]; then
+	ok services "probe in lc; crunch in batch, with its $smp loops"
+else
+	bad services "probe: ${probe:-not reported}; crunch: ${crunch:-not reported} (want 1 in lc, $((smp + 1)) in batch)"
+fi
+
+respawn=$(fact respawn)
+case $respawn in
+*" s") ok respawn "crunch running again $respawn after all its processes were killed" ;;
+*) bad respawn "crunch not running again 10 s after all its processes were killed" ;;
 esac
 
 restart=$(fact restart)
