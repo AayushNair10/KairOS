@@ -35,6 +35,13 @@
 #              left behind by its first and ignores the request to finish
 #   batch      "batch COMMAND" ran the command in a group below batch, and
 #              removed the group afterwards
+#   class      with every CPU busy with crunch, a small LC program's median
+#              wake-up delay was at most half as long with crunch as batch
+#              as with crunch as LC. Only reported, not judged, with
+#              kairos.noscheduler, or when the machine has more CPUs than
+#              the computer running QEMU: each emulated CPU is a thread
+#              there, and the delays measure how those threads share the
+#              real CPUs
 #   restart    after its loader was killed, init started the scheduler again
 #   shutdown   before the power went off, init asked a program that was
 #              still running to finish
@@ -84,7 +91,9 @@ done
 
 log=$KAIROS_BUILD/boot-test.log
 rm -f "$log"
-"$REPO_ROOT/scripts/run-qemu.sh" --smp "$smp" --log "$log" --timeout 120 \
+# The limit: a test with 16 CPUs took 88 s on a 4-CPU machine, most of it
+# emulating crunch's 16 busy loops during the class measurement.
+"$REPO_ROOT/scripts/run-qemu.sh" --smp "$smp" --log "$log" --timeout 180 \
 	kairos.test "${words[@]}" || true
 [ -f "$log" ] || die "QEMU wrote no console output"
 
@@ -255,6 +264,23 @@ case $batch in
 	;;
 *) bad batch "ran in: ${batch:-not reported}" ;;
 esac
+
+# Medians and 99th percentiles of the probe's wake-up delays, in us.
+read -r idle_med idle_p99 <<<"$(fact "class idle")"
+read -r batch_med batch_p99 <<<"$(fact "class batch")"
+read -r lc_med lc_p99 <<<"$(fact "class lc")"
+delays="median ${batch_med:-?} us as batch, ${lc_med:-?} us as LC, ${idle_med:-?} us without crunch"
+if [ -z "$batch_med" ] || [ -z "$lc_med" ] || [ -z "$idle_med" ]; then
+	bad class "not measured"
+elif [ $off = 1 ]; then
+	ok class "for reference, under EEVDF: $delays"
+elif [ "$smp" -gt "$(nproc)" ]; then
+	ok class "not judged, $smp emulated CPUs on $(nproc) real ones: $delays"
+elif [ $((batch_med * 2)) -le "$lc_med" ]; then
+	ok class "$delays"
+else
+	bad class "$delays: as batch isn't at most half of as LC"
+fi
 
 restart=$(fact restart)
 if [ $off = 1 ]; then

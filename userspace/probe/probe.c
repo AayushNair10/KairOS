@@ -11,7 +11,7 @@
  * Every report period it prints one line: how many wakeups, and the median,
  * 99th percentile and largest delay among them.
  *
- * usage: probe [-p PERIOD_US] [-w WORK_US] [-r REPORT_S]
+ * usage: probe [-p PERIOD_US] [-w WORK_US] [-r REPORT_S] [-n REPORTS]
  *
  *   -p  time between wakeups (default 10000: 10 ms)
  *   -w  work done after each wakeup, measured on the clock (default 200).
@@ -19,6 +19,7 @@
  *       wait up to 1 ms for a CPU to come free before it preempts batch
  *       work; one that runs longer preempts at once.
  *   -r  seconds between reports (default 10)
+ *   -n  end after this many reports (default: never)
  */
 
 #include <errno.h>
@@ -65,10 +66,10 @@ int main(int argc, char **argv)
 	long long period = 10000 * NSEC_PER_USEC, work = 200 * NSEC_PER_USEC;
 	long long report = 10 * NSEC_PER_SEC;
 	long long next, woke, report_at, *late;
-	long n = 0, max_n, missed = 0;
+	long n = 0, max_n, missed = 0, reports = -1;
 	int opt;
 
-	while ((opt = getopt(argc, argv, "p:w:r:")) != -1) {
+	while ((opt = getopt(argc, argv, "p:w:r:n:")) != -1) {
 		switch (opt) {
 		case 'p':
 			period = number(optarg) * NSEC_PER_USEC;
@@ -79,8 +80,11 @@ int main(int argc, char **argv)
 		case 'r':
 			report = number(optarg) * NSEC_PER_SEC;
 			break;
+		case 'n':
+			reports = number(optarg);
+			break;
 		default:
-			fprintf(stderr, "usage: probe [-p PERIOD_US] [-w WORK_US] [-r REPORT_S]\n");
+			fprintf(stderr, "usage: probe [-p PERIOD_US] [-w WORK_US] [-r REPORT_S] [-n REPORTS]\n");
 			return 2;
 		}
 	}
@@ -139,6 +143,8 @@ int main(int argc, char **argv)
 			n = 0;
 			missed = 0;
 			report_at += report;
+			if (reports > 0 && --reports == 0)
+				return 0;
 		}
 	}
 }

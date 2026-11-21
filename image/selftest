@@ -140,6 +140,29 @@ echo "kairos.test: stop $before before, $(procs batch/detach) after, ${state:-un
 echo "kairos.test: batch $(batch cat /proc/self/cgroup 2>&1 | head -n 1)"
 echo "kairos.test: batch groups left $(ls /sys/fs/cgroup/batch | grep -c '^cmd-')"
 
+# Class. How late a small LC program's wakeups are while crunch keeps every
+# CPU busy: once with crunch as batch, once with crunch as LC, and once
+# without crunch, for reference. Each is the median and the 99th
+# percentile, in microseconds, of 4 s of wakeups every 2 ms. Changing a
+# service's class is a restart in the other group.
+latency() {
+	probe -p 2000 -r 4 -n 1 | sed -n 's/.*median \([0-9]*\) us, 99% \([0-9]*\) us.*/\1 \2/p'
+}
+crunch=/etc/kairos/services/crunch
+service stop crunch >/dev/null 2>&1
+sleep 1
+echo "kairos.test: class idle $(latency)"
+service start crunch >/dev/null 2>&1
+sleep 1
+echo "kairos.test: class batch $(latency)"
+service stop crunch >/dev/null 2>&1
+sed -i 's/^class .*/class lc/' $crunch
+service start crunch >/dev/null 2>&1
+sleep 1
+echo "kairos.test: class lc $(latency)"
+service stop crunch >/dev/null 2>&1
+sed -i 's/^class .*/class batch/' $crunch
+
 # Restart. Kill the scheduler's loader outright, as a crash would. The
 # kernel unloads the scheduler as soon as its loader is gone, and init
 # should start it again. Wait up to 20 s for a new loader with the
