@@ -98,7 +98,15 @@ fi
 for p in "${PATCHES[@]}"; do
 	# checkpatch.pl has to run from inside a kernel tree. It exits with
 	# 0 only when it has no errors and no warnings.
-	if out=$(cd "$KAIROS_LINUX" && ./scripts/checkpatch.pl --terse "$p" 2>&1); then
+	#
+	# One warning is left out: FILE_PATH_CHANGES, "does MAINTAINERS need
+	# updating?", which comes with every new file. It is for patches sent
+	# to Linux's maintainers, who need to know who looks after a new file.
+	# Ours aren't sent, and a new file of ours sits in a directory that
+	# MAINTAINERS already gives an owner (scripts/get_maintainer.pl -f
+	# FILE says which).
+	if out=$(cd "$KAIROS_LINUX" &&
+		./scripts/checkpatch.pl --terse --ignore FILE_PATH_CHANGES "$p" 2>&1); then
 		ok style "$(basename "$p")"
 	else
 		bad style "$(basename "$p")"
