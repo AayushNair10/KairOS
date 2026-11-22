@@ -1,0 +1,261 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Aayush Nair <aayushnair204@gmail.com>
+Date: Sat, 21 Nov 2026 21:43:41 -0500
+Subject: [PATCH] cgroup: Add the kairos controller for task classes
+
+Kairos runs a latency-critical (LC) service next to batch work, and more
+than one part of the kernel needs to tell the two apart: the CPU
+scheduler, a sched_ext policy, now; memory reclaim and block I/O later.
+Until now the class was a convention between user space and the policy:
+a group named "batch", whose id the policy was given when it loaded.
+
+Make the class something the kernel stores. A new controller, kairos,
+gives every group but the root two files:
+
+  kairos.class            "lc", "batch" or "inherit" (the default)
+  kairos.class.effective  the class in effect: "lc" or "batch"
+
+The root group is always LC. A new group takes its parent's class when
+it comes online. A write to a group's kairos.class sets that group's
+class; passing it down to the groups below follows in the next change.
+
+The class belongs to a group, not to a task, because the unit Kairos
+manages is a service, a service is a group, and memory and I/O are
+accounted per group too.
+
+The controller is on in every group without being listed in
+cgroup.subtree_control, as perf_event is (implicit_on_dfl), which the
+cgroup core allows only for a controller that also allows threaded
+groups. Writers take the controller's own mutex rather than
+cgroup_mutex: a cgroup file's write handler runs under kernfs active
+protection, and group removal waits for that to drain while holding
+cgroup_mutex. Readers take no lock: each class is stored and read with
+a single access.
+
+Signed-off-by: Aayush Nair <aayushnair204@gmail.com>
+---
+ include/linux/cgroup_subsys.h |   4 +
+ init/Kconfig                  |  11 +++
+ kernel/cgroup/Makefile        |   1 +
+ kernel/cgroup/kairos.c        | 165 ++++++++++++++++++++++++++++++++++
+ 4 files changed, 181 insertions(+)
+ create mode 100644 kernel/cgroup/kairos.c
+
+diff --git a/include/linux/cgroup_subsys.h b/include/linux/cgroup_subsys.h
+index 3fd0bcbf308037f8509d9797864fcaafc887585f..26872812da3eef64fc4f6914d8813d15df80cb7a 100644
+--- a/include/linux/cgroup_subsys.h
++++ b/include/linux/cgroup_subsys.h
+@@ -69,6 +69,10 @@ SUBSYS(misc)
+ SUBSYS(dmem)
+ #endif
+ 
++#if IS_ENABLED(CONFIG_CGROUP_KAIROS)
++SUBSYS(kairos)
++#endif
++
+ /*
+  * The following subsystems are not supported on the default hierarchy.
+  */
+diff --git a/init/Kconfig b/init/Kconfig
+index 7484cd703bc1ab263345f2c6ef38a13bda4a046e..971c3bca12ed634a67b856290123deb374d3e227 100644
+--- a/init/Kconfig
++++ b/init/Kconfig
+@@ -1347,6 +1347,17 @@ config CGROUP_MISC
+ 	  For more information, please check misc cgroup section in
+ 	  /Documentation/admin-guide/cgroup-v2.rst.
+ 
++config CGROUP_KAIROS
++	bool "Kairos task class controller"
++	default n
++	help
++	  Gives every control group a class: latency-critical ("lc") or
++	  batch. A group takes its parent's class unless one is written to
++	  its kairos.class file; kairos.class.effective shows the class in
++	  effect. The root group is always latency-critical.
++
++	  Kairos's BPF scheduler tells the two classes apart by it.
++
+ config CGROUP_DEBUG
+ 	bool "Debug controller"
+ 	default n
+diff --git a/kernel/cgroup/Makefile b/kernel/cgroup/Makefile
+index ede31601a363a841003e80d66c06109e3d783b2f..c990fe640fccdccd12a4f4b515ef5663133705a0 100644
+--- a/kernel/cgroup/Makefile
++++ b/kernel/cgroup/Makefile
+@@ -8,4 +8,5 @@ obj-$(CONFIG_CPUSETS) += cpuset.o
+ obj-$(CONFIG_CPUSETS_V1) += cpuset-v1.o
+ obj-$(CONFIG_CGROUP_MISC) += misc.o
+ obj-$(CONFIG_CGROUP_DMEM) += dmem.o
++obj-$(CONFIG_CGROUP_KAIROS) += kairos.o
+ obj-$(CONFIG_CGROUP_DEBUG) += debug.o
+diff --git a/kernel/cgroup/kairos.c b/kernel/cgroup/kairos.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..cebf39d463f5c66fb213c4b48d9c49ced2e38c26
+--- /dev/null
++++ b/kernel/cgroup/kairos.c
+@@ -0,0 +1,165 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Kairos task classes: a cgroup controller that gives every group a class,
++ * latency-critical ("lc") or batch.
++ *
++ * Kairos runs a latency-critical service next to batch work, and more than
++ * one part of the kernel needs to tell the two apart: the CPU scheduler (a
++ * sched_ext policy) now, memory reclaim and block I/O later. The class
++ * belongs to a group, not to a task: the unit Kairos manages is a service,
++ * a service is a group, and everything a service starts is born in it.
++ *
++ * Each group but the root has two files:
++ *
++ *   kairos.class            what was written to the group: "lc", "batch",
++ *                           or "inherit" (its parent's class, the default)
++ *   kairos.class.effective  the class in effect: "lc" or "batch"
++ *
++ * The root group is always LC. The controller is on in every group without
++ * being listed in cgroup.subtree_control, as perf_event is, so every task
++ * has a class.
++ *
++ * Readers of the effective class, such as the scheduler at each wakeup,
++ * take no lock: each class is stored with one write and read with one
++ * read, so a reader sees the old class or the new one. Writers take
++ * kairos_mutex.
++ */
++
++#include <linux/cgroup.h>
++#include <linux/mutex.h>
++#include <linux/seq_file.h>
++#include <linux/slab.h>
++#include <linux/string.h>
++
++enum kairos_class {
++	KAIROS_CLASS_LC,
++	KAIROS_CLASS_BATCH,
++	KAIROS_CLASS_INHERIT,	/* only as what was written */
++};
++
++static const char * const kairos_class_names[] = {
++	[KAIROS_CLASS_LC]	= "lc",
++	[KAIROS_CLASS_BATCH]	= "batch",
++	[KAIROS_CLASS_INHERIT]	= "inherit",
++};
++
++struct kairos_cgroup {
++	struct cgroup_subsys_state	css;
++	enum kairos_class		set;		/* kairos.class */
++	enum kairos_class		effective;	/* lc or batch */
++};
++
++/*
++ * Serializes the writers of the classes: a write to kairos.class, and a new
++ * group taking its parent's class.
++ *
++ * It is the controller's own lock, not cgroup_mutex. A write to a cgroup
++ * file runs while kernfs holds an active reference on the file, and
++ * removing a group waits, under cgroup_mutex, for those references to
++ * drain. A write that then waited for cgroup_mutex would wait forever.
++ * The legacy freezer has its own lock for the same reason.
++ */
++static DEFINE_MUTEX(kairos_mutex);
++
++static struct kairos_cgroup *css_kairos(struct cgroup_subsys_state *css)
++{
++	return css ? container_of(css, struct kairos_cgroup, css) : NULL;
++}
++
++static struct cgroup_subsys_state *
++kairos_css_alloc(struct cgroup_subsys_state *parent_css)
++{
++	struct kairos_cgroup *kc;
++
++	kc = kzalloc_obj(struct kairos_cgroup);
++	if (!kc)
++		return ERR_PTR(-ENOMEM);
++
++	kc->set = parent_css ? KAIROS_CLASS_INHERIT : KAIROS_CLASS_LC;
++	kc->effective = KAIROS_CLASS_LC;
++	return &kc->css;
++}
++
++/* A new group takes its parent's class. */
++static int kairos_css_online(struct cgroup_subsys_state *css)
++{
++	struct kairos_cgroup *kc = css_kairos(css);
++	struct kairos_cgroup *parent = css_kairos(css->parent);
++
++	if (!parent)
++		return 0;
++
++	mutex_lock(&kairos_mutex);
++	WRITE_ONCE(kc->effective, parent->effective);
++	mutex_unlock(&kairos_mutex);
++	return 0;
++}
++
++/* Called only after an RCU grace period, so no lockless reader is left. */
++static void kairos_css_free(struct cgroup_subsys_state *css)
++{
++	kfree(css_kairos(css));
++}
++
++static int kairos_class_show(struct seq_file *sf, void *v)
++{
++	struct kairos_cgroup *kc = css_kairos(seq_css(sf));
++
++	seq_printf(sf, "%s\n", kairos_class_names[READ_ONCE(kc->set)]);
++	return 0;
++}
++
++static ssize_t kairos_class_write(struct kernfs_open_file *of, char *buf,
++				  size_t nbytes, loff_t off)
++{
++	struct kairos_cgroup *kc = css_kairos(of_css(of));
++	struct kairos_cgroup *parent = css_kairos(kc->css.parent);
++	int class;
++
++	class = sysfs_match_string(kairos_class_names, buf);
++	if (class < 0)
++		return class;
++
++	mutex_lock(&kairos_mutex);
++	WRITE_ONCE(kc->set, class);
++	WRITE_ONCE(kc->effective, class == KAIROS_CLASS_INHERIT ?
++				  parent->effective : class);
++	mutex_unlock(&kairos_mutex);
++	return nbytes;
++}
++
++static int kairos_effective_show(struct seq_file *sf, void *v)
++{
++	struct kairos_cgroup *kc = css_kairos(seq_css(sf));
++
++	seq_printf(sf, "%s\n", kairos_class_names[READ_ONCE(kc->effective)]);
++	return 0;
++}
++
++static struct cftype kairos_files[] = {
++	{
++		.name = "class",
++		.flags = CFTYPE_NOT_ON_ROOT,
++		.seq_show = kairos_class_show,
++		.write = kairos_class_write,
++	},
++	{
++		.name = "class.effective",
++		.flags = CFTYPE_NOT_ON_ROOT,
++		.seq_show = kairos_effective_show,
++	},
++	{ }	/* terminate */
++};
++
++struct cgroup_subsys kairos_cgrp_subsys = {
++	.css_alloc	= kairos_css_alloc,
++	.css_online	= kairos_css_online,
++	.css_free	= kairos_css_free,
++	.dfl_cftypes	= kairos_files,
++	/*
++	 * On in every group, without cgroup.subtree_control. The cgroup core
++	 * requires such a controller to allow threaded groups too.
++	 */
++	.implicit_on_dfl = true,
++	.threaded	= true,
++};
