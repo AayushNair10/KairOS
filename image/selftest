@@ -94,6 +94,21 @@ echo "kairos.test: service crunch $(procs batch/crunch) in batch"
 # What "service status" says about probe: its class and state.
 echo "kairos.test: status probe $(service status 2>/dev/null | awk '$1 == "probe" { print $2, $3 }')"
 
+# The kernel's class for a group: what was written to its kairos.class
+# (lc, batch, or inherit: its parent's class), and the class in effect,
+# from kairos.class.effective. "missing" in a kernel without the kairos
+# controller.
+kclass() {
+	if [ -f "/sys/fs/cgroup/$1/kairos.class" ]; then
+		echo "$(cat "/sys/fs/cgroup/$1/kairos.class") $(cat "/sys/fs/cgroup/$1/kairos.class.effective")"
+	else
+		echo missing
+	fi
+}
+for group in lc batch batch/crunch; do
+	echo "kairos.test: kclass $group $(kclass $group)"
+done
+
 # Respawn. Kill every process of crunch at once, with the group's own kill
 # file, and wait up to 10 s for the manager to start it again: its group has
 # a process again, and not one of the old ones.
@@ -140,26 +155,52 @@ echo "kairos.test: stop $before before, $(procs batch/detach) after, ${state:-un
 echo "kairos.test: batch $(batch cat /proc/self/cgroup 2>&1 | head -n 1)"
 echo "kairos.test: batch groups left $(ls /sys/fs/cgroup/batch | grep -c '^cmd-')"
 
+# Relabel. Write lc to crunch's group, which sits below batch, and make a
+# group below crunch: it starts with crunch's class. Then write inherit:
+# crunch takes batch's class again, and the group below it follows. A word
+# that isn't a class must be refused.
+crunchg=/sys/fs/cgroup/batch/crunch
+effective() {
+	cat "$1/kairos.class.effective" 2>/dev/null || echo missing
+}
+echo lc >"$crunchg/kairos.class" 2>/dev/null
+mkdir "$crunchg/below"
+set -- "$(effective "$crunchg")" "$(effective "$crunchg/below")"
+echo inherit >"$crunchg/kairos.class" 2>/dev/null
+set -- "$@" "$(effective "$crunchg")" "$(effective "$crunchg/below")"
+if echo nonsense >"$crunchg/kairos.class" 2>/dev/null; then
+	set -- "$@" accepted
+else
+	set -- "$@" refused
+fi
+rmdir "$crunchg/below"
+echo "kairos.test: relabel lc: crunch $1, below $2; inherit: crunch $3, below $4; nonsense $5"
+
 # Class. How late a small LC program's wakeups are while crunch keeps every
 # CPU busy: once with crunch as batch, once with crunch as LC, and once
 # without crunch, for reference. Each is the median and the 99th
-# percentile, in microseconds, of 4 s of wakeups every 2 ms. Changing a
-# service's class is a restart in the other group.
+# percentile, in microseconds, of 4 s of wakeups every 2 ms. Crunch becomes
+# LC while it runs, with one write to its group's kairos.class.
 latency() {
 	probe -p 2000 -r 4 -n 1 | sed -n 's/.*median \([0-9]*\) us, 99% \([0-9]*\) us.*/\1 \2/p'
 }
-crunch=/etc/kairos/services/crunch
 service stop crunch >/dev/null 2>&1
 sleep 1
 echo "kairos.test: class idle $(latency)"
 service start crunch >/dev/null 2>&1
 sleep 1
 echo "kairos.test: class batch $(latency)"
+echo lc >"$crunchg/kairos.class" 2>/dev/null
+echo "kairos.test: class lc $(latency)"
+echo inherit >"$crunchg/kairos.class" 2>/dev/null
+
+# Moving a service to the other class's group still works: change its
+# description and start it again. Its new group below lc takes lc's class.
+crunch=/etc/kairos/services/crunch
 service stop crunch >/dev/null 2>&1
 sed -i 's/^class .*/class lc/' $crunch
 service start crunch >/dev/null 2>&1
-sleep 1
-echo "kairos.test: class lc $(latency)"
+echo "kairos.test: kclass lc/crunch $(kclass lc/crunch) $(procs lc/crunch)"
 service stop crunch >/dev/null 2>&1
 sed -i 's/^class .*/class batch/' $crunch
 

@@ -21,23 +21,30 @@
 #   sched_ext  the kernel can take a BPF scheduler
 #   scheduler  Kairos Scheduler was running before init started its first
 #              program
-#   loader     its loader is init's child, has no terminal, and takes a
-#              task's class from the batch control group
+#   loader     its loader is init's child, has no terminal, and asks the
+#              kernel for each task's class
 #   leftovers  init collected a finished process that it had adopted
 #   terminal   init gave the program it started a terminal of its own
 #   services   the service manager, init's child, runs the two demo
 #              services in their groups: probe in lc, and crunch (started
 #              with "service start") in batch with all its children (one
 #              busy loop per CPU); "service status" shows probe running
+#   kclass     the kernel's class for each group (its kairos controller):
+#              lc and batch hold their classes, and the groups below them
+#              take theirs, including crunch's after it moved to lc
 #   respawn    after every process of crunch was killed, the manager
 #              started it again
 #   stop       "service stop" stopped a service whose only process was
 #              left behind by its first and ignores the request to finish
 #   batch      "batch COMMAND" ran the command in a group below batch, and
 #              removed the group afterwards
+#   relabel    one write made crunch's group LC, and a group made below it
+#              started as LC; "inherit" gave both batch's class back; a
+#              word that isn't a class was refused
 #   class      with every CPU busy with crunch, a small LC program's median
 #              wake-up delay was at most half as long with crunch as batch
-#              as with crunch as LC. Only reported, not judged, with
+#              as with crunch as LC (one write to its group, while it
+#              runs). Only reported, not judged, with
 #              kairos.noscheduler, or when the machine has more CPUs than
 #              the computer running QEMU: each emulated CPU is a thread
 #              there, and the delays measure how those threads share the
@@ -107,9 +114,10 @@ bad() {
 }
 
 # The value /selftest printed after "kairos.test: <name> ". The console ends
-# its lines with a carriage return, which is cut off.
+# its lines with a carriage return, which is cut off. Names may hold a "/"
+# (a group's path), so the pattern is set off by "|".
 fact() {
-	sed -n "s/^kairos\.test: $1 //p" "$log" | tr -d '\r' | head -n 1
+	sed -n "s|^kairos\.test: $1 ||p" "$log" | tr -d '\r' | head -n 1
 }
 
 version=$(fact kernel)
@@ -200,8 +208,8 @@ else
 	rule=$(fact "loader class")
 	case $loader in
 	"parent 1 terminal 0")
-		if [ "$rule" = "cgroup /sys/fs/cgroup/batch" ]; then
-			ok loader "init's child, no terminal, batch = the batch group"
+		if [ "$rule" = "kernel none" ]; then
+			ok loader "init's child, no terminal, the class from the kernel"
 		else
 			bad loader "init's child, but the class rule is ${rule:-not reported}"
 		fi
@@ -240,6 +248,18 @@ else
 	bad services "probe: ${probe:-not reported}; crunch: ${crunch:-not reported} (want 1 in lc, $((smp + 1)) in batch)"
 fi
 
+kclass=("lc $(fact "kclass lc")" "batch $(fact "kclass batch")"
+	"batch/crunch $(fact "kclass batch/crunch")")
+moved=$(fact "kclass lc/crunch")
+want=("lc inherit lc" "batch batch batch" "batch/crunch inherit batch")
+if [ "${kclass[*]}" != "${want[*]}" ]; then
+	bad kclass "$(IFS=';'; echo "${kclass[*]}") (want $(IFS=';'; echo "${want[*]}"))"
+elif [ "${moved% *}" != "inherit lc" ] || [ "${moved##* }" -lt 1 ]; then
+	bad kclass "crunch moved to lc: ${moved:-not reported} (want inherit lc, and its processes)"
+else
+	ok kclass "lc and batch set; crunch inherits batch, and lc after it moved"
+fi
+
 respawn=$(fact respawn)
 case $respawn in
 *" s") ok respawn "crunch running again $respawn after all its processes were killed" ;;
@@ -264,6 +284,14 @@ case $batch in
 	;;
 *) bad batch "ran in: ${batch:-not reported}" ;;
 esac
+
+relabel=$(fact relabel)
+want="lc: crunch lc, below lc; inherit: crunch batch, below batch; nonsense refused"
+if [ "$relabel" = "$want" ]; then
+	ok relabel "one write each way, followed by the group below; nonsense refused"
+else
+	bad relabel "${relabel:-not reported} (want $want)"
+fi
 
 # Medians and 99th percentiles of the probe's wake-up delays, in us.
 read -r idle_med idle_p99 <<<"$(fact "class idle")"
