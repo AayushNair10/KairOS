@@ -182,11 +182,15 @@ version at the top of `docs/DESIGN_LOG.md`.
 ## Repository layout (decided in component 1; planned parts marked)
 ```
 kernel/upstream  the pinned Linux version: its tag and commit id
-kernel/patches/  our kernel changes as a patch series (the source of truth)
+kernel/patches/  our kernel changes as a patch series (the source of truth):
+                 0001-0004 the kairos cgroup controller (kernel/cgroup/
+                 kairos.c: kairos.class in every group, inherited) and
+                 bpf_kairos_task_class() for the BPF scheduler
 scheduler/       Kairos Scheduler, a git submodule at a pinned commit
                  (its code is in scheduler/scheduler/)
 kernel/config/   the kernel config: base (a starting point that ships with
-                 Linux: allnoconfig) and kairos.config (our switches)
+                 Linux: allnoconfig), kairos.config (our switches) and
+                 debug.config (lockdep and friends, for --debug builds)
 image/           the first file system: initramfs.list (its files), selftest
                  (what a boot test runs in place of the shell),
                  services/ (one description per service: class, start,
@@ -199,15 +203,17 @@ scripts/         kernel-fetch.sh, kernel-export.sh, kernel-check.sh,
 docs/            DESIGN_LOG.md, notes
 userspace/       init/init.c: Kairos's init, process 1, one statically
                  linked C program. It mounts the control groups (lc,
-                 batch), starts Kairos Scheduler's loader first and
-                 restarts it by a rule, then the service manager.
+                 batch; writes batch's kairos.class), starts Kairos
+                 Scheduler's loader first (--class=kernel) and restarts
+                 it by a rule, then the service manager.
                  service/service.c: the service manager (each service in
                  a control group under its class), the service command
                  and batch (the same program). probe/probe.c: the demo LC
                  program. Planned (optional): our own shell
 ```
 - Build and boot: `scripts/kernel-build.sh` (config + build into
-  `~/kairos-build`; `--config-only` to check the config),
+  `~/kairos-build`; `--config-only` to check the config; `--debug` adds
+  `kernel/config/debug.config` and builds into `~/kairos-build-debug`),
   `scripts/image-build.sh` (compiles init, the service manager and the
   probe, runs `scripts/scheduler-build.sh` to build the loader statically
   from the pinned kernel tree, packs the initramfs archive with busybox's
@@ -215,7 +221,8 @@ userspace/       init/init.c: Kairos's init, process 1, one statically
   `scripts/boot-test.sh`
   (unattended boot, checks the console; `--smp N` and extra kernel
   command-line words are passed on), `scripts/run-qemu.sh` (a shell;
-  `--log FILE` runs unattended).
+  `--log FILE` runs unattended). Both take `--kernel FILE` to boot another
+  image, such as the debug build's, with the same initramfs.
 - Timing measured in QEMU is emulated (no KVM): compare configurations
   against each other in the same run, never against real hardware, and
   don't judge timing when the machine has more CPUs than the VM (each
@@ -235,7 +242,11 @@ userspace/       init/init.c: Kairos's init, process 1, one statically
   `kernel/patches/` (`--from ~/linux-src` avoids the download).
 - A kernel change: commit it on the `kairos` branch of `~/kairos-linux`
   (with `-s`), run `scripts/kernel-export.sh`, then
-  `scripts/kernel-check.sh`, then commit the patch file here.
+  `scripts/kernel-check.sh`, then commit the patch file here. A change
+  that takes locks or reads under RCU also gets a boot test on the debug
+  build (`boot-test.sh --kernel ~/kairos-build-debug/arch/arm64/boot/Image`;
+  grep the log for lockdep reports). Lockdep judges only lock orders it
+  has seen, so the test must make each half happen.
 - Policy and loader changes made for the OS go on the scheduler repo's
   branch `kairos-os` (`.gitmodules` names it), so its `main` stays as
   evaluated; then move the submodule pin. The user pushes that branch.

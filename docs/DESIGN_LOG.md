@@ -18,7 +18,7 @@ and the scheduling policy as a BPF program on sched_ext.
 | 4 | Kairos Scheduler loaded and supervised by init (done) | the bpf() syscall, struct_ops attach, BTF; what an ejection does | config only |
 | 5 | A service manager that sets task classes (done; the shell was split off, see 5b) | cgroups, scheduling policies, event loops | none (a scheduler change on its `kairos-os` branch) |
 | 5b | Our own shell (optional, not scheduled) | parsing, pipes, process groups, job control | none |
-| 6 | Task class as a kernel concept (syscall or cgroup file, visible to BPF) | syscall entry, task_struct, user ABI, kfuncs | patch |
+| 6 | Task class as a kernel concept (done: a cgroup controller of our own, read by BPF) | syscall entry, task_struct, user ABI, kfuncs | patch (0001 to 0004) |
 | 7 | LC and batch pools that follow CPU topology | sched domains, NUMA, CPU capacity | policy; maybe a patch |
 | 8 | Scheduler attached before PID 1 | initcalls, kernel threads, loading BPF from inside the kernel | patch (not sized) |
 | 9 | A root file system on a virtio disk | VFS, block layer, virtio drivers, page cache, journaling | config; maybe none |
@@ -1053,3 +1053,216 @@ Open questions / next:
   wasn't tried: the image has no `chrt`.
 - From component 3: shutdown doesn't unmount; no licence file.
 - Disk: 4.7 GB free (6.3 GB at the end of component 4).
+
+---
+
+## 6. Task class as a kernel concept — 2026-11-23
+
+Options:
+- A: reuse `cpu.idle`: batch means "the group is idle"; no kernel patch.
+  EEVDF honours it too; two values only; sched_ext isn't told which
+  groups are idle when it loads.
+- B: a class on each task, set by a new system call (or `prctl`), copied
+  at fork, read as one field.
+- C: a `cpu.class` file in the CPU controller, kept in its per-group
+  record (`struct task_group`), with a new sched_ext callback when it
+  changes.
+- D: a small controller of our own, `kairos`, with `kairos.class` in every
+  group, inherited by the groups below, and a kernel function for BPF.
+
+My pick and reasoning:
+- "D, because classification is very important."
+- After the verdict and plan: "yes".
+
+Verdict: D.
+- Right pick, but the reason doesn't choose between the options: all four
+  make the class something the kernel knows, and A and C keep it per
+  group too.
+- What decides it: who reads the class, and per what. Memory is charged
+  to groups and reclaim picks groups; disk bandwidth is shared between
+  groups. So components 10 and 11 need "the class of this group", from
+  outside the scheduler. A and C keep it in the CPU controller's record,
+  whose type is private to `kernel/sched/` and which exists only where
+  the CPU controller is on; B keeps it on tasks, and a page doesn't
+  belong to a task. The unit is a service, which is a group, so a relabel
+  should be one write.
+- Missed, D's costs: upstream wouldn't take it. The cgroup v2 document
+  names "controllers which existed only to identify membership" among
+  version 1's problems, version 1's `net_cls` (a class id per group) was
+  dropped for v2, and `include/linux/cgroup_subsys.h` says "DO NOT ADD ANY
+  SUBSYSTEM WITHOUT EXPLICIT ACKS FROM CGROUP MAINTAINERS". Upstream's
+  answer is BPF matching the group itself, which is component 5. EEVDF
+  ignores the class, so with the scheduler off LC and batch are alike, as
+  before. And it is the most code of the four.
+
+Where the others fit:
+- A: batch next to latency-sensitive work on a stock kernel. From memory:
+  `cpu.idle` was added by Google engineers in Linux 5.15 for that, and
+  systemd exposes it as `CPUWeight=idle`.
+- B: when threads of one process need different classes and the label
+  must follow a thread through several subsystems: XNU's per-thread QoS
+  classes (read by its scheduler, timer coalescing and disk throttling);
+  Linux's own I/O priority (`ioprio_set`).
+- C: a setting that concerns only the CPU: how Linux added `cpu.weight`,
+  `cpu.idle` and `cpu.uclamp.min/max` (from memory: Android sets uclamp on
+  its foreground and background groups).
+- D's precedent: version 1's `net_cls`.
+
+Linux concepts learned:
+- A controller (`struct cgroup_subsys`, listed in
+  `include/linux/cgroup_subsys.h`, which gives it `kairos_cgrp_id`): one
+  record per group (`struct cgroup_subsys_state`, the css), made and
+  ended through `css_alloc`, `css_online`, `css_offline`, `css_free`.
+  `css_online()` runs under `cgroup_mutex` (`online_css()`) once the css
+  is linked into its parent's children; `css_free()` runs after an RCU
+  grace period, so lockless readers are done.
+- `implicit_on_dfl`: on in every group without `cgroup.subtree_control`,
+  as perf_event is; such a controller must also be `threaded` (a
+  `WARN_ON` in `cgroup_init()`). It is hidden from `cgroup.controllers`
+  (`cgroup_control()` masks `cgrp_dfl_implicit_ss_mask`) and "+kairos" is
+  refused (ENOENT). `/proc/cgroups` lists only version 1 controllers.
+- Files: a `struct cftype` array (`dfl_cftypes`), named
+  `<controller>.<file>`; `seq_show` to read, `write` to write;
+  `CFTYPE_NOT_ON_ROOT`. `sysfs_match_string()` parses a word, ignoring
+  the newline. The files of a new group belong to whoever made it
+  (`current_fsuid()` in `cgroup_add_file()`, `cgroup_mkdir()`).
+- A task's records: `task->cgroups`, a `struct css_set` shared by every
+  task in the same groups, one css per controller; `task_css()` under RCU
+  (or with preemption off: `task_css_set_check()` accepts
+  `rcu_read_lock_sched_held()`).
+- Locking: `cgroup_mutex` nests outside kernfs active protection
+  (`cgroup_kn_lock_live()`), and group removal waits for active files to
+  drain under `cgroup_mutex` (`kernfs_drain()`). So a file's write handler
+  must not take `cgroup_mutex` directly; ours takes its own mutex, as the
+  legacy freezer does. Lockdep shows the cycle only if a removal really
+  drains: `kernfs_drain()` skips the wait, and its lockdep annotation,
+  when no one has the file open or active.
+- Walking descendants: `css_for_each_descendant_pre()` under RCU,
+  `css_rightmost_descendant()` to skip a subtree (cpuset does this).
+  WRITE_ONCE/READ_ONCE for values read without a lock.
+- kfuncs: `__bpf_kfunc`, `BTF_KFUNCS_START/END`, `BTF_ID_FLAGS`,
+  `register_btf_kfunc_id_set(BPF_PROG_TYPE_STRUCT_OPS, ...)` from a
+  `late_initcall` (sched_ext's own in `scx_init()`). In 7.0 pointer
+  arguments must be trusted by default; `KF_TRUSTED_ARGS` is gone ("must
+  be referenced or trusted" in the verifier). The function shows in BTF
+  as a FUNC with a `bpf_kfunc` decl tag.
+- Fork order (`copy_process()`, `kernel/fork.c`): `cgroup_fork()` points
+  the child at `init_css_set`; `sched_cgroup_fork()` (sched_ext's
+  `init_task`) and `sched_post_fork()` (`enable`) run before
+  `cgroup_post_fork()` moves it into its parent's groups; then
+  `wake_up_new_task()`.
+- libbpf matches a `__ksym` function's types by kind only: any enum
+  matches any enum, an int doesn't match an enum
+  (`__bpf_core_types_are_compat()`, `btf_kind_core_compat()`). A
+  `__weak` kfunc that is missing makes `bpf_ksym_exists()` false and the
+  verifier drops the guarded call.
+- Debugging builds: `CONFIG_PROVE_LOCKING` (lockdep, with PROVE_RCU) and
+  `CONFIG_DEBUG_ATOMIC_SLEEP`; checkpatch's FILE_PATH_CHANGES warning;
+  `scripts/get_maintainer.pl -f FILE`.
+
+What changed: the kernel now keeps a class for every control group. Four
+patches add a controller, `kairos` (`kernel/cgroup/kairos.c`, 260
+lines): each group but the root has `kairos.class` (`lc`, `batch`, or
+`inherit`, the default) and `kairos.class.effective`. A write recomputes
+the class of every group below that inherits, under the controller's own
+lock, so a read is one load with no lock. A new group copies its
+parent's class when it comes online. Kernel code reads a task's class
+with `kairos_task_class()`, BPF with `bpf_kairos_task_class()`. Kairos
+Scheduler's new `--class=kernel` asks for the class at each decision, so
+relabelling a running service is one write, with no restart and no
+callback; it still loads on kernels without the function. Init writes
+`batch` to the batch group at boot and starts the scheduler in that mode,
+falling back to component 5's rule on a kernel without the controller.
+
+What each step did, in order:
+1. The boot test's checks first, failing on the old kernel (`67dd69e`).
+2. Patch 0001, the controller and its files (`6dec3e0`); the style check
+   leaves out checkpatch's MAINTAINERS warning (`018e581`).
+3. Patch 0002, passing a write down; 0003, the documentation
+   (`e089f43`); a lockdep build and `--kernel FILE` for the QEMU scripts
+   (`515e464`).
+4. Patch 0004, the BPF function (`a9be5cb`).
+5. `--class=kernel` and a victim fix on the scheduler's `kairos-os`
+   branch (`03bbbfa`, `10d0b72`), pinned here (`f1b5614`).
+6. Init sets batch's class and uses the new mode (`0d34328`).
+
+Found on the way:
+- The deadlock the controller's own lock avoids, shown by lockdep when the
+  write was changed to take `cgroup_mutex` as a test: a write holds the
+  file active and takes `cgroup_mutex`; `rmdir` holds `cgroup_mutex` and
+  waits for the file. Reported only with the file held open during the
+  removal (see `kernfs_drain()` above).
+- `pick_victim()` judged a victim's class by run time under
+  `--class=cgroup`. Reached only without `--split`, which Kairos doesn't
+  use; fixed.
+- A one-off 4 s probe run can vary 3x in emulation: on the old kernel,
+  where both measurements had crunch as batch, they gave 875 and 284 us.
+- The plan's "two readers" became one: nothing calls a group reader yet.
+
+How it's tested:
+- `./scripts/boot-test.sh`: 21 lines, all `ok`, at 1, 2, 4 and 8 CPUs,
+  with `kairos.noscheduler`, and on the lockdep build (no reports). New
+  checks, seen failing first: `kclass`, `relabel`; `loader` and `class`
+  changed. `class`, with crunch relabelled LC by one write while it runs,
+  as batch / as LC / without crunch: 1 CPU 166 / 2401 / 357 us; 2 CPUs
+  254 / 637 / 432; 4 CPUs 291 / 2569 / 189; 8 CPUs not judged; under
+  EEVDF 409 / 368 / 393 (the class is ignored, as expected).
+- On the kernel without our patches (`--kernel
+  ~/kairos-build/Image.component5`): init says "this kernel keeps no task
+  classes" and starts `--class=cgroup`; only the four class checks fail.
+- By hand: a tree `batch` > `a` > (`b`, `c` = lc > `d`): a write to
+  `batch` reached `a` and `b`, not `c` and `d`; `inherit` on `c` made `c`
+  and `d` follow. 400 writes racing 100 mkdir/rmdir on the lockdep build:
+  no reports.
+- The scheduler by hand (`--main-config --class=kernel`, crunch below
+  `batch`): batch 336 us median, 2 LC CPUs, ~540 borrows a second; `echo
+  lc` to crunch's group while it ran: 2414 us, 4 LC CPUs, 0 borrows;
+  `inherit`: 479 us, 2, ~530. Without the split (`--force-preempt`): 471
+  of 472 preemptions on batch tasks, then 0 of 489 once crunch was LC.
+- `./scripts/kernel-check.sh`: 4 patches, rebuild, series and style ok.
+  The BTF of the built kernel has `bpf_kairos_task_class` with the
+  `bpf_kfunc` tag and `enum kairos_class` (0, 1, 2).
+
+Interview questions:
+1. You made the class a cgroup controller rather than a field on each
+   task set by a system call. Who reads the class, and why does that
+   favour a group? And why would the Linux maintainers probably still
+   reject your controller?
+2. Your write handler takes the controller's own mutex instead of
+   `cgroup_mutex`. What deadlock does that avoid, and why did lockdep not
+   report the bad version until you held the file open?
+3. A new task and a new group: when does each get its class, and what
+   goes wrong if the scheduler reads it in `init_task()`, or the
+   controller copies the parent's class in `css_alloc()`?
+
+Resume line: "Added a cgroup v2 controller to Kairos's Linux kernel (a
+4-patch series, checkpatch-clean) that gives every control group an
+inherited latency-critical or batch class, read without locks and
+exported to BPF through a kfunc; the sched_ext scheduler reads it at each
+scheduling decision, so relabelling a running service takes one write.
+Checked the locking with lockdep and the whole path in a QEMU boot test."
+
+Open questions / next:
+- `service status` still shows the class from the service's description
+  (its parent group), not the kernel's; after `echo lc >` a service's
+  `kairos.class` it is wrong. Either status reads
+  `kairos.class.effective`, or a `service class NAME lc|batch` command
+  writes the file; then a service's place in the tree no longer has to
+  encode its class.
+- Raising a class: a group may set `lc` under a `batch` parent, and a new
+  group's files belong to whoever made it, so a user given a delegated
+  subtree could lift work out of batch. A rule like the policy's ("a task
+  can lower itself, not raise itself") would make the effective class the
+  stricter of a group's own and its parent's.
+- EEVDF ignores the class. Setting `cpu.idle` on `batch` too would keep
+  LC ahead when the scheduler is off, at the risk of starving batch.
+- A "class of a group" reader, for components 10 and 11, when they need
+  it.
+- Only two classes; the numbers are part of the BPF interface.
+- checkpatch's SPDX check is skipped: it needs the `python3-ply` package
+  (not installed; ask first).
+- Push: this repository's last two commits (init's change and this
+  entry). The scheduler's `kairos-os` branch is on GitHub.
+- Disk: 3.6 GB free; the lockdep build takes 1.1 GB in
+  `~/kairos-build-debug`.
+

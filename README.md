@@ -19,9 +19,10 @@ It has three parts:
 Early. A minimal Kairos kernel builds and boots in QEMU. Kairos's own init
 runs as its first process and starts Kairos Scheduler before anything else.
 A service manager runs each service in a control group for its class,
-latency-critical (LC) or batch, and the scheduler takes every task's class
-from its group. There are no kernel patches yet, and the shell and tools
-are busybox's. The roadmap, and the reasoning behind each decision, are in
+latency-critical (LC) or batch. Four kernel patches make the class
+something the kernel keeps: every control group has one, inherited by the
+groups below it, and the scheduler asks the kernel for each task's class.
+The shell and tools are busybox's. The roadmap, and the reasoning behind each decision, are in
 [`docs/DESIGN_LOG.md`](docs/DESIGN_LOG.md).
 
 ## Design
@@ -44,10 +45,10 @@ flowchart TB
         mgr -->|"starts in batch/crunch"| svc2
     end
     subgraph K["Linux kernel"]
-        groups["control groups<br/>lc and batch"]
+        groups["control groups<br/>lc and batch,<br/>each with a class"]
         bpf["Kairos Scheduler<br/>BPF policy on sched_ext"]
         fair["EEVDF<br/>Linux's own scheduler"]
-        groups -->|"each task's group"| bpf
+        groups -->|"each task's class"| bpf
         bpf -.->|"if it is unloaded"| fair
     end
     ldr -->|"loads and holds"| bpf
@@ -78,7 +79,7 @@ sequenceDiagram
     participant M as Service manager
     participant S as Shell
     K->>I: run /init as process 1
-    Note over I: mount /proc, /sys, /dev and the control groups, make lc and batch
+    Note over I: mount /proc, /sys, /dev and the control groups, make lc and batch, set batch's class
     I->>L: start, with no terminal
     L->>K: load and attach the BPF policy
     I->>K: read the scheduler's state until it says enabled
@@ -94,25 +95,41 @@ Everything after that runs under Kairos Scheduler.
 
 Control groups are folders in a file system of their own. Every process is
 in exactly one, and a new process starts in its parent's group, so a
-service and everything it ever starts stay together:
+service and everything it ever starts stay together.
+
+Kairos's kernel keeps a class for every group (our controller, `kairos`):
+each group's `kairos.class` holds `lc`, `batch` or `inherit`, the default,
+which takes the parent's class. The root is LC. At boot, init writes
+`batch` into the batch group, and everything below it follows:
 
 ```
-/sys/fs/cgroup              init, the shell, the loader, kernel threads  -> LC
-├── lc
-│   └── probe               the service probe                            -> LC
-└── batch
-    ├── crunch              the service crunch, and all its processes    -> batch
-    └── cmd-123             a command run with "batch"                    -> batch
+/sys/fs/cgroup              init, the shell, the loader, kernel threads  -> LC (the root)
+├── lc                      inherit                                      -> LC
+│   └── probe               inherit: the service probe                   -> LC
+└── batch                   batch, written by init                       -> batch
+    ├── crunch              inherit: the service crunch, all its processes -> batch
+    └── cmd-123             inherit: a command run with "batch"           -> batch
 ```
 
-A task is batch if it is anywhere below `batch`, or if it has lowered its
-own scheduling policy to batch or idle. Everything else is LC. The kernel
-tells the policy a task's group when the task is created and whenever it
-moves to another group, so the class costs nothing at each wakeup.
+`kairos.class.effective` shows a group's class in effect. A write to a
+group's `kairos.class` changes it there and in every group below that
+inherits, so the kernel keeps every group's class ready and a read is a
+single load. The scheduler asks the kernel for a task's class at each
+decision (`bpf_kairos_task_class()`), so a change applies at once, with
+no restart:
+
+```sh
+echo lc > /sys/fs/cgroup/batch/crunch/kairos.class       # crunch is LC now
+echo inherit > /sys/fs/cgroup/batch/crunch/kairos.class  # batch again
+```
+
+A task that has lowered its own scheduling policy to batch or idle is
+batch whatever its group's class.
 
 The boot test checks this end to end. With crunch keeping every CPU busy,
-a small LC program's median wake-up delay was 4 to 10 times shorter with
-crunch as batch than with crunch as LC (in QEMU, on 1 to 4 CPUs).
+a small LC program's median wake-up delay was 2.5 to 14 times shorter with
+crunch as batch than with crunch relabelled LC while it ran (in QEMU, on 1
+to 4 CPUs).
 
 ### When something fails
 
@@ -123,13 +140,15 @@ crunch as batch than with crunch as LC (in QEMU, on 1 to 4 CPUs).
 | A service ends | the service manager: the service's group is empty | It starts the service again, by the same rule. |
 | The service manager ends | init | It starts a new one, which finds the running services by their groups and looks after them. |
 | The scheduler itself is the problem | you | Boot with `kairos.noscheduler`: init leaves it off, and EEVDF runs everything. |
+| The kernel keeps no classes (one without our patches) | init: there is no `kairos.class` | It says so and starts the scheduler with the older rule: batch is anything below the group `batch`. |
 
 ## Layout
 
 ```
 kernel/upstream    the pinned Linux version: its tag and commit id
 kernel/patches/    our kernel changes, one numbered patch file each
-kernel/config/     the kernel's config: a starting point and our switches
+kernel/config/     the kernel's config: a starting point, our switches, and
+                   the switches of a lock-checking build
 userspace/init/    Kairos's init: the first program the kernel starts
 userspace/service/ the service manager, and the service and batch commands
 userspace/probe/   a small LC program, run by the demo service probe
@@ -157,7 +176,9 @@ git submodule update --init  # once: Kairos Scheduler at the pinned commit
 ```
 
 Everything built goes to `~/kairos-build` (set `KAIROS_BUILD` for another
-place). The first build takes a few minutes on 4 CPUs. A boot to the shell
+place). `kernel-build.sh --debug` builds a slower kernel that checks
+locking (lockdep) into `~/kairos-build-debug`; `run-qemu.sh` and
+`boot-test.sh` boot it, or any other image, with `--kernel FILE`. The first build takes a few minutes on 4 CPUs. A boot to the shell
 takes a few seconds, even with QEMU emulating every instruction.
 
 ## Services
@@ -190,7 +211,8 @@ CPU, started only on request.
 parent of everything else. It:
 
 - mounts the file systems through which the kernel shows its own
-  information, and the control groups, with the groups `lc` and `batch`;
+  information, and the control groups, with the groups `lc` and `batch`,
+  and writes `batch` into the batch group's class;
 - starts Kairos Scheduler's loader, and waits until the kernel runs the
   scheduler before it starts anything else;
 - when the loader ends, reads its exit status and starts it again, unless
@@ -218,7 +240,10 @@ repository's `main` stays as it was evaluated:
 
 - the loader's `--quiet` option, and an exit status that says why it ended;
 - `--class=cgroup` and `--batch-cgroup`: a task's class from its control
-  group.
+  group's place in the tree;
+- `--class=kernel`: a task's class from the kernel, asked at each
+  decision. It still loads on a kernel without our patches, and refuses
+  this option there.
 
 `scripts/scheduler-build.sh`, which `image-build.sh` runs, builds the BPF
 library, bpftool and a header of the kernel's types from the pinned kernel
@@ -244,6 +269,15 @@ To change the kernel: commit the change in the working tree, then
 ```
 
 and commit the new patch file here.
+
+Our patches so far:
+
+| Patch | What it does |
+|---|---|
+| 0001 | the `kairos` controller: `kairos.class` and `kairos.class.effective` in every group but the root; a new group takes its parent's class |
+| 0002 | a write to a group's class reaches every group below it that inherits |
+| 0003 | the controller's section in Linux's cgroup v2 document |
+| 0004 | `bpf_kairos_task_class()`, a task's class for the BPF scheduler; `kairos_task_class()` for kernel code |
 
 ## The kernel config
 
