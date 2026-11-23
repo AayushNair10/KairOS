@@ -11,6 +11,45 @@ echo "kairos.test: kernel $(uname -r)"
 # The program running as process 1. Ours is /init.
 echo "kairos.test: init $(readlink /proc/1/exe)"
 echo "kairos.test: cpus $(nproc)"
+
+# Layout mode (scripts/layout-test.sh): with kairos.layout on the kernel's
+# command line, report how the machine's CPUs look to the kernel and where
+# the LC pool is, then end; init powers off.
+#
+# speeds: each CPU's speed as the kernel rates it (the fastest is 1024),
+# CPU 0 first. nodes: how many memory nodes it knows.
+#
+# probe ran on: where the demo service probe ran, as CPU:samples. It is
+# LC, and nearly the only LC work while this runs, so the LC pool is as
+# small as it gets (2 CPUs: its demand and the spare) and probe runs
+# there. Short LC work (a command starting, before it joins its batch
+# group) can grow the pool for a moment, so a few samples may land on the
+# next CPU. The sampling runs as batch work, so it doesn't count as LC
+# demand: every 20 ms for 2 s, field 39 of probe's /proc/PID/stat, the CPU
+# it last ran on (${37} once the name and the two fields before it are
+# cut off).
+if grep -qw kairos.layout /proc/cmdline; then
+	speeds= cpu=0
+	while [ $cpu -lt "$(nproc)" ]; do
+		speeds="$speeds$(cat /sys/devices/system/cpu/cpu$cpu/cpu_capacity 2>/dev/null) "
+		cpu=$((cpu + 1))
+	done
+	echo "kairos.test: speeds $speeds"
+	echo "kairos.test: nodes $(ls -d /sys/devices/system/node/node[0-9]* 2>/dev/null | wc -l)"
+	tenths=0
+	while [ -z "$(pidof probe)" ] && [ $tenths -lt 100 ]; do
+		sleep 0.1
+		tenths=$((tenths + 1))
+	done
+	sleep 2
+	ran=$(batch sh -c 'pid=$(pidof probe); i=0
+		while [ $i -lt 100 ]; do
+			read -r l </proc/$pid/stat; set -- ${l##*) }; echo ${37}
+			sleep 0.02; i=$((i + 1))
+		done | sort -n | uniq -c | while read -r n cpu; do printf "%s:%s " $cpu $n; done')
+	echo "kairos.test: probe ran on $ran"
+	exit 0
+fi
 echo "kairos.test: devices $(ls /dev | wc -l) entries in /dev"
 # Control groups: the type of file system mounted at /sys/fs/cgroup
 # ("cgroup2" for control groups), and Kairos's two class groups. For each

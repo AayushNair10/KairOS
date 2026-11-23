@@ -1,13 +1,24 @@
 #!/usr/bin/env bash
 # Boot the Kairos kernel in QEMU.
 #
-# usage: run-qemu.sh [--smp N] [--mem SIZE] [--kernel FILE] [--log FILE]
+# usage: run-qemu.sh [--smp N] [--mem SIZE] [--kernel FILE] [--qemu ARG]...
+#                    [--dtb FILE | --dump-dtb FILE] [--log FILE]
 #                    [--timeout SECONDS] [WORD...]
 #
-#   --smp N            number of CPUs (default 4)
+#   --smp N            number of CPUs (default 4). QEMU's form for a layout
+#                      works too: 8,clusters=2,cores=2,threads=2 is 2
+#                      clusters of 2 cores of 2 hardware threads each
 #   --mem SIZE         memory (default 1G)
 #   --kernel FILE      boot this kernel image instead of the one
 #                      kernel-build.sh built; the initramfs stays the same
+#   --qemu ARG         one more argument for QEMU, as it is (repeatable),
+#                      e.g. memory nodes: --qemu -numa --qemu node,...
+#   --dump-dtb FILE    write the device tree QEMU would give the kernel with
+#                      these options to FILE, and stop
+#   --dtb FILE         give the kernel this device tree instead, made with
+#                      --dump-dtb and the same options, then edited (see
+#                      scripts/layout-test.sh). QEMU still fills in the
+#                      command line and the initramfs
 #   --log FILE         run unattended: write the console's output to FILE
 #                      instead of the terminal
 #   --timeout SECONDS  with --log, stop QEMU after this long (default 120)
@@ -30,15 +41,21 @@ smp=4
 mem=1G
 log=
 timeout=120
+dtb=
+dump_dtb=
+extra=()
 words=()
 while [ $# -gt 0 ]; do
 	case $1 in
-	--smp | --mem | --kernel | --log | --timeout)
+	--smp | --mem | --kernel | --qemu | --dtb | --dump-dtb | --log | --timeout)
 		[ $# -ge 2 ] || die "$1 needs a value"
 		case $1 in
 		--smp) smp=$2 ;;
 		--mem) mem=$2 ;;
 		--kernel) KERNEL_IMAGE=$2 ;;
+		--qemu) extra+=("$2") ;;
+		--dtb) dtb=$2 ;;
+		--dump-dtb) dump_dtb=$2 ;;
 		--log) log=$2 ;;
 		--timeout) timeout=$2 ;;
 		esac
@@ -64,10 +81,14 @@ done
 # output, go to the board's serial port.
 cmdline="console=ttyAMA0"
 
+machine=virt,gic-version=3
+if [ -n "$dump_dtb" ]; then
+	machine=$machine,dumpdtb=$dump_dtb
+fi
 args=(
 	# gic-version=3: the newer interrupt controller. The older default
 	# stops at 8 CPUs.
-	-machine virt,gic-version=3
+	-machine "$machine"
 	-cpu max
 	-smp "$smp"
 	-m "$mem"
@@ -77,6 +98,15 @@ args=(
 )
 if [ -f "$INITRAMFS" ]; then
 	args+=(-initrd "$INITRAMFS")
+fi
+if [ -n "$dtb" ]; then
+	args+=(-dtb "$dtb")
+fi
+args+=("${extra[@]}")
+
+if [ -n "$dump_dtb" ]; then
+	qemu-system-aarch64 "${args[@]}" -display none -append "$cmdline ${words[*]}"
+	exit
 fi
 
 if [ -z "$log" ]; then
