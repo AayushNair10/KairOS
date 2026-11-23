@@ -1,0 +1,129 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Aayush Nair <aayushnair204@gmail.com>
+Date: Mon, 23 Nov 2026 14:01:51 -0500
+Subject: [PATCH] cgroup/kairos: Pass a group's class down to the groups below
+
+A group that inherits should follow its parent: write "batch" to a
+group, and every group below it that has no class of its own becomes
+batch too.
+
+On a write to kairos.class, walk the group and its descendants, parents
+before children, and recompute each effective class from the parent's.
+A descendant with a class of its own keeps it, and so does everything
+below it, so the walk skips that subtree (css_rightmost_descendant(),
+as cpuset does).
+
+The work is done at write time because writes are rare and reads, by
+the scheduler at each wakeup, are not: a reader finds the class in its
+own group without walking up to the nearest ancestor that set one.
+
+A new group copies its parent's class in css_online(), not in
+css_alloc(): by then it is linked into its parent's children, so a
+concurrent write either comes first, under kairos_mutex, and is copied,
+or comes after and reaches the new group by the walk.
+
+Signed-off-by: Aayush Nair <aayushnair204@gmail.com>
+---
+ kernel/cgroup/kairos.c | 54 +++++++++++++++++++++++++++++++++++++-----
+ 1 file changed, 48 insertions(+), 6 deletions(-)
+
+diff --git a/kernel/cgroup/kairos.c b/kernel/cgroup/kairos.c
+index cebf39d463f5c66fb213c4b48d9c49ced2e38c26..2fc003a63064813495c55f559c614a4ffbe9d5df 100644
+--- a/kernel/cgroup/kairos.c
++++ b/kernel/cgroup/kairos.c
+@@ -15,6 +15,10 @@
+  *                           or "inherit" (its parent's class, the default)
+  *   kairos.class.effective  the class in effect: "lc" or "batch"
+  *
++ * A group that inherits follows its parent: a write to a group's
++ * kairos.class changes the effective class of every group below it that
++ * inherits, down to the first one with a class of its own.
++ *
+  * The root group is always LC. The controller is on in every group without
+  * being listed in cgroup.subtree_control, as perf_event is, so every task
+  * has a class.
+@@ -50,8 +54,9 @@ struct kairos_cgroup {
+ };
+ 
+ /*
+- * Serializes the writers of the classes: a write to kairos.class, and a new
+- * group taking its parent's class.
++ * Serializes the writers of the classes: a write to kairos.class, which
++ * passes the class down to the groups below, and a new group taking its
++ * parent's class.
+  *
+  * It is the controller's own lock, not cgroup_mutex. A write to a cgroup
+  * file runs while kernfs holds an active reference on the file, and
+@@ -80,7 +85,13 @@ kairos_css_alloc(struct cgroup_subsys_state *parent_css)
+ 	return &kc->css;
+ }
+ 
+-/* A new group takes its parent's class. */
++/*
++ * A new group takes its parent's class. Not at allocation: by the time a
++ * group comes online it is linked into its parent's list of children, where
++ * kairos_propagate() will find it. A write to an ancestor either comes
++ * before this, under kairos_mutex, and is copied here, or comes after and
++ * reaches this group by the walk.
++ */
+ static int kairos_css_online(struct cgroup_subsys_state *css)
+ {
+ 	struct kairos_cgroup *kc = css_kairos(css);
+@@ -101,6 +112,39 @@ static void kairos_css_free(struct cgroup_subsys_state *css)
+ 	kfree(css_kairos(css));
+ }
+ 
++/*
++ * Recompute the effective class of @kc and of every group below it that
++ * inherits, parents before children, so each reads its parent's new class.
++ * A group with its own class keeps it, and so does everything below it:
++ * the walk skips that whole subtree.
++ *
++ * Writes are rare and reads happen at every wakeup, so the work is done
++ * here, once, and a reader finds the class in its own group without
++ * walking up to the nearest ancestor that set one.
++ */
++static void kairos_propagate(struct kairos_cgroup *kc)
++{
++	struct cgroup_subsys_state *pos;
++
++	lockdep_assert_held(&kairos_mutex);
++
++	rcu_read_lock();
++	css_for_each_descendant_pre(pos, &kc->css) {
++		struct kairos_cgroup *d = css_kairos(pos);
++		enum kairos_class class = d->set;
++
++		if (class == KAIROS_CLASS_INHERIT) {
++			class = css_kairos(pos->parent)->effective;
++		} else if (d != kc) {
++			/* A class of its own: nothing below it changes. */
++			pos = css_rightmost_descendant(pos);
++			continue;
++		}
++		WRITE_ONCE(d->effective, class);
++	}
++	rcu_read_unlock();
++}
++
+ static int kairos_class_show(struct seq_file *sf, void *v)
+ {
+ 	struct kairos_cgroup *kc = css_kairos(seq_css(sf));
+@@ -113,7 +157,6 @@ static ssize_t kairos_class_write(struct kernfs_open_file *of, char *buf,
+ 				  size_t nbytes, loff_t off)
+ {
+ 	struct kairos_cgroup *kc = css_kairos(of_css(of));
+-	struct kairos_cgroup *parent = css_kairos(kc->css.parent);
+ 	int class;
+ 
+ 	class = sysfs_match_string(kairos_class_names, buf);
+@@ -122,8 +165,7 @@ static ssize_t kairos_class_write(struct kernfs_open_file *of, char *buf,
+ 
+ 	mutex_lock(&kairos_mutex);
+ 	WRITE_ONCE(kc->set, class);
+-	WRITE_ONCE(kc->effective, class == KAIROS_CLASS_INHERIT ?
+-				  parent->effective : class);
++	kairos_propagate(kc);
+ 	mutex_unlock(&kairos_mutex);
+ 	return nbytes;
+ }

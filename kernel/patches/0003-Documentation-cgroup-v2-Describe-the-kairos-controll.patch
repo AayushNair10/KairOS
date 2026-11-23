@@ -1,0 +1,77 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Aayush Nair <aayushnair204@gmail.com>
+Date: Mon, 23 Nov 2026 14:01:51 -0500
+Subject: [PATCH] Documentation: cgroup-v2: Describe the kairos controller
+
+Describe kairos.class and kairos.class.effective in the cgroup v2
+document, next to perf_event, the other controller enabled on every
+group, and point the Kconfig help at it.
+
+Signed-off-by: Aayush Nair <aayushnair204@gmail.com>
+---
+ Documentation/admin-guide/cgroup-v2.rst | 30 +++++++++++++++++++++++++
+ init/Kconfig                            |  3 +++
+ 2 files changed, 33 insertions(+)
+
+diff --git a/Documentation/admin-guide/cgroup-v2.rst b/Documentation/admin-guide/cgroup-v2.rst
+index 91beaa6798ce02817546fdde8dfa6659bc9415ab..09a9b116d4dce6a3f35c959ae7ddbc88cada570b 100644
+--- a/Documentation/admin-guide/cgroup-v2.rst
++++ b/Documentation/admin-guide/cgroup-v2.rst
+@@ -78,6 +78,7 @@ v1 is available under :ref:`Documentation/admin-guide/cgroup-v1/index.rst <cgrou
+        5.10-2 Migration and Ownership
+      5-11. Others
+        5-11-1. perf_event
++       5-11-2. kairos
+      5-N. Non-normative information
+        5-N-1. CPU controller root cgroup process behaviour
+        5-N-2. IO controller root cgroup process behaviour
+@@ -2957,6 +2958,35 @@ automatically enabled on the v2 hierarchy so that perf events can
+ always be filtered by cgroup v2 path.  The controller can still be
+ moved to a legacy hierarchy after v2 hierarchy is populated.
+ 
++kairos
++~~~~~~
++
++The kairos controller gives every cgroup a task class: latency-critical
++("lc") or batch, so that the parts of the kernel which schedule tasks
++and share resources between them can tell a latency-critical service
++from the batch work running next to it.  Like perf_event, it is enabled
++on every cgroup of the v2 hierarchy without being listed in
++"cgroup.subtree_control".  It is enabled by the CONFIG_CGROUP_KAIROS
++config option.
++
++A cgroup takes its parent's class unless it has a class of its own.
++The root cgroup is always "lc".
++
++  kairos.class
++	A read-write single value file which exists on non-root
++	cgroups.  The default is "inherit".
++
++	"lc" or "batch" gives the cgroup a class of its own; "inherit"
++	makes it take its parent's.
++
++  kairos.class.effective
++	A read-only single value file which exists on non-root cgroups.
++
++	The class in effect: "lc" or "batch".  A write to a cgroup's
++	"kairos.class" changes this in the cgroup and in every cgroup
++	below it which inherits, down to the first one with a class of
++	its own.
++
+ 
+ Non-normative information
+ -------------------------
+diff --git a/init/Kconfig b/init/Kconfig
+index 971c3bca12ed634a67b856290123deb374d3e227..069747430e13efb9e090079890ed2c6336d9ca88 100644
+--- a/init/Kconfig
++++ b/init/Kconfig
+@@ -1358,6 +1358,9 @@ config CGROUP_KAIROS
+ 
+ 	  Kairos's BPF scheduler tells the two classes apart by it.
+ 
++	  For more information, see the kairos section in
++	  Documentation/admin-guide/cgroup-v2.rst.
++
+ config CGROUP_DEBUG
+ 	bool "Debug controller"
+ 	default n
