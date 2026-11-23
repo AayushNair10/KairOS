@@ -265,7 +265,7 @@ if [ "${kclass[*]}" != "${want[*]}" ]; then
 elif [ "${moved% *}" != "inherit lc" ] || [ "${moved##* }" -lt 1 ]; then
 	bad kclass "crunch moved to lc: ${moved:-not reported} (want inherit lc, and its processes)"
 else
-	ok kclass "lc and batch set; crunch inherits batch, and lc after it moved"
+	ok kclass "batch set, lc inherits LC; crunch inherits batch, and lc after it moved"
 fi
 
 respawn=$(fact respawn)

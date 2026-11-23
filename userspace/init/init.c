@@ -120,6 +120,9 @@ static int stopping;
 /* Set when the control groups, lc and batch are in place. */
 static int class_groups;
 
+/* Set when the kernel keeps a class for each group, and batch's is set. */
+static int kernel_classes;
+
 static void scheduler_ended(int status);
 
 /* Print one line on the console, marked as coming from init. */
@@ -191,6 +194,31 @@ static int switch_on_cpu_controller(void)
 	return ret;
 }
 
+/*
+ * Kairos's kernel keeps a class for every group: its kairos controller, on
+ * in every group, gives each a kairos.class file. A group's class is "lc",
+ * "batch", or "inherit" (its parent's, the default); the root is LC. So
+ * one write makes the batch group, and every group below it, batch. A
+ * kernel without the controller has no such file.
+ */
+static int set_batch_class(void)
+{
+	int fd, ret = 0;
+
+	fd = open(CGROUPS "/batch/kairos.class", O_WRONLY);
+	if (fd < 0 && errno == ENOENT) {
+		say("this kernel keeps no task classes; Kairos Scheduler will find batch work by its group");
+		return -1;
+	}
+	if (fd < 0 || write(fd, "batch", 5) < 0) {
+		say("can't set the batch group's class: %s", strerror(errno));
+		ret = -1;
+	}
+	if (fd >= 0)
+		close(fd);
+	return ret;
+}
+
 static void make_class_groups(void)
 {
 	class_groups = mount_info("cgroup2", CGROUPS) == 0 &&
@@ -199,6 +227,7 @@ static void make_class_groups(void)
 		       switch_on_cpu_controller() == 0;
 	if (!class_groups)
 		say("without its control groups, Kairos Scheduler takes a task's class from its scheduling policy");
+	kernel_classes = class_groups && set_batch_class() == 0;
 }
 
 /*
@@ -535,12 +564,20 @@ static void launch_scheduler(void)
 {
 	/*
 	 * --main-config: the configuration the scheduler's evaluation chose.
-	 * --class=cgroup and --batch-cgroup, after it, change one part of it:
-	 * a task is batch if it is in the batch group or below it, or has
-	 * lowered its own scheduling policy to batch or idle. Without the
-	 * groups, --main-config's own rule applies: the policy alone.
-	 * --quiet: no statistics on the console every second.
+	 * A --class after it changes one part of it, the rule for a task's
+	 * class:
+	 *   kernel  the class the kernel keeps for the task's group, read at
+	 *           each decision, so a change to a group's class applies at
+	 *           once; or batch if the task lowered its own scheduling
+	 *           policy to batch or idle.
+	 *   cgroup  without the kernel's classes: batch if the task is in the
+	 *           batch group or below it, or lowered its policy.
+	 * Without the groups, --main-config's own rule applies: the policy
+	 * alone. --quiet: no statistics on the console every second.
 	 */
+	char *const by_kernel[] = {
+		SCHEDULER, "--main-config", "--class=kernel", "--quiet", NULL
+	};
 	char *const by_group[] = {
 		SCHEDULER, "--main-config", "--class=cgroup",
 		"--batch-cgroup=" CGROUPS "/batch", "--quiet", NULL
@@ -548,7 +585,8 @@ static void launch_scheduler(void)
 	char *const by_policy[] = { SCHEDULER, "--main-config", "--quiet", NULL };
 
 	scheduler_started = milliseconds();
-	scheduler = start(class_groups ? by_group : by_policy, 0);
+	scheduler = start(kernel_classes ? by_kernel :
+			  class_groups ? by_group : by_policy, 0);
 }
 
 /*
