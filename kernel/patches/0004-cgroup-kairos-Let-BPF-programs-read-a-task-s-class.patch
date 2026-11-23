@@ -1,0 +1,169 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Aayush Nair <aayushnair204@gmail.com>
+Date: Mon, 23 Nov 2026 14:27:26 -0500
+Subject: [PATCH] cgroup/kairos: Let BPF programs read a task's class
+
+Kairos's BPF scheduler needs a task's class at each scheduling decision.
+Add a kfunc for struct_ops programs, of which a sched_ext scheduler is
+one:
+
+  enum kairos_class bpf_kairos_task_class(struct task_struct *p);
+
+It returns KAIROS_CLASS_LC (0) or KAIROS_CLASS_BATCH (1), the effective
+class of the task's group. The numbers are now part of an interface and
+move, with the in-kernel reader kairos_task_class(), into
+<linux/kairos_class.h>, where memory and I/O code can use them later.
+
+The reader follows the task's css_set to its kairos css under
+rcu_read_lock(), so it is safe from any context, including sched_ext's
+sleepable callbacks. The pointer argument must be trusted, the
+verifier's default for kfunc arguments, which the task a sched_ext
+callback receives is.
+
+A task being created points at the root group until cgroup_post_fork()
+moves it into its parent's group, which is after sched_ext's
+ops.init_task() and ops.enable(). Reading the class there gives the
+root's, LC; a scheduler reads it from the first wakeup on.
+
+Signed-off-by: Aayush Nair <aayushnair204@gmail.com>
+---
+ include/linux/kairos_class.h | 30 +++++++++++++++
+ kernel/cgroup/kairos.c       | 73 +++++++++++++++++++++++++++++++-----
+ 2 files changed, 93 insertions(+), 10 deletions(-)
+ create mode 100644 include/linux/kairos_class.h
+
+diff --git a/include/linux/kairos_class.h b/include/linux/kairos_class.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..f9d16b0a61fe5adf962b2bdec3fce52f49ae114b
+--- /dev/null
++++ b/include/linux/kairos_class.h
+@@ -0,0 +1,30 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * Kairos task classes: the class of a task's group in the kairos cgroup
++ * controller, kernel/cgroup/kairos.c.
++ */
++#ifndef _LINUX_KAIROS_CLASS_H
++#define _LINUX_KAIROS_CLASS_H
++
++struct task_struct;
++
++/*
++ * The numbers are part of the interface to BPF programs, which compare the
++ * result of bpf_kairos_task_class() with them. Don't renumber them.
++ */
++enum kairos_class {
++	KAIROS_CLASS_LC		= 0,
++	KAIROS_CLASS_BATCH	= 1,
++	KAIROS_CLASS_INHERIT	= 2,	/* only as what was written */
++};
++
++#ifdef CONFIG_CGROUP_KAIROS
++enum kairos_class kairos_task_class(struct task_struct *p);
++#else
++static inline enum kairos_class kairos_task_class(struct task_struct *p)
++{
++	return KAIROS_CLASS_LC;
++}
++#endif
++
++#endif /* _LINUX_KAIROS_CLASS_H */
+diff --git a/kernel/cgroup/kairos.c b/kernel/cgroup/kairos.c
+index 2fc003a63064813495c55f559c614a4ffbe9d5df..fbc55f5aebfe12fea5151cde39629697005ee860 100644
+--- a/kernel/cgroup/kairos.c
++++ b/kernel/cgroup/kairos.c
+@@ -23,24 +23,22 @@
+  * being listed in cgroup.subtree_control, as perf_event is, so every task
+  * has a class.
+  *
+- * Readers of the effective class, such as the scheduler at each wakeup,
+- * take no lock: each class is stored with one write and read with one
+- * read, so a reader sees the old class or the new one. Writers take
+- * kairos_mutex.
++ * Kernel code reads a task's class with kairos_task_class(), declared in
++ * <linux/kairos_class.h>; a BPF scheduler with bpf_kairos_task_class().
++ * Readers, such as the scheduler at each wakeup, take no lock: each class
++ * is stored with one write and read with one read, so a reader sees the
++ * old class or the new one. Writers take kairos_mutex.
+  */
+ 
++#include <linux/btf.h>
++#include <linux/btf_ids.h>
+ #include <linux/cgroup.h>
++#include <linux/kairos_class.h>
+ #include <linux/mutex.h>
+ #include <linux/seq_file.h>
+ #include <linux/slab.h>
+ #include <linux/string.h>
+ 
+-enum kairos_class {
+-	KAIROS_CLASS_LC,
+-	KAIROS_CLASS_BATCH,
+-	KAIROS_CLASS_INHERIT,	/* only as what was written */
+-};
+-
+ static const char * const kairos_class_names[] = {
+ 	[KAIROS_CLASS_LC]	= "lc",
+ 	[KAIROS_CLASS_BATCH]	= "batch",
+@@ -193,6 +191,61 @@ static struct cftype kairos_files[] = {
+ 	{ }	/* terminate */
+ };
+ 
++/**
++ * kairos_task_class - the class of a task
++ * @p: the task
++ *
++ * Return: KAIROS_CLASS_LC or KAIROS_CLASS_BATCH, the class in effect for
++ * @p's group. Any context.
++ *
++ * A task being created points at the root group until fork moves it into
++ * its parent's group, in cgroup_post_fork(); until then the answer is the
++ * root's, LC. sched_ext's ops.init_task() and ops.enable() run before that.
++ */
++enum kairos_class kairos_task_class(struct task_struct *p)
++{
++	enum kairos_class class;
++
++	rcu_read_lock();
++	class = READ_ONCE(css_kairos(task_css(p, kairos_cgrp_id))->effective);
++	rcu_read_unlock();
++	return class;
++}
++
++__bpf_kfunc_start_defs();
++
++/**
++ * bpf_kairos_task_class - the class of a task, for BPF programs
++ * @p: the task; a trusted pointer, such as a sched_ext callback receives
++ *
++ * See kairos_task_class().
++ *
++ * Return: KAIROS_CLASS_LC (0) or KAIROS_CLASS_BATCH (1).
++ */
++__bpf_kfunc enum kairos_class bpf_kairos_task_class(struct task_struct *p)
++{
++	return kairos_task_class(p);
++}
++
++__bpf_kfunc_end_defs();
++
++BTF_KFUNCS_START(kairos_kfunc_ids)
++BTF_ID_FLAGS(func, bpf_kairos_task_class)
++BTF_KFUNCS_END(kairos_kfunc_ids)
++
++static const struct btf_kfunc_id_set kairos_kfunc_set = {
++	.owner	= THIS_MODULE,
++	.set	= &kairos_kfunc_ids,
++};
++
++/* For struct_ops programs, of which a sched_ext scheduler is one. */
++static int __init kairos_kfunc_init(void)
++{
++	return register_btf_kfunc_id_set(BPF_PROG_TYPE_STRUCT_OPS,
++					 &kairos_kfunc_set);
++}
++late_initcall(kairos_kfunc_init);
++
+ struct cgroup_subsys kairos_cgrp_subsys = {
+ 	.css_alloc	= kairos_css_alloc,
+ 	.css_online	= kairos_css_online,
