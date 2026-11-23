@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # Configure and build the Kairos kernel.
 #
-# usage: kernel-build.sh [--config-only]
+# usage: kernel-build.sh [--config-only] [--debug]
 #
 #   --config-only   put the config together and check it, but don't compile
+#   --debug         add the switches in kernel/config/debug.config, which
+#                   check our changes' locking, and build into
+#                   ~/kairos-build-debug (or $KAIROS_BUILD-debug)
 #
 # The config comes from two files in kernel/config/:
 #   base           the starting point: one of the configs that ship with Linux
@@ -21,10 +24,17 @@
 need_tree
 
 config_only=0
+fragments=("$CONFIG_DIR/kairos.config")
 while [ $# -gt 0 ]; do
 	case $1 in
 	--config-only)
 		config_only=1
+		shift
+		;;
+	--debug)
+		fragments+=("$CONFIG_DIR/debug.config")
+		KAIROS_BUILD=$KAIROS_BUILD-debug
+		KERNEL_IMAGE=$KAIROS_BUILD/arch/arm64/boot/Image
 		shift
 		;;
 	-h | --help)
@@ -43,7 +53,6 @@ done
 
 base=$(grep -v -e '^#' -e '^$' "$CONFIG_DIR/base" | head -n 1)
 [ -n "$base" ] || die "$CONFIG_DIR/base names no starting point"
-fragment=$CONFIG_DIR/kairos.config
 config=$KAIROS_BUILD/.config
 
 # make, run in the kernel tree, with all output going to the build folder.
@@ -57,7 +66,7 @@ mkdir -p "$KAIROS_BUILD"
 kmake "$base"
 # 2. Our switches on top. -m only writes the merged file.
 (cd "$KAIROS_LINUX" &&
-	./scripts/kconfig/merge_config.sh -m -O "$KAIROS_BUILD" "$config" "$fragment" >/dev/null)
+	./scripts/kconfig/merge_config.sh -m -O "$KAIROS_BUILD" "$config" "${fragments[@]}" >/dev/null)
 # 3. Let the config system settle everything the switches depend on.
 kmake olddefconfig
 
@@ -80,11 +89,11 @@ while IFS= read -r line; do
 		fi
 		;;
 	esac
-done <"$fragment"
+done < <(cat "${fragments[@]}")
 [ $lost = 0 ] ||
 	die "the config system dropped the lines above; something they depend on is off"
 
-ours=$(grep -c '^CONFIG_' "$fragment" || true)
+ours=$(cat "${fragments[@]}" | grep -c '^CONFIG_' || true)
 echo "config   $base + $ours switch(es) of ours = $(grep -c '=y$' "$config") switches on"
 
 [ $config_only = 0 ] || exit 0

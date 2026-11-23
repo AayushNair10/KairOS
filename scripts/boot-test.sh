@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Boot Kairos unattended and check what the console says.
 #
-# usage: boot-test.sh [--smp N] [WORD...]
+# usage: boot-test.sh [--smp N] [--kernel FILE] [WORD...]
 #
 #   --smp N    number of CPUs to give the machine (default 4)
+#   --kernel FILE  boot this kernel image instead of the one kernel-build.sh
+#              built (see run-qemu.sh)
 #   WORD...    extra words for the kernel's command line
 #
 # The kernel is started with the word kairos.test on its command line. The
@@ -66,12 +68,18 @@
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 smp=4
+kernel=()
 words=()
 while [ $# -gt 0 ]; do
 	case $1 in
 	--smp)
 		[ $# -ge 2 ] || die "--smp needs a number"
 		smp=$2
+		shift 2
+		;;
+	--kernel)
+		[ $# -ge 2 ] || die "--kernel needs a file"
+		kernel=(--kernel "$2")
 		shift 2
 		;;
 	-h | --help)
@@ -100,7 +108,7 @@ log=$KAIROS_BUILD/boot-test.log
 rm -f "$log"
 # The limit: a test with 16 CPUs took 88 s on a 4-CPU machine, most of it
 # emulating crunch's 16 busy loops during the class measurement.
-"$REPO_ROOT/scripts/run-qemu.sh" --smp "$smp" --log "$log" --timeout 180 \
+"$REPO_ROOT/scripts/run-qemu.sh" --smp "$smp" "${kernel[@]}" --log "$log" --timeout 180 \
 	kairos.test "${words[@]}" || true
 [ -f "$log" ] || die "QEMU wrote no console output"
 

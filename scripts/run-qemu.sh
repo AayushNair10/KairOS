@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # Boot the Kairos kernel in QEMU.
 #
-# usage: run-qemu.sh [--smp N] [--mem SIZE] [--log FILE] [--timeout SECONDS]
-#                    [WORD...]
+# usage: run-qemu.sh [--smp N] [--mem SIZE] [--kernel FILE] [--log FILE]
+#                    [--timeout SECONDS] [WORD...]
 #
 #   --smp N            number of CPUs (default 4)
 #   --mem SIZE         memory (default 1G)
+#   --kernel FILE      boot this kernel image instead of the one
+#                      kernel-build.sh built; the initramfs stays the same
 #   --log FILE         run unattended: write the console's output to FILE
 #                      instead of the terminal
 #   --timeout SECONDS  with --log, stop QEMU after this long (default 120)
@@ -31,11 +33,12 @@ timeout=120
 words=()
 while [ $# -gt 0 ]; do
 	case $1 in
-	--smp | --mem | --log | --timeout)
+	--smp | --mem | --kernel | --log | --timeout)
 		[ $# -ge 2 ] || die "$1 needs a value"
 		case $1 in
 		--smp) smp=$2 ;;
 		--mem) mem=$2 ;;
+		--kernel) KERNEL_IMAGE=$2 ;;
 		--log) log=$2 ;;
 		--timeout) timeout=$2 ;;
 		esac
