@@ -12,6 +12,58 @@ echo "kairos.test: kernel $(uname -r)"
 echo "kairos.test: init $(readlink /proc/1/exe)"
 echo "kairos.test: cpus $(nproc)"
 
+# The root file system: its type, where it comes from and whether it can
+# be written: "ext4 /dev/vda rw" once init has switched to the disk,
+# "rootfs rootfs rw" while Kairos runs from the initramfs in memory. The
+# last line for / is the one on top.
+echo "kairos.test: root $(awk '$2 == "/" { t = $3; d = $1; o = substr($4, 1, 2) }
+	END { print t, d, o }' /proc/mounts)"
+# Whether the initramfs is still mounted. After the switch to the disk,
+# init unmounts it and its memory is freed.
+if grep -q '^rootfs ' /proc/mounts; then
+	echo "kairos.test: initramfs mounted"
+else
+	echo "kairos.test: initramfs gone"
+fi
+# The boot log on the disk: init adds a line at every boot.
+bootlog=/var/log/kairos/boots
+if [ -f $bootlog ]; then
+	echo "kairos.test: bootlog $(wc -l <$bootlog)"
+else
+	echo "kairos.test: bootlog none"
+fi
+
+# Disk mode (scripts/disk-test.sh): with kairos.disk, report the marker the
+# previous boot left on the disk, leave a new one (the boot's number in the
+# log), write it out, and end; init powers off cleanly. With
+# kairos.powercut too, also write a second file without writing it out,
+# then cut the power: poweroff -f -n tells the kernel to power off at once,
+# with nothing written out and the disk never unmounted, as a power cut
+# would leave it.
+if grep -qw kairos.disk /proc/cmdline; then
+	marker=/var/lib/kairos-test/marker
+	echo "kairos.test: marker $(cat $marker 2>/dev/null || echo none)"
+	# After a power cut: what became of the file that was never written
+	# out. Anything may happen to it (missing, empty, or there); only
+	# reported.
+	unsynced=${marker%/*}/unsynced
+	if [ -e $unsynced ]; then
+		echo "kairos.test: unsynced $(wc -c <$unsynced) bytes"
+		rm -f $unsynced
+	else
+		echo "kairos.test: unsynced missing"
+	fi
+	mkdir -p ${marker%/*}
+	wc -l <$bootlog >$marker
+	sync
+	if grep -qw kairos.powercut /proc/cmdline; then
+		echo "not written out" >${marker%/*}/unsynced
+		echo "kairos.test: power cut"
+		poweroff -f -n
+	fi
+	exit 0
+fi
+
 # Layout mode (scripts/layout-test.sh): with kairos.layout on the kernel's
 # command line, report how the machine's CPUs look to the kernel and where
 # the LC pool is, then end; init powers off.

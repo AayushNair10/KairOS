@@ -3,7 +3,7 @@
 #
 # usage: run-qemu.sh [--smp N] [--mem SIZE] [--kernel FILE] [--qemu ARG]...
 #                    [--dtb FILE | --dump-dtb FILE] [--log FILE]
-#                    [--timeout SECONDS] [WORD...]
+#                    [--timeout SECONDS] [--no-disk] [WORD...]
 #
 #   --smp N            number of CPUs (default 4). QEMU's form for a layout
 #                      works too: 8,clusters=2,cores=2,threads=2 is 2
@@ -22,6 +22,7 @@
 #   --log FILE         run unattended: write the console's output to FILE
 #                      instead of the terminal
 #   --timeout SECONDS  with --log, stop QEMU after this long (default 120)
+#   --no-disk          no disk: Kairos runs from the initramfs in memory
 #   WORD...            extra words for the kernel's command line
 #
 # QEMU plays two parts. It is the machine: an ARM board called "virt", with
@@ -60,6 +61,11 @@ while [ $# -gt 0 ]; do
 		--timeout) timeout=$2 ;;
 		esac
 		shift 2
+		;;
+	--no-disk)
+		# No disk is attached yet in any case; the option is here so that
+		# boot-test.sh can ask for the in-memory system by name.
+		shift
 		;;
 	-h | --help)
 		sed -n '2,/^$/s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"

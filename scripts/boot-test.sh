@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # Boot Kairos unattended and check what the console says.
 #
-# usage: boot-test.sh [--smp N] [--kernel FILE] [WORD...]
+# usage: boot-test.sh [--smp N] [--kernel FILE] [--no-disk] [WORD...]
 #
 #   --smp N    number of CPUs to give the machine (default 4), or a layout
 #              in QEMU's form, such as 8,clusters=2,cores=2,threads=2
 #   --kernel FILE  boot this kernel image instead of the one kernel-build.sh
 #              built (see run-qemu.sh)
+#   --no-disk  boot without the disk: Kairos stays in the initramfs, in
+#              memory, and the root checks expect that
 #   WORD...    extra words for the kernel's command line
 #
 # The kernel is started with the word kairos.test on its command line. The
@@ -18,6 +20,13 @@
 #   kernel     the kernel that booted calls itself "...-kairos"
 #   init       process 1 is our init, started from the initramfs
 #   cpus       all the machine's CPUs are running
+#   root       the root file system is ext4 on the disk (/dev/vda), and
+#              writable (with --no-disk: the initramfs, in memory)
+#   initramfs  after the switch to the disk, the initramfs is no longer
+#              mounted (with --no-disk: it still is)
+#   bootlog    init added this boot's line to the boot log on the disk; the
+#              test boots a throwaway copy of a fresh disk, so it is the
+#              first line (with --no-disk: there is no boot log)
 #   devices    the kernel filled in /dev
 #   cgroups    the control groups are mounted, with Kairos's two class
 #              groups (lc and batch) and the CPU controller on for both
@@ -75,6 +84,8 @@
 
 smp=4
 kernel=()
+disk=()
+nodisk=0
 words=()
 while [ $# -gt 0 ]; do
 	case $1 in
@@ -87,6 +98,11 @@ while [ $# -gt 0 ]; do
 		[ $# -ge 2 ] || die "--kernel needs a file"
 		kernel=(--kernel "$2")
 		shift 2
+		;;
+	--no-disk)
+		disk=(--no-disk)
+		nodisk=1
+		shift
 		;;
 	-h | --help)
 		sed -n '2,/^$/s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"
@@ -122,7 +138,7 @@ log=$KAIROS_BUILD/boot-test.log
 rm -f "$log"
 # The limit: a test with 16 CPUs took 88 s on a 4-CPU machine, most of it
 # emulating crunch's 16 busy loops during the class measurement.
-"$REPO_ROOT/scripts/run-qemu.sh" --smp "$smp" "${kernel[@]}" --log "$log" --timeout 180 \
+"$REPO_ROOT/scripts/run-qemu.sh" --smp "$smp" "${kernel[@]}" "${disk[@]}" --log "$log" --timeout 180 \
 	kairos.test "${words[@]}" || true
 [ -f "$log" ] || die "QEMU wrote no console output"
 
@@ -165,6 +181,32 @@ if [ "$cpus" = "$ncpu" ]; then
 	ok cpus "$cpus of $ncpu running"
 else
 	bad cpus "${cpus:-none} of $ncpu running"
+fi
+
+if [ $nodisk = 1 ]; then
+	want_root="rootfs rootfs rw" want_initramfs=mounted want_bootlog=none
+else
+	want_root="ext4 /dev/vda rw" want_initramfs=gone want_bootlog=1
+fi
+root=$(fact root)
+if [ "$root" = "$want_root" ]; then
+	ok root "$root"
+else
+	bad root "${root:-not reported} (want $want_root)"
+fi
+initramfs=$(fact initramfs)
+if [ "$initramfs" = "$want_initramfs" ]; then
+	ok initramfs "$initramfs"
+else
+	bad initramfs "${initramfs:-not reported} (want $want_initramfs)"
+fi
+bootlog=$(fact bootlog)
+if [ "$bootlog" = none ] && [ $nodisk = 1 ]; then
+	ok bootlog "none: no disk"
+elif [ "$bootlog" = "$want_bootlog" ]; then
+	ok bootlog "$bootlog line(s)"
+else
+	bad bootlog "${bootlog:-not reported} (want $want_bootlog)"
 fi
 
 devices=$(fact devices)
