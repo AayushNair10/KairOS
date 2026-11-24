@@ -1,0 +1,180 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Aayush Nair <aayushnair204@gmail.com>
+Date: Tue, 24 Nov 2026 14:39:20 -0500
+Subject: [PATCH] mm/vmscan: Reclaim Kairos latency-critical groups last
+
+When memory runs short, reclaim walks the memory groups and takes from
+each; a group below its memory.low is passed over while other groups
+still have memory to give, and taken from only on a retry that found
+nothing else. Kairos runs a latency-critical service next to batch work,
+and the kernel keeps every group's class (CONFIG_CGROUP_KAIROS): a batch
+job streaming more than the machine holds would otherwise push the
+service's working set out of memory whenever the service is idle, and
+the service then waits on the disk to read it back.
+
+Add kairos_cgroup_class(), the class of a group, and with
+CONFIG_KAIROS_MEMORY pass over a latency-critical group as if it were
+below its memory.low, against reclaim for the whole machine or for a
+batch group above it. Within a latency-critical group's own limits its
+groups are reclaimed as usual, and, as with memory.low, the root and the
+target itself are never covered. A breach is counted as a low event in
+the group's memory.events. The class is read during reclaim, so a group
+relabelled latency-critical is protected at once.
+
+Not covered: the multi-gen LRU's own walk over the groups
+(CONFIG_LRU_GEN).
+
+Signed-off-by: Aayush Nair <aayushnair204@gmail.com>
+---
+ include/linux/kairos_class.h |  9 ++++++++-
+ init/Kconfig                 |  7 +++++--
+ kernel/cgroup/kairos.c       | 22 ++++++++++++++++++++++
+ mm/vmscan.c                  | 33 +++++++++++++++++++++++++++++++--
+ 4 files changed, 66 insertions(+), 5 deletions(-)
+
+diff --git a/include/linux/kairos_class.h b/include/linux/kairos_class.h
+index b3f2260e9bfbe10247a4493fd8ba555bb490d1c3..0a4c247acf8a58f7a0913443a7ebd0950ad8146c 100644
+--- a/include/linux/kairos_class.h
++++ b/include/linux/kairos_class.h
+@@ -9,6 +9,7 @@
+ #include <linux/compiler.h>
+ #include <linux/types.h>
+ 
++struct cgroup;
+ struct task_struct;
+ 
+ /*
+@@ -23,16 +24,22 @@ enum kairos_class {
+ 
+ #ifdef CONFIG_CGROUP_KAIROS
+ enum kairos_class kairos_task_class(struct task_struct *p);
++enum kairos_class kairos_cgroup_class(struct cgroup *cgrp);
+ #else
+ static inline enum kairos_class kairos_task_class(struct task_struct *p)
+ {
+ 	return KAIROS_CLASS_LC;
+ }
++
++static inline enum kairos_class kairos_cgroup_class(struct cgroup *cgrp)
++{
++	return KAIROS_CLASS_LC;
++}
+ #endif
+ 
+ /*
+  * Kairos's memory hooks (CONFIG_KAIROS_MEMORY) let the class steer the
+- * out-of-memory killer. They are on unless "kairos.nomemclass" is on the
++ * out-of-memory killer and reclaim. They are on unless "kairos.nomemclass" is on the
+  * kernel command line, which allows the same kernel to be compared with
+  * and without them.
+  */
+diff --git a/init/Kconfig b/init/Kconfig
+index 111f4eaff48723d7b6acf4a4140cf1723ef2d378..e09366cdd4e877d952e7114fb649c989b394c1fa 100644
+--- a/init/Kconfig
++++ b/init/Kconfig
+@@ -1367,8 +1367,11 @@ config KAIROS_MEMORY
+ 	default n
+ 	help
+ 	  Lets the class of the kairos controller (CGROUP_KAIROS) steer
+-	  memory: when memory runs out, the out-of-memory killer takes a
+-	  batch task before any latency-critical one.
++	  memory. Reclaim passes over latency-critical groups as if they
++	  were below their memory.low: their memory is taken only when no
++	  other group has any to give. When memory runs out, the
++	  out-of-memory killer takes a batch task before any
++	  latency-critical one.
+ 
+ 	  "kairos.nomemclass" on the kernel command line turns it off.
+ 
+diff --git a/kernel/cgroup/kairos.c b/kernel/cgroup/kairos.c
+index 170610ad3df283c4e929b4f61cb7527e2f15b06a..5536998852a1dd21c3dfb1eeb9e8a165e8c68c1f 100644
+--- a/kernel/cgroup/kairos.c
++++ b/kernel/cgroup/kairos.c
+@@ -212,6 +212,28 @@ enum kairos_class kairos_task_class(struct task_struct *p)
+ 	return class;
+ }
+ 
++/**
++ * kairos_cgroup_class - the class of a group
++ * @cgrp: the group
++ *
++ * Return: KAIROS_CLASS_LC or KAIROS_CLASS_BATCH, the class in effect for
++ * @cgrp. Any context. The controller is on in every group
++ * (implicit_on_dfl), so every group has its state, except for a moment
++ * while a group is made; then the answer is LC, the root's.
++ */
++enum kairos_class kairos_cgroup_class(struct cgroup *cgrp)
++{
++	struct cgroup_subsys_state *css;
++	enum kairos_class class = KAIROS_CLASS_LC;
++
++	rcu_read_lock();
++	css = rcu_dereference(cgrp->subsys[kairos_cgrp_id]);
++	if (css)
++		class = READ_ONCE(css_kairos(css)->effective);
++	rcu_read_unlock();
++	return class;
++}
++
+ #ifdef CONFIG_KAIROS_MEMORY
+ /*
+  * Kairos's memory hooks: on, unless kairos.nomemclass is on the command
+diff --git a/mm/vmscan.c b/mm/vmscan.c
+index 0fc9373e8251159bcf66373d5eb0728d47447f7d..f95a3d60fda4b9130a7502aaf28a749d63f9db45 100644
+--- a/mm/vmscan.c
++++ b/mm/vmscan.c
+@@ -66,6 +66,7 @@
+ #include <linux/sched/sysctl.h>
+ 
+ #include "internal.h"
++#include <linux/kairos_class.h>
+ #include "swap.h"
+ 
+ #define CREATE_TRACE_POINTS
+@@ -5957,6 +5958,32 @@ static inline bool should_continue_reclaim(struct pglist_data *pgdat,
+ 	return inactive_lru_pages > pages_for_compaction;
+ }
+ 
++#ifdef CONFIG_KAIROS_MEMORY
++/*
++ * Kairos: is @memcg a latency-critical group, to be passed over as if it
++ * were below its memory.low? Only against reclaim for the whole machine or
++ * for a batch group above it: within a latency-critical group's own
++ * limits, the groups below it are reclaimed as usual. Like memory.low, it
++ * never covers the root or the target itself.
++ */
++static bool kairos_lc_protected(struct mem_cgroup *target,
++				struct mem_cgroup *memcg)
++{
++	if (!kairos_memclass_on() || mem_cgroup_unprotected(target, memcg))
++		return false;
++	if (target && !mem_cgroup_is_root(target) &&
++	    kairos_cgroup_class(target->css.cgroup) == KAIROS_CLASS_LC)
++		return false;
++	return kairos_cgroup_class(memcg->css.cgroup) == KAIROS_CLASS_LC;
++}
++#else
++static inline bool kairos_lc_protected(struct mem_cgroup *target,
++				       struct mem_cgroup *memcg)
++{
++	return false;
++}
++#endif
++
+ static void shrink_node_memcgs(pg_data_t *pgdat, struct scan_control *sc)
+ {
+ 	struct mem_cgroup *target_memcg = sc->target_mem_cgroup;
+@@ -6000,9 +6027,11 @@ static void shrink_node_memcgs(pg_data_t *pgdat, struct scan_control *sc)
+ 			 * If there is no reclaimable memory, OOM.
+ 			 */
+ 			continue;
+-		} else if (mem_cgroup_below_low(target_memcg, memcg)) {
++		} else if (mem_cgroup_below_low(target_memcg, memcg) ||
++			   kairos_lc_protected(target_memcg, memcg)) {
+ 			/*
+-			 * Soft protection.
++			 * Soft protection (memory.low, or a Kairos
++			 * latency-critical group).
+ 			 * Respect the protection only as long as
+ 			 * there is an unprotected supply
+ 			 * of reclaimable memory from other cgroups.
