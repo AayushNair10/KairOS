@@ -21,7 +21,7 @@ and the scheduling policy as a BPF program on sched_ext.
 | 6 | Task class as a kernel concept (done: a cgroup controller of our own, read by BPF) | syscall entry, task_struct, user ABI, kfuncs | patch (0001 to 0004) |
 | 7 | LC and batch pools that follow CPU topology (done: the loader orders the CPUs by layout; whole cores) | sched domains, NUMA, CPU capacity | config only (a scheduler change on its `kairos-os` branch) |
 | 8 | Scheduler attached before PID 1 (done: the kernel runs an attach program before init; the scheduler held by a pin) | initcalls, kernel threads, user-mode helpers, BPF object lifetimes | patch (0005, 0006) |
-| 9 | A root file system on a virtio disk | VFS, block layer, virtio drivers, page cache, journaling | config; maybe none |
+| 9 | A root file system on a virtio disk (done: a two-stage boot from the initramfs to ext4) | VFS, block layer, virtio drivers, page cache, journaling | config only |
 | 10 | Memory reclaim that knows LC from batch | page allocator, reclaim, memory cgroups | patch |
 | 11 | Block I/O that knows LC from batch | I/O schedulers, I/O priority | patch |
 | 12 | Measurement at real speed | needs QEMU on the Mac (hvf) or a second VM; ask first | none |
@@ -1664,3 +1664,181 @@ Open questions / next:
 - Push: the scheduler's `kairos-os` (`ecde69d`, `f2a1140`) first, then this
   repository's component 8 commits.
 - Next on the roadmap: component 9, a root file system on a virtio disk.
+
+## 9. A root file system on a virtio disk — 2026-11-24
+
+Options:
+- A: two-stage boot, as distributions do: the initramfs comes first and
+  a first stage mounts an ext4 disk, moves /proc, /sys (with the
+  scheduler's pin) and /dev onto it, switches root to it and runs init
+  from the disk. Config only; component 8's attach unchanged.
+- B: the kernel mounts the disk itself (`root=/dev/vda`, no first
+  stage) and pivots into it. The pivot drops the initramfs's mounts and
+  the pin with them, so patch 0005 would move into the kernel's
+  root-mount path and run the attach program from the disk.
+- C: a read-only compressed system image (SquashFS) plus a writable ext4
+  data disk (under /var, or as an overlay over the root); a two-stage
+  boot like A. Safe updates and rollback; the most parts.
+- D: a VM folder shared over virtio as the root (9p): no disk, no block
+  layer, no journal; the quickest edit loop.
+
+My pick and reasoning:
+- Asked for the answer instead of picking: "explain to me the answer, and
+  why. Also explain why this disk is actually needed".
+- Then "yes, go with A", with a note: "C is the most optimal method, but
+  we chose A because there are no updates so C is not needed".
+
+Verdict: A.
+- How real Linux systems boot (Ubuntu's and Fedora's initramfs tools),
+  config only, component 8's attach untouched (the pin rides along when
+  /sys is moved rather than unmounted), and robust: the scheduler runs
+  even if the disk fails, and the first stage can report it.
+- On the note about C: right that C's payoff (updates and rollback) is
+  zero without an update mechanism. But C isn't "the most optimal" in
+  general: it is best for fleets that ship updates and must never be
+  half-updated, at the cost of more parts. And C contains A: the same
+  two-stage boot, plus an image and an overlay. Its extra lessons
+  (compressed read-only file systems, overlays) aren't on Kairos's path;
+  the disk, block layer and page cache that components 10 and 11 need
+  are in both.
+- B ties the scheduler to the disk (a bad disk: no scheduler, no init, a
+  panic) and moves our patch into delicate early-boot code, to save an
+  initramfs Kairos doesn't mind having. D has no block layer, so
+  component 11 would have nothing to schedule.
+
+Where the others fit:
+- B: embedded boards and appliances with a fixed disk (from memory:
+  Raspberry Pi OS, many Buildroot systems boot `root=` directly).
+- C: OpenWrt routers (SquashFS plus an overlay); from memory ChromeOS,
+  Android's system partition and Bottlerocket, updated by writing a whole
+  new image into a second slot and switching the boot loader to it, with
+  rollback to the old slot (shadow paging, in database terms).
+- D: quick kernel test machines (virtme-ng, from memory); sharing a
+  host's folders with a VM.
+
+Linux concepts learned:
+- virtio (`drivers/virtio/virtio_mmio.c`): on QEMU's virt board, devices
+  sit in memory-mapped slots the device tree lists; the driver and QEMU
+  share rings of request slots (virtqueues). The disk driver
+  (`drivers/block/virtio_blk.c`) makes `/dev/vda` (major 254) on the
+  block layer (`block/blk-mq.c`); with our config its only I/O scheduler
+  is `none` (`/sys/block/vda/queue/scheduler`).
+- Kconfig menus: `menuconfig VIRTIO_MENU` and `BLK_DEV` default to y, but
+  allnoconfig turns them off, and the config system then drops every
+  driver inside them without a word; kernel-build.sh's lost-line check
+  caught it.
+- ext4 and jbd2: "ordered" data mode (data written before the metadata
+  that points to it commits; data itself not journaled); a mounted
+  read-write file system carries a needs-recovery flag, and a mount that
+  finds it replays the journal (`ext4_load_journal()`: "recovery
+  complete"); remounting read-only finishes the journal and clears it.
+- The page cache and writeback: `sync()` and `fsync()` force it out; the
+  power-off system call doesn't. tmpfs pages (and the initramfs's) count
+  as `Shmem` in /proc/meminfo; a file's cached pages on a disk can be
+  dropped and read back, an initramfs file's can't.
+- The root: if the initramfs has `/init` the kernel runs it and leaves
+  `root=` to it; otherwise `prepare_namespace()` (`init/do_mounts.c`)
+  waits for devices, mounts `root=`, mounts devtmpfs, and pivots. Since
+  2026 the namespace root is an empty, unchangeable nullfs
+  (`fs/nullfs.c`, `init_mount_tree()` in `fs/namespace.c`) with the
+  initramfs mounted on it, so `pivot_root(".", ".")` then
+  `umount2(".", MNT_DETACH)` can leave the initramfs; before, rootfs
+  couldn't be pivoted away from and switch_root deleted its files.
+  `pivot_root` also moves the root and working folder of every process
+  that had the old one (kernel threads included).
+- `MS_MOVE` carries a mount with everything under it. Open files keep a
+  file system alive: init's console, opened on the initramfs's
+  `/dev/console`, had to be reopened on the moved `/dev`. `exec` keeps the
+  process number: init replaces itself and stays process 1.
+- A BPF file system that is unmounted for good drops its pins
+  (`bpf_kill_super()` -> `kill_anon_super()` -> `bpf_destroy_inode()` ->
+  `bpf_any_put()`); moving the mount keeps them.
+- Tools: `mke2fs -d DIR` fills an image without root (a tar needs
+  libarchive); `debugfs -w` edits an unmounted file system (`sif PATH uid
+  0`); `e2fsck -f -n` checks without changing; QEMU's `-drive ... -device
+  virtio-blk-device` and `-snapshot`; busybox `poweroff -f -n` powers off
+  at once with nothing written out, as a power cut.
+
+What changed: Kairos runs from an ext4 disk. QEMU attaches a disk image
+built by `disk-build.sh` from the same files as the initramfs, and the
+kernel drives it as `/dev/vda`. Init starts from the initramfs as before;
+with `root=/dev/vda` on the command line it waits for the disk, mounts
+it, checks it holds an init and the folders it needs, moves /proc, /sys
+(carrying the BPF file system with the scheduler's pin) and /dev onto it,
+pivots, lets go of the initramfs (whose memory is then freed), and
+replaces itself with the disk's init. The disk's init keeps those mounts,
+puts /run in memory, logs the boot on the disk, and runs the system as
+before; at power-off it writes everything out and makes the disk
+read-only, so the journal is clean. Without a disk, or with one that
+isn't usable, init runs from memory as it always did.
+
+What each step did, in order:
+1. The checks first, failing: root, initramfs, bootlog in the boot test,
+   `--no-disk`, and `disk-test.sh` (`9f754b1`).
+2. The kernel switches for the virtio disk and ext4, `disk-build.sh`, and
+   `run-qemu.sh --disk/--no-disk/--throwaway` (`881387f`).
+3. Init's first stage: the switch (`5e26aa5`).
+4. Init's second stage: the boot log, /run in memory, the clean power-off
+   (`c417404`).
+5. The suite; `disk-test.sh --kernel` (`1a9e2fe`).
+
+Found on the way:
+- The virtio menu: off in our all-off starting point, it made the config
+  system drop the virtio transport and the disk driver (no error, no
+  device); the build script's check stopped the build.
+- Shmem 7172 kB running from memory, 0 kB after the switch.
+- Without the read-only remount, every boot of a kept disk replayed the
+  journal ("recovery complete").
+- After the power cut the never-written-out file was gone; the written-out
+  marker and boot-log line were there.
+- After the switch, /proc/mounts lists the moved mounts before the root.
+
+How it's tested:
+- `./scripts/boot-test.sh`: 25 lines, all ok, at 1, 2, 4 and 8 CPUs, on 2
+  clusters x 2 cores x 2 threads, with `kairos.noscheduler`, with
+  `--no-disk` (root rootfs, initramfs mounted, no boot log), and on the
+  lock-checking build (no lockdep or RCU reports). New checks, seen
+  failing first: root (`ext4 /dev/vda rw`), initramfs (gone), bootlog (1).
+- `./scripts/disk-test.sh`: 6 of 6, also on the lock-checking build:
+  boot 2 finds boot 1's marker, 2 boot-log lines, no recovery; boot 3
+  cuts the power (`poweroff -f -n`); boot 4 says "EXT4-fs (vda): recovery
+  complete" and finds boot 3's marker and 4 boot-log lines.
+- `./scripts/layout-test.sh`: 16 of 16 (throwaway disk).
+- A disk that isn't ext4: "can't mount /dev/vda: Invalid argument; staying
+  in memory". The kernel without a disk driver: "/dev/vda didn't appear
+  in 10 s; staying in memory". Both run from memory.
+
+Interview questions:
+1. Your system starts from an in-memory archive and then runs from a
+   disk. Walk through the switch: what moves, what is unmounted, why
+   init replaces itself rather than starting a child, and what would have
+   kept the in-memory copy alive?
+2. What does ext4's journal guarantee after a power cut, and what not?
+   Why did the file that was never written out vanish while the marker
+   survived, and why does a clean power-off leave nothing to replay?
+3. Why do components 10 and 11 (memory reclaim and disk I/O that know LC
+   from batch) need a disk, when the scheduler doesn't?
+
+Resume line: "Gave Kairos a persistent root: a two-stage boot in its C
+init that verifies and mounts an ext4 disk on virtio, moves the kernel's
+pseudo-file systems (and the pinned BPF scheduler) across, pivots off the
+initramfs to free it, and re-executes from disk; QEMU power-cut tests
+verify ext4 journal recovery and clean shutdowns, also under lockdep."
+
+Open questions / next:
+- The initramfs still holds the whole system (the no-disk path and a
+  rescue system); it could shrink to the first stage's needs (the attach
+  program, the loader, init).
+- No way to update a kept disk's system files except rebuilding it,
+  which loses its logs (C's territory, if it ever matters).
+- The services' logs are in /run and don't survive a reboot; moving them
+  to /var/log would be easy.
+- No file system check at boot: a damaged ext4 (worse than an unclean
+  journal) is mounted as it is; e2fsck in the first stage would need
+  e2fsprogs in the initramfs.
+- No real-time clock (CONFIG_RTC is off): the boot log has no dates.
+- The disk is named by path only (`root=/dev/vda`), not by label or id.
+- The only I/O scheduler is `none`: component 11.
+- Push: this repository's component 9 commits (no scheduler changes).
+- Next on the roadmap: component 10, memory reclaim that knows LC from
+  batch.

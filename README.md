@@ -16,7 +16,8 @@ It has three parts:
 
 ## Status
 
-Early. A minimal Kairos kernel builds and boots in QEMU. The kernel attaches
+Early. A minimal Kairos kernel builds and boots in QEMU, and runs from an
+ext4 disk that keeps its files from one boot to the next. The kernel attaches
 Kairos Scheduler before it starts Kairos's own init, so every program runs
 under it; init, the first process, watches it and starts it again if it
 ends.
@@ -89,8 +90,9 @@ sequenceDiagram
     participant S as Shell
     K->>A: run /bin/kairos-attach, before init
     A->>K: mount /sys and the BPF file system, then load, attach and pin the BPF policy
-    K->>I: run /init as process 1
-    Note over I: mount /proc, /dev and the control groups (keeping /sys and its pins), make lc and batch, set batch's class
+    K->>I: run /init from the initramfs, as process 1
+    Note over I: First stage. Mount /proc and /dev, mount the disk, move /proc, /sys (with its pins) and /dev onto it, make it the root, let go of the initramfs
+    Note over I: The disk's init, still process 1. Mount /run in memory and the control groups, log the boot, make lc and batch, set batch's class
     I->>K: the scheduler's state says enabled
     I->>L: start, with no terminal, to adopt the pinned scheduler
     I->>M: start
@@ -102,6 +104,13 @@ Until the policy is attached, only the kernel's own threads and the attach
 program run, on EEVDF. Everything after that, init included, runs under
 Kairos Scheduler. If the attach program fails, the kernel says so and boots
 on, and init loads the scheduler itself, as it did before.
+
+The initramfs, the archive the kernel unpacks into memory, holds the whole
+system, so a boot without a disk still works. With a disk (`root=/dev/vda`
+on the command line), init checks it before it changes anything, makes it
+the root, and starts again from it; the initramfs's memory is freed. At
+power-off init writes everything out and makes the disk read-only, so ext4
+closes its journal and the next boot finds it clean.
 
 ### How a task gets its class
 
@@ -169,6 +178,8 @@ CPUs are alike and there are no threads, it is just `0 1 2 3 ...`.
 | A service ends | the service manager: the service's group is empty | It starts the service again, by the same rule. |
 | The service manager ends | init | It starts a new one, which finds the running services by their groups and looks after them. |
 | The scheduler itself is the problem | you | Boot with `kairos.noscheduler`: the kernel and init leave it off, and EEVDF runs everything. |
+| The disk is missing, or isn't ext4 | init, before it changes anything | It says so and runs from the initramfs, in memory. |
+| The power goes off | ext4, at the next mount | It replays its journal ("recovery complete"): everything written out before the cut is there, consistent. |
 | The kernel keeps no classes (one without our patches) | init: there is no `kairos.class` | It says so and starts the scheduler with the older rule: batch is anything below the group `batch`. |
 
 ## Layout
@@ -201,10 +212,17 @@ git submodule update --init  # once: Kairos Scheduler at the pinned commit
 ./scripts/kernel-fetch.sh    # once: Linux at the pinned version + our patches
 ./scripts/kernel-build.sh    # put the config together and build the kernel
 ./scripts/image-build.sh     # build init, the services and the scheduler; pack the first file system
+./scripts/disk-build.sh      # build the disk: an ext4 image with the same files
 ./scripts/boot-test.sh       # boot unattended and check what the console says
 ./scripts/layout-test.sh     # boot several CPU layouts; check where LC work runs
+./scripts/disk-test.sh       # boot one disk four times, with a power cut
 ./scripts/run-qemu.sh        # boot to a shell; "poweroff" leaves
 ```
+
+`run-qemu.sh` attaches the disk (`~/kairos-build/disk.img`, or `--disk
+FILE`) and keeps what Kairos writes to it; `disk-build.sh` makes it fresh
+again. `--no-disk` boots from memory only, and `--throwaway` discards the
+writes when QEMU ends; the tests boot that way.
 
 `run-qemu.sh` and `boot-test.sh` take a CPU layout as `--smp`, such as
 `--smp 8,clusters=2,cores=2,threads=2`. `run-qemu.sh --qemu ARG` passes
@@ -246,9 +264,17 @@ CPU, started only on request.
 `userspace/init/init.c` is the first program the kernel starts, and the
 parent of everything else. It:
 
+- started from the initramfs with a disk named on the command line, makes
+  the disk the root: it waits for it, mounts it, checks it holds an init,
+  moves the kernel's own file systems onto it, pivots, lets go of the
+  initramfs, and replaces itself with the disk's init, still process 1. If
+  anything is wrong before the switch, it stays in memory;
 - mounts the file systems through which the kernel shows its own
-  information, and the control groups, with the groups `lc` and `batch`,
-  and writes `batch` into the batch group's class;
+  information, an in-memory `/run` for files about this boot only, and
+  the control groups, with the groups `lc` and `batch`, and writes `batch`
+  into the batch group's class;
+- adds a line to the boot log on the disk (`/var/log/kairos/boots`),
+  written out at once;
 - keeps the file systems mounted before it started: the attach program's
   `/sys` and BPF file system, which hold the scheduler's pin;
 - starts Kairos Scheduler's loader: one that adopts the scheduler the
@@ -264,7 +290,8 @@ parent of everything else. It:
 - collects every process that finishes, including the ones it adopted
   because their parent finished first;
 - on `poweroff`, `reboot` or `halt`, asks every process to finish, waits,
-  stops by force what is left, and only then tells the kernel.
+  stops by force what is left, writes everything out, makes the disk
+  read-only, and only then tells the kernel.
 
 `boot-test.sh` checks each of these on a running system. If the scheduler
 is ever what's broken, `./scripts/run-qemu.sh kairos.noscheduler` boots

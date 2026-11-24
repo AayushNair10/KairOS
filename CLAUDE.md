@@ -208,16 +208,26 @@ image/           the first file system: initramfs.list (its files),
                  rdinit=/init.fallback)
 scripts/         kernel-fetch.sh, kernel-export.sh, kernel-check.sh,
                  kernel-build.sh, scheduler-build.sh, image-build.sh,
-                 run-qemu.sh, boot-test.sh, layout-test.sh, lib.sh
+                 disk-build.sh (the ext4 disk image: the initramfs's
+                 files plus /var/log/kairos, owned by root via debugfs),
+                 run-qemu.sh, boot-test.sh, layout-test.sh, disk-test.sh,
+                 lib.sh
 docs/            DESIGN_LOG.md, notes
 userspace/       init/init.c: Kairos's init, process 1, one statically
-                 linked C program. It keeps what was mounted before it
+                 linked C program, in two stages. From the initramfs with
+                 root=/dev/vda: mount the disk, check it, move /proc, /sys
+                 and /dev onto it, pivot_root, detach the initramfs, exec
+                 the disk's /init (anything wrong: stay in memory). Then:
+                 it keeps what was mounted before it
                  (the attach program's /sys and BPF file system), mounts
                  the control groups (lc, batch; writes batch's
                  kairos.class), starts Kairos Scheduler's loader first:
                  --adopt /sys/fs/bpf/kairos if the kernel attached it,
                  else a load (--class=kernel, --split-order=layout,
                  --pin); restarts it by a rule, then the service manager.
+                 On the disk it also mounts /run as tmpfs, appends to
+                 /var/log/kairos/boots (fsync), and at power-off syncs and
+                 remounts / read-only.
                  service/service.c: the service manager (each service in
                  a control group under its class), the service command
                  and batch (the same program). probe/probe.c: the demo LC
@@ -242,6 +252,13 @@ userspace/       init/init.c: Kairos's init, process 1, one statically
   `scripts/layout-test.sh [LAYOUT...]` boots four CPU layouts and checks
   the loader's CPU order and where the probe ran (~8 min).
 - The image has no `/tmp`: in hand tests, write files to `/`.
+- The disk: `run-qemu.sh` attaches `~/kairos-build/disk.img` (or `--disk
+  FILE`) and keeps the writes; `--throwaway` discards them (QEMU's
+  snapshot mode), `--no-disk` boots from memory only. `boot-test.sh` and
+  `layout-test.sh` boot throwaway copies, `disk-test.sh` its own copy;
+  `disk-build.sh` makes the disk fresh again (after `image-build.sh`, so
+  both hold the same system). After the switch, `/proc/mounts` lists the
+  moved mounts before the root: grep `" / "`.
 - The scheduler is held by pins in `/sys/fs/bpf/kairos`, not by a process.
   Remove old pins before loading another scheduler: releasing a link
   unloads whichever scheduler runs (`bpf_scx_unreg()`). The loader's
