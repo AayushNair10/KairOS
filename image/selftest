@@ -102,6 +102,44 @@ if grep -qw kairos.layout /proc/cmdline; then
 	echo "kairos.test: probe ran on $ran"
 	exit 0
 fi
+
+# Memory mode (scripts/memory-test.sh): with kairos.memory, LC and batch
+# compete for memory for 30 s, then the self-test ends; init powers off.
+#
+# LC: a program in its own group below lc writes a 16 MB file, then reads
+# it all again every 2 s, idle in between, as a service is between
+# requests: its working set. Batch: reads a 512 MB file over and over, more
+# than the machine has. That file is all holes (made with truncate):
+# reading it fills memory with cached pages but reads nothing from the
+# disk. So whatever is read from the disk meanwhile is LC reading back what
+# was taken from it (and a little of everything else).
+#
+# lc-reads: KiB read from the disk while batch ran, and how many times LC
+# read its file meanwhile. A file that stays in memory is read 0 times.
+if grep -qw kairos.memory /proc/cmdline; then
+	d=/var/lib/kairos-test
+	g=/sys/fs/cgroup/lc/memtest
+	mkdir -p $d $g
+	truncate -s 512M $d/big
+	sh -c "echo \$\$ >$g/cgroup.procs
+		dd if=/dev/zero of=$d/lcdata bs=1M count=16 conv=fsync 2>/dev/null
+		while [ ! -e $d/stop ]; do
+			cat $d/lcdata >/dev/null
+			echo x >>$d/passes
+			sleep 2
+		done" &
+	sleep 8
+	read -r _ _ before _ </sys/block/vda/stat
+	: >$d/passes
+	batch sh -c "while [ ! -e $d/stop ]; do cat $d/big >/dev/null; done" &
+	sleep 30
+	read -r _ _ after _ </sys/block/vda/stat
+	passes=$(wc -l <$d/passes)
+	touch $d/stop
+	echo "kairos.test: memory lc-reads $(((after - before) / 2)) KiB in $passes passes"
+	wait
+	exit 0
+fi
 echo "kairos.test: devices $(ls /dev | wc -l) entries in /dev"
 # Control groups: the type of file system mounted at /sys/fs/cgroup
 # ("cgroup2" for control groups), and Kairos's two class groups. For each
@@ -289,8 +327,21 @@ echo "kairos.test: class idle $(latency)"
 service start crunch >/dev/null 2>&1
 sleep 1
 echo "kairos.test: class batch $(latency)"
+# Out-of-memory scores (0 to about 1333; a process holding little memory
+# is near 666): one of crunch's processes and the probe service's, while
+# crunch is batch, and again while it is LC. The process the kernel kills
+# when memory runs out is the one with the highest score.
+oomscore() {
+	cat "/proc/$1/oom_score" 2>/dev/null || echo none
+}
+oom() {
+	set -- $(head -n 1 "$crunchg/cgroup.procs") $(pidof probe)
+	echo "$(oomscore "$1") lc $(oomscore "$2")"
+}
+echo "kairos.test: oom batch $(oom)"
 echo lc >"$crunchg/kairos.class" 2>/dev/null
 echo "kairos.test: class lc $(latency)"
+echo "kairos.test: oom relabelled $(oom)"
 echo inherit >"$crunchg/kairos.class" 2>/dev/null
 
 # Moving a service to the other class's group still works: change its

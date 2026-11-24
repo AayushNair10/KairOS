@@ -30,6 +30,7 @@
 #   devices    the kernel filled in /dev
 #   cgroups    the control groups are mounted, with Kairos's two class
 #              groups (lc and batch) and the CPU controller on for both
+#   memory     the memory controller is on for lc and batch too
 #   sched_ext  the kernel can take a BPF scheduler
 #   scheduler  Kairos Scheduler was running before init started its first
 #              program
@@ -56,6 +57,10 @@
 #   relabel    one write made crunch's group LC, and a group made below it
 #              started as LC; "inherit" gave both batch's class back; a
 #              word that isn't a class was refused
+#   oomscore   the kernel would kill batch first when memory runs out:
+#              crunch's out-of-memory score, as batch, is at least 300
+#              above the probe's, and after one write makes it LC, it isn't
+#              (with kairos.nomemclass, which turns that off: never)
 #   class      with every CPU busy with crunch, a small LC program's median
 #              wake-up delay was at most half as long with crunch as batch
 #              as with crunch as LC (one write to its group, while it
@@ -128,11 +133,15 @@ case $ncpu in
 '' | *[!0-9]*) die "--smp $smp: no number of CPUs at its start" ;;
 esac
 
-# Is the scheduler meant to be off?
+# Is the scheduler meant to be off? Are the memory hooks?
 off=0
+memclass=1
 for word in "${words[@]}"; do
 	if [ "$word" = kairos.noscheduler ]; then
 		off=1
+	fi
+	if [ "$word" = kairos.nomemclass ]; then
+		memclass=0
 	fi
 done
 
@@ -236,6 +245,19 @@ elif has_cpu "$lc" && has_cpu "$batch"; then
 	ok cgroups "mounted; lc and batch have the CPU controller"
 else
 	bad cgroups "mounted, but lc: ${lc:-no controllers}; batch: ${batch:-no controllers}"
+fi
+
+# Is $1 one of the words in $2?
+has_word() {
+	case " $2 " in
+	*" $1 "*) return 0 ;;
+	esac
+	return 1
+}
+if has_word memory "$lc" && has_word memory "$batch"; then
+	ok memory "on for lc and batch"
+else
+	bad memory "lc: ${lc:-no controllers}; batch: ${batch:-no controllers} (want memory in both)"
 fi
 
 state=$(fact sched_ext)
@@ -405,6 +427,26 @@ elif [ $((batch_med * 2)) -le "$lc_med" ]; then
 else
 	bad class "$delays: as batch isn't at most half of as LC"
 fi
+
+# Out-of-memory scores: crunch's and the probe's, with crunch batch, then
+# LC.
+read -r batch_score _ lc_score <<<"$(fact "oom batch")"
+read -r moved_score _ moved_lc <<<"$(fact "oom relabelled")"
+scores="crunch as batch $batch_score, probe $lc_score; crunch as LC $moved_score, probe $moved_lc"
+case "$batch_score$lc_score$moved_score$moved_lc" in
+'' | *[!0-9]*) bad oomscore "not reported: $scores" ;;
+*)
+	boosted=$((batch_score >= lc_score + 300))
+	still=$((moved_score >= moved_lc + 300))
+	if [ $memclass = 1 ] && [ $boosted = 1 ] && [ $still = 0 ]; then
+		ok oomscore "$scores"
+	elif [ $memclass = 0 ] && [ $boosted = 0 ] && [ $still = 0 ]; then
+		ok oomscore "not by class, as kairos.nomemclass asks: $scores"
+	else
+		bad oomscore "$scores"
+	fi
+	;;
+esac
 
 restart=$(fact restart)
 if [ $off = 1 ]; then
