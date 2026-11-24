@@ -573,16 +573,26 @@ static void launch_scheduler(void)
 	 *   cgroup  without the kernel's classes: batch if the task is in the
 	 *           batch group or below it, or lowered its policy.
 	 * Without the groups, --main-config's own rule applies: the policy
-	 * alone. --quiet: no statistics on the console every second.
+	 * alone.
+	 *
+	 * --split-order=layout: which CPUs form the LC pool, by the CPU layout
+	 * the kernel describes in /sys: the fastest CPUs first, one memory
+	 * node, cache and cluster filled before the next, and whole cores. The
+	 * loader prints the order once. --quiet: no statistics on the console
+	 * every second.
 	 */
 	char *const by_kernel[] = {
-		SCHEDULER, "--main-config", "--class=kernel", "--quiet", NULL
+		SCHEDULER, "--main-config", "--class=kernel",
+		"--split-order=layout", "--quiet", NULL
 	};
 	char *const by_group[] = {
 		SCHEDULER, "--main-config", "--class=cgroup",
-		"--batch-cgroup=" CGROUPS "/batch", "--quiet", NULL
+		"--batch-cgroup=" CGROUPS "/batch", "--split-order=layout",
+		"--quiet", NULL
 	};
-	char *const by_policy[] = { SCHEDULER, "--main-config", "--quiet", NULL };
+	char *const by_policy[] = {
+		SCHEDULER, "--main-config", "--split-order=layout", "--quiet", NULL
+	};
 
 	scheduler_started = milliseconds();
 	scheduler = start(kernel_classes ? by_kernel :
