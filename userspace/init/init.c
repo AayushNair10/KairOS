@@ -38,10 +38,13 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <linux/magic.h>
 #include <sys/ioctl.h>
 #include <sys/mount.h>
 #include <sys/reboot.h>
 #include <sys/stat.h>
+#include <sys/statfs.h>
+#include <sys/syscall.h>
 #include <sys/utsname.h>
 #include <sys/wait.h>
 
@@ -173,7 +176,7 @@ static int mounted(const char *where)
 static int mount_info(const char *type, const char *where)
 {
 	if (mounted(where)) {
-		say("%s was mounted before init; keeping it", where);
+		say("%s is mounted already; keeping it", where);
 		return 0;
 	}
 	if (mount(type, where, type, 0, NULL) < 0) {
@@ -289,6 +292,190 @@ static int on_command_line(const char *word)
 		if (!strcmp(w, word))
 			return 1;
 	return 0;
+}
+
+/*
+ * The value of a word KEY=VALUE on the kernel's command line, copied into
+ * buf; NULL if there is none. (root= is the kernel's own word, but with an
+ * initramfs the kernel doesn't use it: it is left for init.)
+ */
+static char *command_line_value(const char *key, char *buf, size_t size)
+{
+	char line[4096];
+	size_t len = strlen(key);
+	char *w;
+	ssize_t n;
+	int fd;
+
+	fd = open("/proc/cmdline", O_RDONLY);
+	if (fd < 0)
+		return NULL;
+	n = read(fd, line, sizeof(line) - 1);
+	close(fd);
+	if (n <= 0)
+		return NULL;
+	line[n] = '\0';
+
+	for (w = strtok(line, " \n"); w; w = strtok(NULL, " \n"))
+		if (!strncmp(w, key, len) && w[len] == '=') {
+			snprintf(buf, size, "%s", w + len + 1);
+			return buf;
+		}
+	return NULL;
+}
+
+/*
+ * The first stage: from the initramfs to the disk.
+ *
+ * The kernel starts init from the initramfs, the archive it unpacked into
+ * memory. With root=DEVICE on the command line (run-qemu.sh adds
+ * root=/dev/vda when it attaches a disk), init makes that disk the root
+ * and replaces itself with the disk's own copy of init, which carries on
+ * from there: the second stage. Without root=, or if anything is wrong
+ * before the switch, init stays in memory, as it always did.
+ *
+ * Is init still running from memory? The initramfs is a file system that
+ * lives only in memory (tmpfs or ramfs); the disk is ext4.
+ */
+static int in_memory(void)
+{
+	struct statfs fs;
+
+	return statfs("/", &fs) == 0 &&
+	       (fs.f_type == TMPFS_MAGIC || fs.f_type == RAMFS_MAGIC);
+}
+
+#define NEWROOT		"/newroot"	/* where the disk is mounted first */
+#define DISK_WAIT	10		/* seconds to wait for the disk */
+
+/*
+ * The kernel's file systems, moved onto the disk. A move takes a mount
+ * with everything mounted below it: /sys carries the BPF file system and
+ * the pin that holds Kairos Scheduler, so the scheduler keeps running.
+ */
+static const char *const moved[] = { "/proc", "/sys", "/dev" };
+#define NR_MOVED	(sizeof(moved) / sizeof(moved[0]))
+
+/* Put the first @n moved file systems back where they were. */
+static void move_back(size_t n)
+{
+	char target[64];
+
+	while (n-- > 0) {
+		snprintf(target, sizeof(target), NEWROOT "%s", moved[n]);
+		mount(target, moved[n], NULL, MS_MOVE, NULL);
+	}
+}
+
+static void switch_to_disk(const char *device)
+{
+	char target[64];
+	struct stat st;
+	size_t i;
+	int tries = 0, fd;
+
+	/*
+	 * 1. Wait for the disk. Its driver may still be setting it up when
+	 * init starts; the kernel adds the device's entry to /dev once it
+	 * has.
+	 */
+	while (stat(device, &st) < 0) {
+		if (tries == 0)
+			say("waiting for %s", device);
+		if (tries++ >= DISK_WAIT * 20) {
+			say("%s didn't appear in %d s; staying in memory", device, DISK_WAIT);
+			return;
+		}
+		usleep(50 * 1000);
+	}
+
+	/*
+	 * 2. Mount it, and check that it holds an init and the folders the
+	 * moves need. Nothing has changed yet: if anything is wrong, init
+	 * unmounts the disk and stays in memory.
+	 */
+	if (mkdir(NEWROOT, 0755) < 0 && errno != EEXIST) {
+		say("can't make %s: %s; staying in memory", NEWROOT, strerror(errno));
+		return;
+	}
+	if (mount(device, NEWROOT, "ext4", 0, NULL) < 0) {
+		say("can't mount %s: %s; staying in memory", device, strerror(errno));
+		return;
+	}
+	if (access(NEWROOT "/init", X_OK) < 0) {
+		say("%s has no init; staying in memory", device);
+		goto unmount;
+	}
+	for (i = 0; i < NR_MOVED; i++) {
+		snprintf(target, sizeof(target), NEWROOT "%s", moved[i]);
+		if (stat(target, &st) < 0 || !S_ISDIR(st.st_mode)) {
+			say("%s has no %s folder; staying in memory", device, moved[i]);
+			goto unmount;
+		}
+	}
+
+	/* 3. Move the kernel's file systems onto the disk. */
+	for (i = 0; i < NR_MOVED; i++) {
+		snprintf(target, sizeof(target), NEWROOT "%s", moved[i]);
+		if (mount(moved[i], target, NULL, MS_MOVE, NULL) < 0) {
+			say("can't move %s onto the disk: %s; staying in memory",
+			    moved[i], strerror(errno));
+			move_back(i);
+			goto unmount;
+		}
+	}
+
+	/*
+	 * 4. Make the disk the root. With the disk as the working folder,
+	 * pivot_root(".", ".") puts the disk at the root and the initramfs
+	 * on top of it, at the same place; unmounting "." then takes the
+	 * initramfs off. MNT_DETACH: it goes from the mount table at once,
+	 * and its memory is freed once nothing uses it any more. (Linux 7.0
+	 * mounts the initramfs on top of an empty "nullfs", which is what
+	 * lets a program pivot away from it. Older kernels forbade that, and
+	 * the classic switch_root deletes the initramfs's files one by one
+	 * instead. The kernel's own root mount, prepare_namespace(), uses
+	 * this same pivot.)
+	 */
+	if (chdir(NEWROOT) < 0 || syscall(SYS_pivot_root, ".", ".") < 0) {
+		say("can't make %s the root: %s; staying in memory", device, strerror(errno));
+		if (chdir("/") < 0)
+			say("can't go back to the initramfs's root: %s", strerror(errno));
+		move_back(NR_MOVED);
+		goto unmount;
+	}
+	if (umount2(".", MNT_DETACH) < 0)
+		say("can't unmount the initramfs: %s", strerror(errno));
+	if (chdir("/") < 0)
+		say("can't go to the new root: %s", strerror(errno));
+
+	/*
+	 * 5. The console. The kernel opened init's input and output on the
+	 * initramfs's /dev/console; kept open, they would keep the initramfs,
+	 * and its memory, alive. Open them again on the moved /dev.
+	 */
+	fd = open("/dev/console", O_RDWR | O_NOCTTY);
+	if (fd >= 0) {
+		dup2(fd, STDIN_FILENO);
+		dup2(fd, STDOUT_FILENO);
+		dup2(fd, STDERR_FILENO);
+		if (fd > STDERR_FILENO)
+			close(fd);
+	}
+
+	/*
+	 * 6. Run the disk's init in place of this program. Running a new
+	 * program keeps the process: it is still process 1 (the kernel
+	 * panics if process 1 ever ends). If it can't be run, this program
+	 * carries on, from memory, with the disk as the root.
+	 */
+	say("%s is the root now; starting its init", device);
+	execl("/init", "/init", (char *)NULL);
+	say("can't run the disk's init: %s; carrying on", strerror(errno));
+	return;
+
+unmount:
+	umount(NEWROOT);
 }
 
 /*
@@ -794,6 +981,15 @@ int main(void)
 	mount_info("sysfs", "/sys");		/* devices and kernel settings */
 	mount_info("bpf", BPF_FS);		/* pinned BPF objects */
 	mount_info("devtmpfs", "/dev");		/* one entry per device */
+
+	/* The first stage: from memory to the disk, if one is named. */
+	if (in_memory()) {
+		char device[64];
+
+		if (command_line_value("root", device, sizeof(device)))
+			switch_to_disk(device);
+	}
+
 	make_class_groups();			/* /sys/fs/cgroup, lc, batch */
 
 	/* Where the shell looks for programs. Everything is in /bin. */
