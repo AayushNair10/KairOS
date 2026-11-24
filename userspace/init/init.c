@@ -325,6 +325,43 @@ static char *command_line_value(const char *key, char *buf, size_t size)
 }
 
 /*
+ * The boot log on the disk: a line for every boot. It is written out at
+ * once (fsync), so a boot that ends in a power cut still counts. Running
+ * from memory there is no disk, and no log.
+ */
+#define BOOT_LOG	"/var/log/kairos/boots"
+
+static int in_memory(void);
+
+static void record_boot(const struct utsname *kernel)
+{
+	char line[160], buf[512];
+	int fd, len, boots = 0;
+	ssize_t n, i;
+
+	if (in_memory())
+		return;
+	fd = open(BOOT_LOG, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0644);
+	if (fd < 0) {
+		say("can't open %s: %s", BOOT_LOG, strerror(errno));
+		return;
+	}
+	len = snprintf(line, sizeof(line), "kernel %s, %ld CPUs\n",
+		       kernel->release, sysconf(_SC_NPROCESSORS_ONLN));
+	if (write(fd, line, len) != len || fsync(fd) < 0)
+		say("can't write %s: %s", BOOT_LOG, strerror(errno));
+	close(fd);
+
+	fd = open(BOOT_LOG, O_RDONLY | O_CLOEXEC);
+	while (fd >= 0 && (n = read(fd, buf, sizeof(buf))) > 0)
+		for (i = 0; i < n; i++)
+			boots += buf[i] == '\n';
+	if (fd >= 0)
+		close(fd);
+	say("boot %d of this disk (%s)", boots, BOOT_LOG);
+}
+
+/*
  * The first stage: from the initramfs to the disk.
  *
  * The kernel starts init from the initramfs, the archive it unpacked into
@@ -715,6 +752,19 @@ static void shut_down(int how, const char *what)
 	}
 
 	sync();		/* write out what the file systems hold only in memory */
+	/*
+	 * The disk, mounted read-only: ext4 finishes its journal and marks
+	 * itself clean, so the next mount has nothing to replay. (Without
+	 * it, the next boot's mount said "recovery complete".) The kernel's
+	 * power-off doesn't do either: anything not written out by now is
+	 * lost.
+	 */
+	if (!in_memory()) {
+		if (mount(NULL, "/", NULL, MS_REMOUNT | MS_RDONLY, NULL) == 0)
+			say("the disk is written out and read-only");
+		else
+			say("can't make the disk read-only: %s", strerror(errno));
+	}
 	reboot(how);
 
 	say("the kernel refused: %s", strerror(errno));
@@ -990,6 +1040,13 @@ int main(void)
 			switch_to_disk(device);
 	}
 
+	/*
+	 * Files about this boot only, such as the service manager's records
+	 * and the services' logs: in memory, so that none of them outlives
+	 * the boot. (Mounted after the switch: anything mounted on the
+	 * initramfs goes with it.)
+	 */
+	mount_info("tmpfs", "/run");
 	make_class_groups();			/* /sys/fs/cgroup, lc, batch */
 
 	/* Where the shell looks for programs. Everything is in /bin. */
@@ -997,6 +1054,7 @@ int main(void)
 
 	uname(&kernel);
 	say("Kairos on Linux %s", kernel.release);
+	record_boot(&kernel);
 
 	/*
 	 * The last three are what busybox's halt, poweroff and reboot
