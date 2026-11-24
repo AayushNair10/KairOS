@@ -1,0 +1,153 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Aayush Nair <aayushnair204@gmail.com>
+Date: Tue, 24 Nov 2026 14:21:20 -0500
+Subject: [PATCH] mm/oom_kill: Take Kairos batch tasks before latency-critical
+ ones
+
+When memory runs out, the out-of-memory killer takes the task with the
+highest badness: the memory it holds plus its oom_score_adj. Kairos runs
+a latency-critical service next to batch work, and the kernel keeps
+every group's class (CONFIG_CGROUP_KAIROS); the killer should take batch
+work before the service.
+
+Add CONFIG_KAIROS_MEMORY, which lets that class steer memory, and with
+it: a batch task's badness counts as if its oom_score_adj were the
+highest, so any batch task is taken before any latency-critical one. A
+task marked unkillable stays so. The class is read when the badness is
+computed, so a group relabelled latency-critical is spared at once.
+
+"kairos.nomemclass" on the command line turns it off, so that the same
+kernel can be compared with and without it.
+
+Signed-off-by: Aayush Nair <aayushnair204@gmail.com>
+---
+ include/linux/kairos_class.h | 23 +++++++++++++++++++++++
+ init/Kconfig                 | 13 +++++++++++++
+ kernel/cgroup/kairos.c       | 23 +++++++++++++++++++++++
+ mm/oom_kill.c                |  9 +++++++++
+ 4 files changed, 68 insertions(+)
+
+diff --git a/include/linux/kairos_class.h b/include/linux/kairos_class.h
+index f9d16b0a61fe5adf962b2bdec3fce52f49ae114b..b3f2260e9bfbe10247a4493fd8ba555bb490d1c3 100644
+--- a/include/linux/kairos_class.h
++++ b/include/linux/kairos_class.h
+@@ -6,6 +6,9 @@
+ #ifndef _LINUX_KAIROS_CLASS_H
+ #define _LINUX_KAIROS_CLASS_H
+ 
++#include <linux/compiler.h>
++#include <linux/types.h>
++
+ struct task_struct;
+ 
+ /*
+@@ -27,4 +30,24 @@ static inline enum kairos_class kairos_task_class(struct task_struct *p)
+ }
+ #endif
+ 
++/*
++ * Kairos's memory hooks (CONFIG_KAIROS_MEMORY) let the class steer the
++ * out-of-memory killer. They are on unless "kairos.nomemclass" is on the
++ * kernel command line, which allows the same kernel to be compared with
++ * and without them.
++ */
++#ifdef CONFIG_KAIROS_MEMORY
++extern bool kairos_memclass;
++
++static inline bool kairos_memclass_on(void)
++{
++	return READ_ONCE(kairos_memclass);
++}
++#else
++static inline bool kairos_memclass_on(void)
++{
++	return false;
++}
++#endif
++
+ #endif /* _LINUX_KAIROS_CLASS_H */
+diff --git a/init/Kconfig b/init/Kconfig
+index 6527cc19633dd8cb10d71cc03d4a8aca4b177ec5..111f4eaff48723d7b6acf4a4140cf1723ef2d378 100644
+--- a/init/Kconfig
++++ b/init/Kconfig
+@@ -1361,6 +1361,19 @@ config CGROUP_KAIROS
+ 	  For more information, see the kairos section in
+ 	  Documentation/admin-guide/cgroup-v2.rst.
+ 
++config KAIROS_MEMORY
++	bool "Memory that follows Kairos task classes"
++	depends on CGROUP_KAIROS && MEMCG
++	default n
++	help
++	  Lets the class of the kairos controller (CGROUP_KAIROS) steer
++	  memory: when memory runs out, the out-of-memory killer takes a
++	  batch task before any latency-critical one.
++
++	  "kairos.nomemclass" on the kernel command line turns it off.
++
++	  If unsure, say N.
++
+ config CGROUP_DEBUG
+ 	bool "Debug controller"
+ 	default n
+diff --git a/kernel/cgroup/kairos.c b/kernel/cgroup/kairos.c
+index fbc55f5aebfe12fea5151cde39629697005ee860..170610ad3df283c4e929b4f61cb7527e2f15b06a 100644
+--- a/kernel/cgroup/kairos.c
++++ b/kernel/cgroup/kairos.c
+@@ -212,6 +212,29 @@ enum kairos_class kairos_task_class(struct task_struct *p)
+ 	return class;
+ }
+ 
++#ifdef CONFIG_KAIROS_MEMORY
++/*
++ * Kairos's memory hooks: on, unless kairos.nomemclass is on the command
++ * line. Written once, while the command line is read, before anything uses
++ * it. The hooks are on paths the kernel takes only when memory is short,
++ * so a plain flag costs nothing that matters.
++ */
++bool kairos_memclass __read_mostly = true;
++
++/*
++ * A word with a dot is normally taken for a module's setting; a handler
++ * for the exact word is asked first (obsolete_checksetup()).
++ */
++static int __init kairos_nomemclass_setup(char *str)
++{
++	if (*str)
++		return 0;
++	kairos_memclass = false;
++	return 1;
++}
++__setup("kairos.nomemclass", kairos_nomemclass_setup);
++#endif
++
+ __bpf_kfunc_start_defs();
+ 
+ /**
+diff --git a/mm/oom_kill.c b/mm/oom_kill.c
+index 5c6c95c169ee8bbb1e90fab5be1cb39704f0f136..3eb2de174ac2dfa328f49182e2eeef21390ad216 100644
+--- a/mm/oom_kill.c
++++ b/mm/oom_kill.c
+@@ -49,6 +49,7 @@
+ #include <asm/tlb.h>
+ #include "internal.h"
+ #include "slab.h"
++#include <linux/kairos_class.h>
+ 
+ #define CREATE_TRACE_POINTS
+ #include <trace/events/oom.h>
+@@ -232,6 +233,14 @@ long oom_badness(struct task_struct *p, unsigned long totalpages)
+ 		mm_pgtables_bytes(p->mm) / PAGE_SIZE;
+ 	task_unlock(p);
+ 
++	/*
++	 * Kairos: a batch task counts as if its oom_score_adj were the
++	 * highest, so the killer takes any batch task before any
++	 * latency-critical one. A task marked unkillable returned above.
++	 */
++	if (kairos_memclass_on() && kairos_task_class(p) == KAIROS_CLASS_BATCH)
++		adj = OOM_SCORE_ADJ_MAX;
++
+ 	/* Normalize to oom_score_adj units */
+ 	adj *= totalpages / 1000;
+ 	points += adj;
