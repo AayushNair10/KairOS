@@ -98,7 +98,7 @@ for entry in "${layouts[@]}"; do
 	fi
 
 	rm -f "$log"
-	"$REPO_ROOT/scripts/run-qemu.sh" "${opts[@]}" --log "$log" --timeout 120 \
+	"$REPO_ROOT/scripts/run-qemu.sh" "${opts[@]}" --throwaway --log "$log" --timeout 120 \
 		kairos.test kairos.layout >/dev/null || true
 
 	order=$(sed -n 's/^scx_kairos: split order //p' "$log" | tr -d '\r' | head -n 1)

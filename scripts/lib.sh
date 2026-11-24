@@ -33,6 +33,8 @@ CONFIG_DIR=$REPO_ROOT/kernel/config
 KAIROS_BUILD=${KAIROS_BUILD:-$HOME/kairos-build}
 KERNEL_IMAGE=$KAIROS_BUILD/arch/arm64/boot/Image
 INITRAMFS=$KAIROS_BUILD/initramfs.cpio
+# The disk: an ext4 image with the same files, built by scripts/disk-build.sh.
+DISK=$KAIROS_BUILD/disk.img
 # Kairos Scheduler's loader, built by scripts/scheduler-build.sh.
 SCHEDULER=$KAIROS_BUILD/scheduler/src/scx_kairos
 

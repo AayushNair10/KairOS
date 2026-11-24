@@ -84,7 +84,9 @@
 
 smp=4
 kernel=()
-disk=()
+# The disk (if disk-build.sh made one), as a throwaway copy: every boot
+# test starts from a fresh disk, and the disk itself stays as it is.
+disk=(--throwaway)
 nodisk=0
 words=()
 while [ $# -gt 0 ]; do
