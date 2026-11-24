@@ -1,0 +1,23 @@
+#!/bin/sh
+# Kairos's attach program. The kernel runs it once its setup is done and
+# before it starts init, and waits for it to end (CONFIG_KAIROS_BOOT_SCHEDULER,
+# init/kairos_scheduler.c in Kairos's kernel tree).
+#
+# It loads Kairos Scheduler and pins it in the BPF file system, then ends;
+# the pin keeps the scheduler running. Init finds it there and starts a
+# loader that adopts it (--adopt), with the same options as init's own.
+#
+# The kernel starts it with no open files and nothing mounted but the
+# initramfs. So it writes to the kernel log (/dev/kmsg, an entry in the
+# initramfs), and mounts /sys, where the loader reads the kernel's types
+# and the CPU layout, and the BPF file system for the pin. Init keeps both
+# mounts: a second one would hide the pin.
+#
+# A loader that hangs would hang the boot: timeout ends it after 30 s, and
+# init then starts the scheduler itself. Any status but 0 means the same.
+
+exec >/dev/kmsg 2>&1
+mount -t sysfs sysfs /sys
+mount -t bpf bpf /sys/fs/bpf
+exec timeout 30 /bin/scx_kairos --main-config --class=kernel \
+	--split-order=layout --quiet --pin-and-exit /sys/fs/bpf/kairos

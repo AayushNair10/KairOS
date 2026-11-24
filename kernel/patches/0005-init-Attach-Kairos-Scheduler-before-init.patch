@@ -1,0 +1,165 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Aayush Nair <aayushnair204@gmail.com>
+Date: Tue, 24 Nov 2026 01:36:34 -0500
+Subject: [PATCH] init: Attach Kairos Scheduler before init
+
+Kairos Scheduler is a BPF scheduler on sched_ext, and a program in user
+space has to load it. Started by init, it leaves init itself, and
+whatever runs before the scheduler is attached, to the default
+scheduler.
+
+Run an attach program from the initramfs as a user-mode helper at the
+last initcall level, before the kernel starts init, and wait for it to
+end. Kairos's attach program loads the scheduler and pins it in the BPF
+file system, where Kairos's init finds it and watches it. The program
+is CONFIG_KAIROS_SCHEDULER_ATTACH (default /bin/kairos-attach). If it
+fails, say so and boot on: init then starts the scheduler itself.
+
+"kairos.noscheduler" on the command line skips the attach, as it tells
+Kairos's init to leave the scheduler off. A word with a dot would be
+dropped as an unclaimed module parameter, but an early handler for the
+exact word is asked first.
+
+Signed-off-by: Aayush Nair <aayushnair204@gmail.com>
+---
+ init/Kconfig            | 25 +++++++++++++
+ init/Makefile           |  1 +
+ init/kairos_scheduler.c | 81 +++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 107 insertions(+)
+ create mode 100644 init/kairos_scheduler.c
+
+diff --git a/init/Kconfig b/init/Kconfig
+index 069747430e13efb9e090079890ed2c6336d9ca88..6527cc19633dd8cb10d71cc03d4a8aca4b177ec5 100644
+--- a/init/Kconfig
++++ b/init/Kconfig
+@@ -1585,6 +1585,31 @@ config INITRAMFS_TEST
+ 	help
+ 	  Build KUnit tests for initramfs. See Documentation/dev-tools/kunit
+ 
++config KAIROS_BOOT_SCHEDULER
++	bool "Attach Kairos Scheduler before init"
++	depends on BLK_DEV_INITRD && SCHED_CLASS_EXT
++	default n
++	help
++	  Once its setup is done and before it starts init, the kernel runs
++	  KAIROS_SCHEDULER_ATTACH from the initramfs and waits for it to end.
++	  Kairos's attach program loads Kairos Scheduler, a BPF scheduler on
++	  sched_ext, and pins it in the BPF file system, so that init and
++	  every program after it run under it; Kairos's init then watches the
++	  pinned scheduler.
++
++	  "kairos.noscheduler" on the kernel command line skips this. If the
++	  program fails, the kernel says so and boots on.
++
++	  If unsure, say N.
++
++config KAIROS_SCHEDULER_ATTACH
++	string "Program that attaches Kairos Scheduler"
++	depends on KAIROS_BOOT_SCHEDULER
++	default "/bin/kairos-attach"
++	help
++	  The program, in the initramfs, that the kernel runs before init to
++	  attach Kairos Scheduler.
++
+ choice
+ 	prompt "Compiler optimization level"
+ 	default CC_OPTIMIZE_FOR_PERFORMANCE
+diff --git a/init/Makefile b/init/Makefile
+index d6f75d8907e09877c6e413986c75f0ac92a89f89..b3d12dd8641ebb9800be9f5732bc86f112928f70 100644
+--- a/init/Makefile
++++ b/init/Makefile
+@@ -13,6 +13,7 @@ obj-$(CONFIG_BLK_DEV_INITRD)   += initramfs.o
+ endif
+ obj-$(CONFIG_GENERIC_CALIBRATE_DELAY) += calibrate.o
+ obj-$(CONFIG_INITRAMFS_TEST)   += initramfs_test.o
++obj-$(CONFIG_KAIROS_BOOT_SCHEDULER) += kairos_scheduler.o
+ 
+ obj-y                          += init_task.o
+ 
+diff --git a/init/kairos_scheduler.c b/init/kairos_scheduler.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..63da65abe34489f583d81b52364b067ab57cd7e6
+--- /dev/null
++++ b/init/kairos_scheduler.c
+@@ -0,0 +1,81 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Attach Kairos Scheduler before init.
++ *
++ * Kairos Scheduler is a BPF scheduler on sched_ext, and a program in user
++ * space has to load it. Started by init, it would leave init, and whatever
++ * runs before the scheduler is attached, to the default scheduler. So once
++ * the kernel's setup is done, at the last initcall level and before init
++ * runs, this runs the attach program from the initramfs as a user-mode
++ * helper and waits for it to end. The program attaches the scheduler and
++ * pins it in the BPF file system, where Kairos's init finds it.
++ *
++ * The helper starts with no open files and nothing mounted but the
++ * initramfs: the program mounts what it needs, and its output goes to the
++ * kernel log. If it fails, the kernel says so and boots on, and init starts
++ * the scheduler itself.
++ *
++ * "kairos.noscheduler" on the command line skips this, as it tells init to
++ * leave the scheduler off.
++ */
++#define pr_fmt(fmt) "kairos: " fmt
++
++#include <linux/init.h>
++#include <linux/printk.h>
++#include <linux/umh.h>
++
++static bool kairos_noscheduler __initdata;
++
++/*
++ * The program's arguments and environment, as init/main.c keeps init's.
++ * The helper needs them only until the program has ended, which is waited
++ * for, so they go with the rest of the setup data after boot.
++ */
++static char *attach_argv[] __initdata = { CONFIG_KAIROS_SCHEDULER_ATTACH, NULL };
++static char *attach_envp[] __initdata = { "HOME=/", "PATH=/bin:/sbin", NULL };
++
++/*
++ * A word with a dot is normally taken for a module's setting, and dropped
++ * if no module claims it. A handler for the exact word is asked first
++ * (obsolete_checksetup()). Init still sees the word in /proc/cmdline.
++ */
++static int __init kairos_noscheduler_setup(char *str)
++{
++	if (*str)
++		return 0;	/* "kairos.noschedulerX", not ours */
++	kairos_noscheduler = true;
++	return 1;
++}
++__setup("kairos.noscheduler", kairos_noscheduler_setup);
++
++static int __init kairos_attach_scheduler(void)
++{
++	const char *path = attach_argv[0];
++	int ret;
++
++	if (kairos_noscheduler) {
++		pr_info("kairos.noscheduler: not attaching Kairos Scheduler\n");
++		return 0;
++	}
++
++	/*
++	 * UMH_WAIT_PROC: wait until the program has ended. The helper
++	 * itself waits for the initramfs to be unpacked before it runs it.
++	 * The status comes back as wait() gives it: the exit code in the
++	 * second byte, or the signal that killed it in the low bits.
++	 */
++	ret = call_usermodehelper(path, attach_argv, attach_envp, UMH_WAIT_PROC);
++	if (ret < 0)
++		pr_warn("can't run %s (error %d); init will start Kairos Scheduler\n",
++			path, ret);
++	else if (ret & 0x7f)
++		pr_warn("%s was killed by signal %d; init will start Kairos Scheduler\n",
++			path, ret & 0x7f);
++	else if (ret)
++		pr_warn("%s ended with status %d; init will start Kairos Scheduler\n",
++			path, (ret >> 8) & 0xff);
++	else
++		pr_info("Kairos Scheduler attached before init\n");
++	return 0;
++}
++late_initcall_sync(kairos_attach_scheduler);

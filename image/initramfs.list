@@ -5,6 +5,7 @@
 #   dir   <name> <mode> <user id> <group id>
 #   file  <name> <where the file comes from> <mode> <user id> <group id>
 #   slink <name> <what the link points at> <mode> <user id> <group id>
+#   nod   <name> <mode> <user id> <group id> <c or b> <major> <minor>
 #
 # ${BUSYBOX}, ${INIT}, ${SCHEDULER}, ${SERVICE}, ${PROBE} and ${KAIROS_REPO}
 # are filled in by scripts/image-build.sh.
@@ -28,6 +29,13 @@ file /init ${INIT} 0755 0 0
 # Kairos Scheduler's loader: the program that hands the scheduling policy to
 # the kernel. Built by scripts/scheduler-build.sh from scheduler/scheduler/.
 file /bin/scx_kairos ${SCHEDULER} 0755 0 0
+
+# What the kernel runs before init to attach the scheduler
+# (CONFIG_KAIROS_SCHEDULER_ATTACH). It has no console, so it writes to the
+# kernel log through /dev/kmsg (character device 1, 11). Init later mounts
+# the kernel's own /dev over these entries.
+file /bin/kairos-attach ${KAIROS_REPO}/image/kairos-attach 0755 0 0
+nod /dev/kmsg 0600 0 0 c 1 11
 
 # The service manager, compiled from userspace/service/service.c; init
 # starts it. The services it runs are described in /etc/kairos/services,

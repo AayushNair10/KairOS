@@ -1,0 +1,29 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Aayush Nair <aayushnair204@gmail.com>
+Date: Tue, 24 Nov 2026 01:36:35 -0500
+Subject: [PATCH] Documentation: kernel-parameters: Describe kairos.noscheduler
+
+The word keeps the kernel from attaching Kairos Scheduler before init
+(CONFIG_KAIROS_BOOT_SCHEDULER), and Kairos's init reads it too.
+
+Signed-off-by: Aayush Nair <aayushnair204@gmail.com>
+---
+ Documentation/admin-guide/kernel-parameters.txt | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/Documentation/admin-guide/kernel-parameters.txt b/Documentation/admin-guide/kernel-parameters.txt
+index 03a550630644f43d36b69ae79e6d66f42d75426d..9c163139a158fdb5274b164aa6bfa053d8d85d43 100644
+--- a/Documentation/admin-guide/kernel-parameters.txt
++++ b/Documentation/admin-guide/kernel-parameters.txt
+@@ -2900,6 +2900,11 @@ Kernel parameters
+ 	js=		[HW,JOY] Analog joystick
+ 			See Documentation/input/joydev/joystick.rst.
+ 
++	kairos.noscheduler
++			[KNL] Don't attach Kairos Scheduler before init
++			(CONFIG_KAIROS_BOOT_SCHEDULER). Kairos's init reads
++			the same word and leaves the scheduler off too.
++
+ 	kasan_multi_shot
+ 			[KNL] Enforce KASAN (Kernel Address Sanitizer) to print
+ 			report on every invalid memory access. Without this
