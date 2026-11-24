@@ -189,7 +189,13 @@ kernel/patches/  our kernel changes as a patch series (the source of truth):
                  the scheduler attached before init (init/
                  kairos_scheduler.c: runs /bin/kairos-attach as a
                  user-mode helper at the last initcall level) and its
-                 boot word kairos.noscheduler
+                 boot word kairos.noscheduler; 0007-0010 memory that
+                 follows the class (CONFIG_KAIROS_MEMORY, off with
+                 kairos.nomemclass): the OOM killer takes batch first
+                 (mm/oom_kill.c), reclaim passes over LC groups like
+                 memory.low (mm/vmscan.c, kairos_cgroup_class()), LC
+                 tasks get the realtime allocation reserve
+                 (mm/page_alloc.c), and the documentation
 scheduler/       Kairos Scheduler, a git submodule at a pinned commit
                  (its code is in scheduler/scheduler/)
 kernel/config/   the kernel config: base (a starting point that ships with
@@ -211,7 +217,9 @@ scripts/         kernel-fetch.sh, kernel-export.sh, kernel-check.sh,
                  disk-build.sh (the ext4 disk image: the initramfs's
                  files plus /var/log/kairos, owned by root via debugfs),
                  run-qemu.sh, boot-test.sh, layout-test.sh, disk-test.sh,
-                 lib.sh
+                 memory-test.sh (192 MB: batch streams a file of holes,
+                 an LC program re-reads 16 MB every 2 s; judged by the LC
+                 group's own refaults), lib.sh
 docs/            DESIGN_LOG.md, notes
 userspace/       init/init.c: Kairos's init, process 1, one statically
                  linked C program, in two stages. From the initramfs with
@@ -225,6 +233,8 @@ userspace/       init/init.c: Kairos's init, process 1, one statically
                  --adopt /sys/fs/bpf/kairos if the kernel attached it,
                  else a load (--class=kernel, --split-order=layout,
                  --pin); restarts it by a rule, then the service manager.
+                 It switches on the cpu and memory controllers for lc
+                 and batch, and memory below them too.
                  On the disk it also mounts /run as tmpfs, appends to
                  /var/log/kairos/boots (fsync), and at power-off syncs and
                  remounts / read-only.
@@ -252,6 +262,12 @@ userspace/       init/init.c: Kairos's init, process 1, one statically
   `scripts/layout-test.sh [LAYOUT...]` boots four CPU layouts and checks
   the loader's CPU order and where the probe ran (~8 min).
 - The image has no `/tmp`: in hand tests, write files to `/`.
+- Memory: `kairos.nomemclass` turns the memory hooks off, so one kernel
+  can be compared with and without them; compare in interleaved pairs
+  (outcomes are bimodal: an LC file either stays or is pushed out again
+  and again). Pages are charged to the group that first used them:
+  busybox's are the root's, which nothing protects, so judge LC by its
+  own group's `memory.stat`, not total disk reads.
 - The disk: `run-qemu.sh` attaches `~/kairos-build/disk.img` (or `--disk
   FILE`) and keeps the writes; `--throwaway` discards them (QEMU's
   snapshot mode), `--no-disk` boots from memory only. `boot-test.sh` and

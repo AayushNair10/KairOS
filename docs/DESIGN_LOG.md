@@ -22,7 +22,7 @@ and the scheduling policy as a BPF program on sched_ext.
 | 7 | LC and batch pools that follow CPU topology (done: the loader orders the CPUs by layout; whole cores) | sched domains, NUMA, CPU capacity | config only (a scheduler change on its `kairos-os` branch) |
 | 8 | Scheduler attached before PID 1 (done: the kernel runs an attach program before init; the scheduler held by a pin) | initcalls, kernel threads, user-mode helpers, BPF object lifetimes | patch (0005, 0006) |
 | 9 | A root file system on a virtio disk (done: a two-stage boot from the initramfs to ext4) | VFS, block layer, virtio drivers, page cache, journaling | config only |
-| 10 | Memory reclaim that knows LC from batch | page allocator, reclaim, memory cgroups | patch |
+| 10 | Memory reclaim that knows LC from batch (done: reclaim, the allocation reserve and the OOM killer follow the class) | page allocator, reclaim, memory cgroups | patch (0007 to 0010) |
 | 11 | Block I/O that knows LC from batch | I/O schedulers, I/O priority | patch |
 | 12 | Measurement at real speed | needs QEMU on the Mac (hvf) or a second VM; ask first | none |
 | 13 | Native scheduling class: decide with measurements | the scheduler core | maybe |
@@ -1842,3 +1842,194 @@ Open questions / next:
 - Push: this repository's component 9 commits (no scheduler changes).
 - Next on the roadmap: component 10, memory reclaim that knows LC from
   batch.
+
+## 10. Memory reclaim that knows LC from batch — 2026-11-24
+
+Options:
+- A: the memory controller with fixed settings: the service manager gives
+  LC groups protection (memory.low or min) and batch a ceiling
+  (memory.high), and batch processes a high out-of-memory score. Config
+  only; reclaim stays blind to the class and obeys numbers.
+- B: reclaim that reads the class (kernel patch): reclaim takes from batch
+  groups first and from LC groups only when batch has nothing left, and
+  the killer prefers batch, both from the class component 6 keeps.
+- C: a pressure-driven controller in user space: watch LC's memory
+  pressure and squeeze batch (lower its ceiling, ask the kernel to
+  reclaim it, kill it before the kernel runs out). Config only; reacts
+  after the stall.
+- D: partition memory by node (cpusets): LC gets whole memory nodes,
+  batch the rest. Config only; needs several nodes; no lending of idle
+  LC memory.
+
+My pick and reasoning:
+- "A prevents starvation. However, I think B is right because LC should
+  be given full importance when there is memory shortage. In research,
+  starvation is supposedly leading to better results. It's not C since I
+  don't want user space. D also sounds somewhat reasonable. What do you
+  recommend?"
+- After the verdict: "yes, write the plan for B".
+
+Verdict: B, built narrowly: three small hooks that feed the class into
+machinery the kernel already has, not a rewritten reclaim loop.
+- Reclaim: an LC group counts as below its memory.low, whose existing
+  two-pass handling is exactly "batch first, LC only when nothing else
+  is left". Allocation: LC tasks get the reserve allowance realtime tasks
+  already have (user space can't grant it: making LC realtime would take
+  it away from Kairos Scheduler). The killer: batch first.
+- One source of truth: component 6 put the class in the kernel so that
+  memory and I/O could read it; a relabel moves CPU and memory treatment
+  together. Honest caveat: most of the reclaim order is possible from
+  user space (A with LC's memory.low at "max"); the patch is justified
+  by following the class and by the allocation reserve.
+- Grading: "A prevents starvation" is wrong (A's trait is fixed sizes;
+  heavy protection starves batch as much). "Full importance" is the right
+  direction, but bounded: soft protection gives way when batch has
+  nothing left. "Starvation gives better results" is partly wrong: the
+  scheduler's evaluated configuration keeps a starvation guard
+  (--max-wait-ms), and starving batch of memory makes it re-read its
+  files, which floods the disk (component 11). "No user space" is a
+  preference, not a reason; C's real costs are reacting after the stall
+  and a tuned loop. D needs several memory nodes and wastes LC's idle
+  memory (component 7's cpuset option lost for the same reason).
+
+Where the others fit (from memory):
+- A: general-purpose systems: systemd's per-service memory protection and
+  ceilings; Kubernetes' quality-of-service classes (protection and
+  out-of-memory scores per class).
+- C: Meta's oomd and senpai, systemd-oomd on Fedora and Ubuntu.
+- D: databases and HPC jobs bound to a node's memory on large servers.
+
+Linux concepts learned:
+- Watermarks (min, low, high per zone): below low, kswapd reclaims in the
+  background; below min, the allocating task reclaims itself
+  (`__alloc_pages_slowpath()` -> `__alloc_pages_direct_reclaim()`, counted
+  as a memory stall by PSI and in /proc/vmstat's `allocstall_*`).
+  `gfp_to_alloc_flags()`: a realtime or deadline task in task context gets
+  ALLOC_MIN_RESERVE, a min watermark lowered by half.
+- Page lists: active and inactive, file and anonymous; reclaim takes from
+  the cold end, drops clean file pages, writes dirty ones back first;
+  without swap, program (anonymous) memory can't be reclaimed. Workingset
+  detection counts pages read back after eviction
+  (`workingset_refault_file` in memory.stat).
+- The memory controller (`mm/memcontrol.c`): pages charged to the group
+  of the task that first used them; memory.min/low/high/max; effective
+  protection (`mem_cgroup_calculate_protection()`, hierarchical: a child
+  can't be protected beyond its parent); `mem_cgroup_unprotected()` (the
+  root and the reclaim's own target are never protected).
+  `shrink_node_memcgs()` skips groups under min always and under low
+  unless `memcg_low_reclaim`; `do_try_to_free_pages()` retries with it when
+  a pass reclaimed nothing but skipped protected groups; kswapd never
+  breaches low. Breaches count as "low" in memory.events. A group can only
+  pass a controller on to its children while it holds no processes.
+- The out-of-memory killer (`mm/oom_kill.c`): `oom_badness()` = resident
+  pages + swap + page tables + oom_score_adj x totalpages / 1000; an
+  adjustment of -1000 is never killed; /proc/PID/oom_score shows
+  (1000 + badness x 1000 / totalpages) x 2 / 3. Its report names the
+  victim's group (`task_memcg=`).
+- PSI (`kernel/sched/psi.c`): memory.pressure, "some" and "full", stall
+  totals in microseconds, hierarchical.
+- cgroup v2: `cgrp->subsys[]` holds each controller's state, an RCU
+  pointer; an implicit controller (kairos) has state in every group.
+
+What changed: the class the kernel keeps for every group (component 6)
+now steers memory, with CONFIG_KAIROS_MEMORY (off at boot with
+`kairos.nomemclass`). Reclaim passes over LC groups as if they were below
+their memory.low, so an LC group's memory is taken only when batch has
+none left to give; an LC user task may dip into the allocator's reserve
+as far as a realtime task rather than stop to reclaim; the out-of-memory
+killer takes any batch task before any LC one. All three read the class
+when they decide, so a relabel applies at once. Init switches the memory
+controller on for the class groups and below them, so every service has
+its own memory group.
+
+What each step did, in order:
+1. The checks first, failing: memory, oomscore in the boot test, and
+   `memory-test.sh` (`4f04087`).
+2. The memory controller and pressure tracking; init switches the
+   controller on; a baseline (`2e57d75`).
+3. Patch 0007: the switch, the boot word and the killer (`9416b0c`).
+4. Patch 0008: reclaim and a group's class; the memory test judged by the
+   LC group's own refaults at 192 MB (`e7f3bfc`).
+5. Patches 0009 (the allocation reserve) and 0010 (documentation); the
+   memory test's LC program also takes 8 MB each pass (`026f78b`).
+6. The suite, the lock-checking build and the 10-pair comparison (no
+   code change).
+
+Found on the way:
+- Without the memory controller, batch streaming a big file pushed an
+  idle LC program's 16 MB out of memory (38040 KiB read back in 30 s);
+  with it but no hooks, the outcome is all or nothing: the file stays,
+  or is read back about 13 times in 15 passes (3 of 9 runs at 256 MB, 4 of
+  4 at 192 MB, 6 of 10 in the comparison).
+- Counting every disk read also counted programs' pages charged to the
+  root group (busybox), which nothing protects: 3696 to 7420 KiB at 192
+  MB with the hooks on although the LC file stayed. The LC group's own
+  refaults are the right measure.
+- The allocation reserve moves stalls elsewhere: allocations that stopped
+  to reclaim, median 3805 -> 6705 over 5 pairs (7097 -> 9300 over 10, not
+  significant). Batch's stall time fell instead of rising (not
+  significant over 10 pairs; not explained).
+- A config edit was applied twice and two kernel builds overlapped in one
+  folder after an interrupted run; the duplicate was removed and the
+  build rerun alone.
+- The layout test's probe check failed once in 4 runs (31 of 100 samples
+  on CPU 2 while the LC pool was briefly 3); 3 reruns passed.
+
+How it's tested:
+- `./scripts/boot-test.sh`: 27 lines, all ok, at 1, 2, 4 and 8 CPUs, on 2
+  clusters x 2 cores x 2 threads, with kairos.noscheduler, --no-disk and
+  kairos.nomemclass, and on the lock-checking build (no lockdep or RCU
+  reports). New checks, seen failing first: memory (lc and batch: cpu
+  memory), oomscore (crunch as batch 1332, the probe 666; relabelled LC
+  667; with kairos.nomemclass 667 and 666).
+- `./scripts/memory-test.sh` (192 MB): the LC group's pages read back
+  under a tenth of its file. 10 interleaved pairs, hooks on vs
+  kairos.nomemclass (`~/kairos-data/kairos-os/2026-11-24-ab-memory`): LC
+  memory stall median 4.1 ms vs 153.7 ms, lower in 10 of 10 (Wilcoxon,
+  Holm-adjusted p = 0.0098); LC's file taken in 0 of 10 runs vs 6 of 10
+  (exact McNemar p = 0.031); LC pages read back 68 vs 26535 (p = 0.16:
+  the off runs that kept the file had 0); batch stall 3.0 vs 3.9 s (p =
+  0.15); allocation stalls 9300 vs 7097 (p = 0.43).
+- Out of memory by hand (256 MB; an LC program holding 120 MB, a batch
+  command asking 200 MB): the batch command killed; with kairos.nomemclass
+  the LC program; the same on the lock-checking build.
+- `./scripts/disk-test.sh` 6 of 6; `./scripts/layout-test.sh` 16 of 16 on
+  reruns; `./scripts/kernel-check.sh`: 10 patches, all ok.
+
+Interview questions:
+1. When memory runs short, what does the kernel do, in order, and where
+   can a latency-critical task get stuck? Which of your three hooks
+   addresses which point?
+2. Your reclaim hook makes LC groups count as protected instead of
+   rewriting the reclaim loop. How does soft protection work, when is it
+   breached, and why is that a sensible bound against starving batch?
+3. Why did you judge the memory test by the LC group's own refaults
+   rather than total disk reads, and why a paired yes/no test for "the
+   file was taken" rather than comparing page counts?
+
+Resume line: "Added class-aware memory management to Kairos's Linux
+kernel (a 4-patch mm series): reclaim treats latency-critical cgroups as
+protected, latency-critical tasks get the realtime allocation reserve,
+and the OOM killer takes batch first. In a 10-pair interleaved QEMU A/B,
+the LC service's memory-stall time fell from 154 ms to 4 ms (median, p =
+0.01) and its working set was never evicted (0 of 10 runs vs 6 of 10)."
+
+Open questions / next:
+- Pages are charged to the group that first used them: busybox's are
+  the root's, unprotected, and a file first read by batch stays batch's
+  when LC uses it.
+- The root group (init, the shell) is never protected.
+- A relabelled group is protected at once by construction (the class is
+  read during reclaim); measured for the killer, not for reclaim.
+- No swap: program memory can't be reclaimed; with swap, protection would
+  cover it too.
+- The generational page lists (CONFIG_LRU_GEN) have their own walk, not
+  covered; off in our config.
+- Batch can still be starved of memory, and re-reading what it lost is
+  disk traffic: component 11.
+- The reserve allowance shrinks the emergency margin for every program
+  outside batch.
+- The layout test's probe threshold (90 of 100 on the first two CPUs)
+  failed once while the LC pool was briefly 3.
+- Push: this repository's component 10 commits.
+- Next on the roadmap: component 11, block I/O that knows LC from batch.

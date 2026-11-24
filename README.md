@@ -26,7 +26,9 @@ latency-critical (LC) or batch. Four kernel patches make the class
 something the kernel keeps: every control group has one, inherited by the
 groups below it, and the scheduler asks the kernel for each task's class.
 The CPUs kept for LC work follow the machine's layout: the fastest first,
-close together, in whole cores. The shell and tools are busybox's. The roadmap, and the reasoning behind each decision, are in
+close together, in whole cores. When memory runs short, the kernel takes it
+from batch work first, and kills batch work first if it runs out. The shell
+and tools are busybox's. The roadmap, and the reasoning behind each decision, are in
 [`docs/DESIGN_LOG.md`](docs/DESIGN_LOG.md).
 
 ## Design
@@ -168,6 +170,30 @@ For example, booted with CPUs 4 to 7 twice as fast as 0 to 3, the order
 is `4 5 6 7 0 1 2 3` and the probe runs on the fast CPUs. On a machine where all
 CPUs are alike and there are no threads, it is just `0 1 2 3 ...`.
 
+### When memory runs short
+
+The kernel charges every page of memory to the control group of the
+program that first used it. When memory runs short it reclaims: it drops
+cached file contents that can be read again from the disk (there is no
+swap, so programs' own memory stays). Kairos's kernel lets the class steer
+that (four patches):
+
+- reclaim passes over LC groups while batch groups still have memory to
+  give, as if LC were under its protected amount (`memory.low`); an idle
+  LC service keeps its files in memory instead of reading them back from
+  the disk on its next request;
+- an LC program that needs memory while memory is very short may dip into
+  the reserve, as realtime programs may, instead of stopping to reclaim
+  it first;
+- if memory runs out, the kernel kills a batch program before any LC one.
+
+`kairos.nomemclass` on the kernel's command line turns all three off. On a
+192 MB machine, with batch streaming a big file through memory and an LC
+program re-reading its 16 MB every 2 s (`scripts/memory-test.sh`, 10
+interleaved pairs), the LC program's time stalled on memory had a median
+of 4 ms with the hooks and 154 ms without, and its file was pushed out in
+none of the 10 runs with them and 6 of 10 without.
+
 ### When something fails
 
 | What happens | Who notices | What follows |
@@ -180,6 +206,7 @@ CPUs are alike and there are no threads, it is just `0 1 2 3 ...`.
 | The scheduler itself is the problem | you | Boot with `kairos.noscheduler`: the kernel and init leave it off, and EEVDF runs everything. |
 | The disk is missing, or isn't ext4 | init, before it changes anything | It says so and runs from the initramfs, in memory. |
 | The power goes off | ext4, at the next mount | It replays its journal ("recovery complete"): everything written out before the cut is there, consistent. |
+| Memory runs out | the kernel | It kills a batch program before any LC one. |
 | The kernel keeps no classes (one without our patches) | init: there is no `kairos.class` | It says so and starts the scheduler with the older rule: batch is anything below the group `batch`. |
 
 ## Layout
@@ -216,6 +243,7 @@ git submodule update --init  # once: Kairos Scheduler at the pinned commit
 ./scripts/boot-test.sh       # boot unattended and check what the console says
 ./scripts/layout-test.sh     # boot several CPU layouts; check where LC work runs
 ./scripts/disk-test.sh       # boot one disk four times, with a power cut
+./scripts/memory-test.sh     # memory pressure: does LC keep its memory?
 ./scripts/run-qemu.sh        # boot to a shell; "poweroff" leaves
 ```
 
@@ -271,8 +299,10 @@ parent of everything else. It:
   anything is wrong before the switch, it stays in memory;
 - mounts the file systems through which the kernel shows its own
   information, an in-memory `/run` for files about this boot only, and
-  the control groups, with the groups `lc` and `batch`, and writes `batch`
-  into the batch group's class;
+  the control groups, with the groups `lc` and `batch`, writes `batch`
+  into the batch group's class, and switches the CPU and memory
+  controllers on for them (the memory controller below them too, so
+  every service has its memory counted on its own);
 - adds a line to the boot log on the disk (`/var/log/kairos/boots`),
   written out at once;
 - keeps the file systems mounted before it started: the attach program's
@@ -355,6 +385,10 @@ Our patches so far:
 | 0004 | `bpf_kairos_task_class()`, a task's class for the BPF scheduler; `kairos_task_class()` for kernel code |
 | 0005 | before init, the kernel runs `/bin/kairos-attach` from the first file system and waits for it; `kairos.noscheduler` skips it |
 | 0006 | `kairos.noscheduler` in the kernel's list of boot parameters |
+| 0007 | the out-of-memory killer takes batch tasks before LC ones; the `CONFIG_KAIROS_MEMORY` switch and `kairos.nomemclass` |
+| 0008 | reclaim passes over LC groups while other groups have memory to give; `kairos_cgroup_class()`, a group's class |
+| 0009 | LC tasks may dip into the allocator's reserves as realtime tasks may |
+| 0010 | the memory hooks in the cgroup document, `kairos.nomemclass` in the boot parameters |
 
 ## The kernel config
 
