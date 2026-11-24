@@ -1,0 +1,112 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Aayush Nair <aayushnair204@gmail.com>
+Date: Tue, 24 Nov 2026 17:06:12 -0500
+Subject: [PATCH] mm/page_alloc: Let Kairos latency-critical tasks use the
+ reserves as realtime tasks do
+
+An allocation that misses the free lists takes the slow path, where a
+task may have to reclaim memory itself before it gets any: direct
+reclaim, a stall of milliseconds. A realtime or deadline task may first
+dip into the reserves below the min watermark (ALLOC_MIN_RESERVE), so
+that a short burst doesn't stall it.
+
+Kairos's latency-critical service is scheduled by a sched_ext policy,
+not as a realtime task, but it has the same need. With
+CONFIG_KAIROS_MEMORY, give a latency-critical user task the realtime
+allowance. Kernel threads sit in the root group, which is
+latency-critical too, and keep the usual one. The class is only read on
+the slow path, when memory is already short.
+
+Signed-off-by: Aayush Nair <aayushnair204@gmail.com>
+---
+ include/linux/kairos_class.h |  6 +++---
+ init/Kconfig                 |  7 ++++---
+ mm/page_alloc.c              | 19 +++++++++++++++++--
+ 3 files changed, 24 insertions(+), 8 deletions(-)
+
+diff --git a/include/linux/kairos_class.h b/include/linux/kairos_class.h
+index 0a4c247acf8a58f7a0913443a7ebd0950ad8146c..0cc28340ee78833a71dfa9afa6bd830a30994abd 100644
+--- a/include/linux/kairos_class.h
++++ b/include/linux/kairos_class.h
+@@ -39,9 +39,9 @@ static inline enum kairos_class kairos_cgroup_class(struct cgroup *cgrp)
+ 
+ /*
+  * Kairos's memory hooks (CONFIG_KAIROS_MEMORY) let the class steer the
+- * out-of-memory killer and reclaim. They are on unless "kairos.nomemclass" is on the
+- * kernel command line, which allows the same kernel to be compared with
+- * and without them.
++ * out-of-memory killer, reclaim and the allocator's reserves. They are on
++ * unless "kairos.nomemclass" is on the kernel command line, which allows
++ * the same kernel to be compared with and without them.
+  */
+ #ifdef CONFIG_KAIROS_MEMORY
+ extern bool kairos_memclass;
+diff --git a/init/Kconfig b/init/Kconfig
+index e09366cdd4e877d952e7114fb649c989b394c1fa..d1dd2ab8f2e8dff69bc98712b7468e59fc88c2c6 100644
+--- a/init/Kconfig
++++ b/init/Kconfig
+@@ -1369,9 +1369,10 @@ config KAIROS_MEMORY
+ 	  Lets the class of the kairos controller (CGROUP_KAIROS) steer
+ 	  memory. Reclaim passes over latency-critical groups as if they
+ 	  were below their memory.low: their memory is taken only when no
+-	  other group has any to give. When memory runs out, the
+-	  out-of-memory killer takes a batch task before any
+-	  latency-critical one.
++	  other group has any to give. A latency-critical task may dip
++	  into the allocator's reserves as far as a realtime task, rather
++	  than stop to reclaim. When memory runs out, the out-of-memory
++	  killer takes a batch task before any latency-critical one.
+ 
+ 	  "kairos.nomemclass" on the kernel command line turns it off.
+ 
+diff --git a/mm/page_alloc.c b/mm/page_alloc.c
+index 2d4b6f1a554ed21e0f169cd85b5e1ef8190bdf02..82da2d752f9c39eb56627606bce0e0f19ca3e1e3 100644
+--- a/mm/page_alloc.c
++++ b/mm/page_alloc.c
+@@ -56,6 +56,7 @@
+ #include <linux/pgalloc_tag.h>
+ #include <asm/div64.h>
+ #include "internal.h"
++#include <linux/kairos_class.h>
+ #include "shuffle.h"
+ #include "page_reporting.h"
+ 
+@@ -4492,6 +4493,18 @@ static void wake_all_kswapds(unsigned int order, gfp_t gfp_mask,
+ 	}
+ }
+ 
++/*
++ * Kairos: a latency-critical user task may dip into the reserves as far
++ * as a realtime one, rather than stop to reclaim (CONFIG_KAIROS_MEMORY).
++ * Not kernel threads: they sit in the root group, which is
++ * latency-critical too.
++ */
++static inline bool kairos_lc_task(void)
++{
++	return kairos_memclass_on() && !(current->flags & PF_KTHREAD) &&
++	       kairos_task_class(current) == KAIROS_CLASS_LC;
++}
++
+ static inline unsigned int
+ gfp_to_alloc_flags(gfp_t gfp_mask, unsigned int order)
+ {
+@@ -4508,7 +4521,8 @@ gfp_to_alloc_flags(gfp_t gfp_mask, unsigned int order)
+ 	/*
+ 	 * The caller may dip into page reserves a bit more if the caller
+ 	 * cannot run direct reclaim, or if the caller has realtime scheduling
+-	 * policy or is asking for __GFP_HIGH memory.  GFP_ATOMIC requests will
++	 * policy (or is a Kairos latency-critical task) or is asking for
++	 * __GFP_HIGH memory.  GFP_ATOMIC requests will
+ 	 * set both ALLOC_NON_BLOCK and ALLOC_MIN_RESERVE(__GFP_HIGH).
+ 	 */
+ 	alloc_flags |= (__force int)
+@@ -4533,7 +4547,8 @@ gfp_to_alloc_flags(gfp_t gfp_mask, unsigned int order)
+ 		 */
+ 		if (alloc_flags & ALLOC_MIN_RESERVE)
+ 			alloc_flags &= ~ALLOC_CPUSET;
+-	} else if (unlikely(rt_or_dl_task(current)) && in_task())
++	} else if (in_task() &&
++		   unlikely(rt_or_dl_task(current) || kairos_lc_task()))
+ 		alloc_flags |= ALLOC_MIN_RESERVE;
+ 
+ 	alloc_flags = gfp_to_alloc_flags_cma(gfp_mask, alloc_flags);

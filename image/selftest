@@ -108,7 +108,8 @@ fi
 #
 # LC: a program in its own group below lc writes a 16 MB file, then reads
 # it all again every 2 s, idle in between, as a service is between
-# requests: its working set. Batch: reads a 512 MB file over and over, more
+# requests: its working set. Each time it also takes 8 MB of fresh memory
+# (dd's buffer) and gives it back, as a request might. Batch: reads a 512 MB file over and over, more
 # than the machine has. That file is all holes (made with truncate):
 # reading it fills memory with cached pages but reads nothing from the
 # disk. So whatever is read from the disk meanwhile is LC reading back what
@@ -125,15 +126,18 @@ if grep -qw kairos.memory /proc/cmdline; then
 		dd if=/dev/zero of=$d/lcdata bs=1M count=16 conv=fsync 2>/dev/null
 		while [ ! -e $d/stop ]; do
 			cat $d/lcdata >/dev/null
+			dd if=/dev/zero of=/dev/null bs=8M count=1 2>/dev/null
 			echo x >>$d/passes
 			sleep 2
 		done" &
 	sleep 8
 	read -r _ _ before _ </sys/block/vda/stat
+	stalls_before=$(awk '/^allocstall_/ { n += $2 } END { print n }' /proc/vmstat)
 	: >$d/passes
 	batch sh -c "while [ ! -e $d/stop ]; do cat $d/big >/dev/null; done" &
 	sleep 30
 	read -r _ _ after _ </sys/block/vda/stat
+	stalls_after=$(awk '/^allocstall_/ { n += $2 } END { print n }' /proc/vmstat)
 	passes=$(wc -l <$d/passes)
 	touch $d/stop
 	echo "kairos.test: memory lc-reads $(((after - before) / 2)) KiB in $passes passes"
@@ -148,6 +152,11 @@ if grep -qw kairos.memory /proc/cmdline; then
 	echo "kairos.test: memory lc-refaults $(stat workingset_refault_file)"
 	echo "kairos.test: memory lc-stall $(sed -n 's/^some .*total=//p' "$g/memory.pressure" 2>/dev/null)"
 	echo "kairos.test: memory lc-breaches $(sed -n 's/^low //p' "$g/memory.events" 2>/dev/null)"
+	# The same for all of batch (its group's pressure counts every group
+	# below it), and how many times any allocation stopped to reclaim
+	# (/proc/vmstat's allocstall counters, summed).
+	echo "kairos.test: memory batch-stall $(sed -n 's/^some .*total=//p' /sys/fs/cgroup/batch/memory.pressure 2>/dev/null)"
+	echo "kairos.test: memory allocstalls $((stalls_after - stalls_before))"
 	wait
 	exit 0
 fi

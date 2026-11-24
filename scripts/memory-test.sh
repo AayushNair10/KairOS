@@ -79,7 +79,7 @@ more() {
 	sed -n "s|^kairos\.test: memory $1 ||p" "$log" | tr -d '\r' | head -n 1
 }
 refaults=$(more lc-refaults)
-detail="$refaults pages read back, $line from the disk; stalled $(more lc-stall) us, protection breached $(more lc-breaches) times"
+detail="$refaults pages read back, $line from the disk; stalled $(more lc-stall) us (batch $(more batch-stall) us), protection breached $(more lc-breaches) times, $(more allocstalls) allocations stopped to reclaim"
 case $refaults in
 '' | *[!0-9]*)
 	if [ "$kib" -lt 1600 ]; then

@@ -1,0 +1,60 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Aayush Nair <aayushnair204@gmail.com>
+Date: Tue, 24 Nov 2026 17:06:12 -0500
+Subject: [PATCH] Documentation: Describe how Kairos task classes steer memory
+
+The kairos controller's section says what CONFIG_KAIROS_MEMORY does with
+a cgroup's class (reclaim, the allocator's reserves, the OOM killer) and
+that memory is charged to the cgroup that first uses it;
+kernel-parameters.txt lists kairos.nomemclass, which turns it off.
+
+Signed-off-by: Aayush Nair <aayushnair204@gmail.com>
+---
+ Documentation/admin-guide/cgroup-v2.rst         | 16 ++++++++++++++++
+ Documentation/admin-guide/kernel-parameters.txt |  6 ++++++
+ 2 files changed, 22 insertions(+)
+
+diff --git a/Documentation/admin-guide/cgroup-v2.rst b/Documentation/admin-guide/cgroup-v2.rst
+index 09a9b116d4dce6a3f35c959ae7ddbc88cada570b..6dc9896c2f76f0912b5c18fef8de2a9457d63223 100644
+--- a/Documentation/admin-guide/cgroup-v2.rst
++++ b/Documentation/admin-guide/cgroup-v2.rst
+@@ -2987,6 +2987,22 @@ The root cgroup is always "lc".
+ 	below it which inherits, down to the first one with a class of
+ 	its own.
+ 
++With the CONFIG_KAIROS_MEMORY config option the class also steers
++memory, unless "kairos.nomemclass" is on the kernel command line:
++
++- Reclaim passes over a latency-critical cgroup as if it were below its
++  "memory.low", against reclaim for the whole system or for a batch
++  cgroup above it.  A breach counts as a "low" event in its
++  "memory.events".
++- A latency-critical task may dip into the page allocator's reserves as
++  far as a realtime task, rather than stop to reclaim.
++- The OOM killer takes a batch task before any latency-critical one, as
++  if the batch task's "oom_score_adj" were 1000.
++
++Memory is charged to the cgroup of the task that first uses it, so a
++page which batch work brought into memory isn't protected when a
++latency-critical task uses it later.
++
+ 
+ Non-normative information
+ -------------------------
+diff --git a/Documentation/admin-guide/kernel-parameters.txt b/Documentation/admin-guide/kernel-parameters.txt
+index 9c163139a158fdb5274b164aa6bfa053d8d85d43..8f6b801d65bc27979d6993da40f27f4b8c969359 100644
+--- a/Documentation/admin-guide/kernel-parameters.txt
++++ b/Documentation/admin-guide/kernel-parameters.txt
+@@ -2900,6 +2900,12 @@ Kernel parameters
+ 	js=		[HW,JOY] Analog joystick
+ 			See Documentation/input/joydev/joystick.rst.
+ 
++	kairos.nomemclass
++			[KNL] Don't let Kairos task classes steer memory
++			(CONFIG_KAIROS_MEMORY): reclaim, the page allocator's
++			reserves and the OOM killer treat latency-critical
++			and batch tasks alike.
++
+ 	kairos.noscheduler
+ 			[KNL] Don't attach Kairos Scheduler before init
+ 			(CONFIG_KAIROS_BOOT_SCHEDULER). Kairos's init reads
