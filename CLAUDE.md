@@ -185,15 +185,23 @@ kernel/upstream  the pinned Linux version: its tag and commit id
 kernel/patches/  our kernel changes as a patch series (the source of truth):
                  0001-0004 the kairos cgroup controller (kernel/cgroup/
                  kairos.c: kairos.class in every group, inherited) and
-                 bpf_kairos_task_class() for the BPF scheduler
+                 bpf_kairos_task_class() for the BPF scheduler; 0005-0006
+                 the scheduler attached before init (init/
+                 kairos_scheduler.c: runs /bin/kairos-attach as a
+                 user-mode helper at the last initcall level) and its
+                 boot word kairos.noscheduler
 scheduler/       Kairos Scheduler, a git submodule at a pinned commit
                  (its code is in scheduler/scheduler/)
 kernel/config/   the kernel config: base (a starting point that ships with
                  Linux: allnoconfig), kairos.config (our switches) and
-                 debug.config (lockdep and friends, for --debug builds)
-image/           the first file system: initramfs.list (its files), selftest
-                 (what a boot test runs in place of the shell; with
-                 kairos.layout, the layout test's short version),
+                 debug.config (lockdep and friends, and the SysRq keys,
+                 for --debug builds)
+image/           the first file system: initramfs.list (its files),
+                 kairos-attach (what the kernel runs before init: mounts
+                 /sys and the BPF file system, loads the scheduler with
+                 --pin-and-exit /sys/fs/bpf/kairos; output to /dev/kmsg),
+                 selftest (what a boot test runs in place of the shell;
+                 with kairos.layout, the layout test's short version),
                  services/ (one description per service: class, start,
                  run; packed into /etc/kairos/services) and init.fallback
                  (a shell script that can stand in for init: boot with
@@ -203,11 +211,13 @@ scripts/         kernel-fetch.sh, kernel-export.sh, kernel-check.sh,
                  run-qemu.sh, boot-test.sh, layout-test.sh, lib.sh
 docs/            DESIGN_LOG.md, notes
 userspace/       init/init.c: Kairos's init, process 1, one statically
-                 linked C program. It mounts the control groups (lc,
-                 batch; writes batch's kairos.class), starts Kairos
-                 Scheduler's loader first (--class=kernel,
-                 --split-order=layout) and restarts
-                 it by a rule, then the service manager.
+                 linked C program. It keeps what was mounted before it
+                 (the attach program's /sys and BPF file system), mounts
+                 the control groups (lc, batch; writes batch's
+                 kairos.class), starts Kairos Scheduler's loader first:
+                 --adopt /sys/fs/bpf/kairos if the kernel attached it,
+                 else a load (--class=kernel, --split-order=layout,
+                 --pin); restarts it by a rule, then the service manager.
                  service/service.c: the service manager (each service in
                  a control group under its class), the service command
                  and batch (the same program). probe/probe.c: the demo LC
@@ -232,6 +242,16 @@ userspace/       init/init.c: Kairos's init, process 1, one statically
   `scripts/layout-test.sh [LAYOUT...]` boots four CPU layouts and checks
   the loader's CPU order and where the probe ran (~8 min).
 - The image has no `/tmp`: in hand tests, write files to `/`.
+- The scheduler is held by pins in `/sys/fs/bpf/kairos`, not by a process.
+  Remove old pins before loading another scheduler: releasing a link
+  unloads whichever scheduler runs (`bpf_scx_unreg()`). The loader's
+  `--pin` does that, and refuses to start while one runs. On the debug
+  build, `echo S > /proc/sysrq-trigger` throws the scheduler out.
+- To boot a changed first file system without changing the image (e.g. a
+  failing `/bin/kairos-attach`): append a small archive made with
+  `~/kairos-build/usr/gen_init_cpio` (later entries overwrite earlier
+  ones), put it as `initramfs.cpio` in a folder, and boot with
+  `KAIROS_BUILD=<folder>` plus `--kernel ~/kairos-build/arch/arm64/boot/Image`.
 - Timing measured in QEMU is emulated (no KVM): compare configurations
   against each other in the same run, never against real hardware, and
   don't judge timing when the machine has more CPUs than the VM (each

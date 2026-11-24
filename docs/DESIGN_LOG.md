@@ -20,7 +20,7 @@ and the scheduling policy as a BPF program on sched_ext.
 | 5b | Our own shell (optional, not scheduled) | parsing, pipes, process groups, job control | none |
 | 6 | Task class as a kernel concept (done: a cgroup controller of our own, read by BPF) | syscall entry, task_struct, user ABI, kfuncs | patch (0001 to 0004) |
 | 7 | LC and batch pools that follow CPU topology (done: the loader orders the CPUs by layout; whole cores) | sched domains, NUMA, CPU capacity | config only (a scheduler change on its `kairos-os` branch) |
-| 8 | Scheduler attached before PID 1 | initcalls, kernel threads, loading BPF from inside the kernel | patch (not sized) |
+| 8 | Scheduler attached before PID 1 (done: the kernel runs an attach program before init; the scheduler held by a pin) | initcalls, kernel threads, user-mode helpers, BPF object lifetimes | patch (0005, 0006) |
 | 9 | A root file system on a virtio disk | VFS, block layer, virtio drivers, page cache, journaling | config; maybe none |
 | 10 | Memory reclaim that knows LC from batch | page allocator, reclaim, memory cgroups | patch |
 | 11 | Block I/O that knows LC from batch | I/O schedulers, I/O priority | patch |
@@ -1453,3 +1453,214 @@ Open questions / next:
   this repository's component 7 commits.
 - Disk: 9.9 GB free, after removing old copies of editor extensions and
   of the Claude CLI (with approval).
+
+## 8. Kairos Scheduler attached before init — 2026-11-24
+
+Options:
+- A: stay in user space but stop depending on a process: init still
+  starts the loader first, and the loader pins the attachment in the BPF
+  file system, so killing it no longer unloads the scheduler. No kernel
+  change; init and the loader still run on EEVDF until the attach.
+- B: the kernel starts the loader before init: a late initcall runs it
+  from the initramfs as a user-mode helper and waits until it has
+  attached the scheduler. A small patch; no user code before the attach;
+  the loader isn't init's child, so supervision needs another signal.
+- C: the kernel loads the policy itself: a light skeleton built into the
+  kernel image, loaded and attached from a late initcall and held by the
+  kernel, as `kernel/bpf/preload` does. The largest patch; the generator
+  can't produce a struct_ops map; settings move to the command line and a
+  policy change needs a kernel rebuild.
+- D: init is the loader: the loading code linked into init, which attaches
+  the policy first and holds it for the life of the system. No kernel
+  change; a fault in the BPF library becomes a fault in process 1.
+
+My pick and reasoning:
+- "I would say user space is not needed for this, so A should not be
+  correct. C also doesn't make sense, since there is no fallback if this
+  happens. D makes the most sense, since init does the batch/LC mode
+  differentiation, so B can be eliminated since Kairos without that
+  classification is useless."
+- After the verdict: "Go ahead with B".
+
+Verdict: B, with A's pin so the scheduler outlives its loader.
+- The only option that removes the user-space window with a small patch
+  in one place (the last initcall level), keeps the policy and loader in
+  their own repository, and teaches the boot path itself. Checked: user-mode
+  helpers are allowed from the rootfs initcall on, and each waits for the
+  initramfs to be unpacked. The practical gain is small (~0.8 s of
+  emulated time with only init and the loader); the gains are learning
+  and a scheduler no kill can unload.
+- D, wrong pick for a reason that doesn't hold: since component 6 the
+  scheduler asks the kernel for a task's class at each decision, so a
+  scheduler attached before init treats everything as LC until init
+  writes `batch`, and before init there is no batch work. D doesn't even
+  change the order (init would still make the groups, then load).
+- A's rejection contradicts the pick: D is user space too. "The scheduler
+  shouldn't depend on a user process" is a good instinct, but argues for B
+  or C.
+- C's rejection was mistaken: there is a fallback; sched_ext always gives
+  every task back to EEVDF when a policy is unloaded or fails to load.
+  C's real costs: reloading inside the kernel, settings on the command
+  line, kernel rebuilds for policy changes, and the generator gap.
+- B's rejection, half right: the loader does depend on what's set up
+  before it (it reads `/sys`, which nobody has mounted before init), but
+  that is a cost to plan for, not a reason the scheduler is useless.
+
+Where the others fit:
+- A: general-purpose distributions (from memory, the sched_ext project's
+  schedulers run as systemd services); networking agents such as Cilium
+  pin their BPF programs so they keep working while the agent restarts.
+- C: BPF that must exist before any user space and ships with the kernel:
+  Linux's BPF preload (`kernel/bpf/preload/`, a late initcall).
+- D: process 1 loading a kernel policy itself has precedent: from memory,
+  systemd and Android's init load the SELinux policy in their first
+  moments; but that hands the kernel one file, not a BPF library's work.
+
+Linux concepts learned:
+- Boot order after the scheduler core (`init/main.c`): `kernel_init()` ->
+  `kernel_init_freeable()` -> `do_basic_setup()` -> `do_initcalls()` (levels
+  early, core, postcore, arch, subsys, fs, rootfs, device, late, each with
+  a `_sync` variant; `late_initcall_sync()` is the last) ->
+  `wait_for_initramfs()` -> `console_on_rootfs()` -> `free_initmem()` ->
+  `run_init_process()`. sched_ext registers at the device level
+  (`__initcall(scx_init)`); BPF preload loads at `late_initcall`.
+- The initramfs: `populate_rootfs()` (a rootfs initcall) schedules the
+  unpacking asynchronously and calls `usermodehelper_enable()`. The
+  kernel's built-in archive (with `/dev`, `/dev/console`) is unpacked
+  first; concatenated archives are unpacked in turn and later entries
+  overwrite earlier ones.
+- User-mode helpers (`kernel/umh.c`): `call_usermodehelper(path, argv,
+  envp, UMH_WAIT_PROC)` has a kernel worker start the program with
+  `user_mode_thread()`; it calls `wait_for_initramfs()` before
+  `kernel_execve()`, and the status comes back in wait() form
+  (`kernel_wait()`). The program starts with no open files and only what
+  the initramfs holds; `/dev/kmsg` (char 1, 11) writes into the kernel log.
+- Boot words: `parse_args()` hands unknown words to `unknown_bootoption()`,
+  which asks `__setup()` handlers (`obsolete_checksetup()`, a prefix match;
+  the handler gets the rest) before dropping a dotted word as an unclaimed
+  module parameter. `__initdata` is freed with the setup code after the
+  initcalls; init/main.c keeps init's own `argv_init`/`envp_init` at file
+  scope (checkpatch's STATIC_CONST_CHAR_ARRAY flags local `char *x[]`).
+- The BPF file system (`kernel/bpf/inode.c`): a pin is a file holding a
+  reference; every mount is a separate instance (`get_tree_nodev()`), so a
+  second mount hides the pins. `/sys/fs/bpf` is a mount point sysfs makes.
+- Link lifetime (`kernel/bpf/syscall.c`): `bpf_link_put()` frees the last
+  reference later, in a work item; `bpf_link_release()` (closing a file)
+  frees it at once (`bpf_link_put_direct()`). A struct_ops link's release
+  calls sched_ext's `bpf_scx_unreg()` -> `scx_disable()`, which acts on
+  `scx_root`, the current scheduler, not necessarily the link's.
+- sched_ext: `scx_enable()` sets `scx_root` before `scx_idle_enable()`;
+  kfuncs act on `scx_root`, and `check_builtin_idle_enabled()` raises an
+  error against it. `/sys/kernel/sched_ext/enable_seq` counts enables;
+  `/proc/PID/sched` shows `ext.enabled`; SysRq-S
+  (`sysrq_sched_ext_reset_op`, CONFIG_MAGIC_SYSRQ) unloads with
+  SCX_EXIT_SYSRQ.
+- BPF timers live as long as their map, not as long as the scheduler;
+  ops.exit() doesn't stop them.
+- libbpf: `bpf_map__pin()`, `bpf_link__pin()`, `bpf_obj_get()`,
+  `bpf_map__reuse_fd()`, `bpf_map__set_value_size()`; the skeleton's map
+  table (`mmaped` pointers, `map_skel_sz` stride); a struct_ops link's
+  detach just closes its fd (`bpf_link__detach_struct_ops()`).
+
+What changed: Kairos Scheduler is now attached by the kernel before init
+runs. At the last initcall level a small kernel function (patch 0005)
+runs `/bin/kairos-attach` from the initramfs and waits for it; that
+script sends its output to the kernel log, mounts `/sys` and the BPF file
+system, and runs the loader with `--pin-and-exit`: the scheduler is
+attached and pinned, then the loader exits. The pin, not a process, holds
+the scheduler. Init keeps those mounts and starts a loader that adopts the
+pinned scheduler: it watches it and ends with the usual statuses, so the
+restart rule is unchanged. A killed loader no longer unloads the
+scheduler; after an unload, init loads it again with `--pin`, which
+removes old pins first. If the attach fails, the kernel says so and init
+loads the scheduler as before; `kairos.noscheduler` turns off both.
+
+What each step did, in order:
+1. The boot test's checks first, failing: early, loader (adopted), restart
+   (no reload) (`80709d0`).
+2. The loader's `--pin`, `--pin-and-exit` and `--adopt` on the
+   scheduler's `kairos-os` branch (`ecde69d`).
+3. Init: keeps earlier mounts, adopts a running scheduler, pins its own
+   loads; scheduler pin moved (`6c86be2`).
+4. Kernel patches 0005 (the attach before init) and 0006 (the boot word
+   documented), the attach script and `/dev/kmsg`, the config switch, and
+   SysRq in the lock-checking build (`24b0b95`; kernel branch `f7333acec`,
+   `0e33c9a96`).
+5. The suite; the policy's timers stop at exit (`kairos-os` `f2a1140`,
+   pinned in `f08d7f2`).
+
+Found on the way:
+- The adopter crashed after its report: libbpf freed its copy of the exit
+  dump map by the pinned map's larger size. Fixed by resizing the copy to
+  match before adopting.
+- checkpatch warned about the function's local argument arrays; moved to
+  file scope as `__initdata`, as init/main.c keeps init's.
+- Old pins cause two failures, both shown on the lock-checking kernel
+  with SysRq-S. (1) The unloaded scheduler's 1 ms timer, kept alive by its
+  pinned maps, kept calling idle kfuncs, and the next scheduler was
+  unloaded during its start-up ("built-in idle tracking is disabled");
+  fixed in the policy. (2) Removing an old link's pin after a new
+  scheduler had loaded unloaded the new one ("unregistered from user
+  space"): the reason `--pin` removes old pins before a load.
+- An idle machine's boot: the user-space window was ~0.8 s (emulated).
+
+How it's tested:
+- `./scripts/boot-test.sh`: 22 lines, all ok, at 1, 2, 4 and 8 CPUs, on
+  2 clusters x 2 cores x 2 threads, with `kairos.noscheduler`, and on the
+  lock-checking build (no lockdep or RCU reports). New or changed checks,
+  seen failing first: early (the kernel's "Kairos Scheduler attached
+  before init", and sched_ext's "enabled" line before "Run /init"),
+  loader (adopted), restart (enable_seq unchanged after the loader was
+  killed).
+- The attach program made to fail by appending an archive that replaces
+  it: status 1 -> "kairos: /bin/kairos-attach ended with status 1; init
+  will start Kairos Scheduler"; not runnable -> "can't run ... (error
+  -13)". Init loads it; only early and loader fail. On the kernel without
+  our patches: init loads, the pins hold it.
+- `./scripts/layout-test.sh`: 16 of 16 (the CPU order now comes through
+  the kernel log).
+- Timing, same kernel, 3 boots each, interleaved, `printk.time=1`: the
+  kernel attaching: scheduler enabled at 1.07-1.23 s, /init at
+  1.23-1.44 s; init attaching (the attach program not runnable): /init at
+  0.39-0.40 s, enabled at 1.16-1.27 s.
+- By hand, lock-checking kernel: SysRq-S while the adopter watches ->
+  "disabled by sysrq-S", pins removed, init leaves it off. Adopter killed,
+  then SysRq-S (pins left) -> init reloads with `--pin`, enable_seq 2,
+  still enabled 6 s later.
+- `./scripts/kernel-check.sh`: 6 patches, all ok (the SPDX check runs).
+
+Interview questions:
+1. Walk through what the kernel does between finishing its own setup and
+   running init's first instruction. Where exactly does your scheduler get
+   attached, and why can't the kernel run a user program any earlier?
+2. Your scheduler is held by a pinned file instead of a process. What
+   happens when the loader is killed, and when the kernel throws the
+   scheduler out? Why must old pins be removed before a new scheduler is
+   loaded?
+3. A BPF timer kept running after its scheduler had been unloaded. Why
+   did it outlive the scheduler, and how did it bring down the next one?
+
+Resume line: "Made Kairos's Linux kernel attach its sched_ext scheduler
+before init: a 2-patch series runs an attach program as a user-mode helper
+at the last initcall level and pins the scheduler in the BPF file system,
+so every user process, init included, runs under it; init supervises the
+pinned scheduler. Lockdep and SysRq fault-injection tests in QEMU found
+and fixed a BPF-timer lifetime bug that unloaded the next scheduler."
+
+Open questions / next:
+- The kernel waits for the attach program with no limit of its own; the
+  script's 30 s `timeout` is the bound. A hung attach delays the boot by
+  up to 30 s.
+- The attached scheduler's options are written twice: in the attach
+  script and in init. One place (a file in /etc/kairos) would keep them
+  equal.
+- The kernel's own boot (its threads, the initcalls) always runs on EEVDF:
+  sched_ext takes tasks only once a scheduler is attached.
+- A loader started by hand without `--pin`, beside old pins, is still
+  exposed to failure (2) above; only `--pin` loads remove them.
+- `bpf_scx_unreg()` disabling the current scheduler rather than the
+  link's may be deliberate while sched_ext has one root scheduler (a
+  guess); worth asking upstream.
+- Push: the scheduler's `kairos-os` (`ecde69d`, `f2a1140`) first, then this
+  repository's component 8 commits.
+- Next on the roadmap: component 9, a root file system on a virtio disk.

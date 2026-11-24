@@ -16,8 +16,10 @@ It has three parts:
 
 ## Status
 
-Early. A minimal Kairos kernel builds and boots in QEMU. Kairos's own init
-runs as its first process and starts Kairos Scheduler before anything else.
+Early. A minimal Kairos kernel builds and boots in QEMU. The kernel attaches
+Kairos Scheduler before it starts Kairos's own init, so every program runs
+under it; init, the first process, watches it and starts it again if it
+ends.
 A service manager runs each service in a control group for its class,
 latency-critical (LC) or batch. Four kernel patches make the class
 something the kernel keeps: every control group has one, inherited by the
@@ -33,6 +35,7 @@ close together, in whole cores. The shell and tools are busybox's. The roadmap, 
 ```mermaid
 flowchart TB
     subgraph US["User space"]
+        att["kairos-attach<br/>run by the kernel before init"]
         pid1["init<br/>process 1"]
         ldr["scx_kairos<br/>the scheduler's loader"]
         mgr["service manager"]
@@ -52,7 +55,8 @@ flowchart TB
         groups -->|"each task's class"| bpf
         bpf -.->|"if it is unloaded"| fair
     end
-    ldr -->|"loads and holds"| bpf
+    att -->|"loads, pins"| bpf
+    ldr -->|"watches (adopts)"| bpf
 ```
 
 - **The kernel** decides which task runs where. For ordinary tasks, sched_ext
@@ -60,12 +64,15 @@ flowchart TB
   EEVDF. Kairos Scheduler is such a program. It keeps a pool of CPUs for LC
   work, sized to LC demand; batch work borrows idle LC CPUs, and an LC task
   that wakes up takes its CPU back.
-- **The loader** hands the policy to the kernel and holds it there. When the
-  loader ends, for any reason, the kernel unloads the policy and gives every
-  task back to EEVDF. The kernel also unloads it by itself if the policy
-  breaks one of its rules or leaves a task waiting too long.
-- **init** is the first program, process 1. It starts the loader before
-  anything else, and starts it again when it ends.
+- **The loader** hands the policy to the kernel. A pin, a file in the BPF
+  file system, holds it there, so it keeps running whatever happens to the
+  loader; removing the pin unloads it. Before it starts init, the kernel
+  runs an attach program that loads the policy and pins it. The kernel
+  also unloads the policy by itself if it breaks one of its rules or
+  leaves a task waiting too long, and gives every task back to EEVDF.
+- **init** is the first program, process 1. It starts a loader that adopts
+  the pinned scheduler: it watches it and says how it ended. When the
+  scheduler ends, init loads it again.
 - **The service manager** runs the services. Each runs in a control group of
   its own, below the group for its class, and the scheduler reads each
   task's class from its group.
@@ -75,22 +82,26 @@ flowchart TB
 ```mermaid
 sequenceDiagram
     participant K as Kernel
+    participant A as Attach program
     participant I as init
     participant L as Loader
     participant M as Service manager
     participant S as Shell
+    K->>A: run /bin/kairos-attach, before init
+    A->>K: mount /sys and the BPF file system, then load, attach and pin the BPF policy
     K->>I: run /init as process 1
-    Note over I: mount /proc, /sys, /dev and the control groups, make lc and batch, set batch's class
-    I->>L: start, with no terminal
-    L->>K: load and attach the BPF policy
-    I->>K: read the scheduler's state until it says enabled
+    Note over I: mount /proc, /dev and the control groups (keeping /sys and its pins), make lc and batch, set batch's class
+    I->>K: the scheduler's state says enabled
+    I->>L: start, with no terminal, to adopt the pinned scheduler
     I->>M: start
     M->>K: a control group per service, each service started in its own
     I->>S: start, on the console's terminal
 ```
 
-Until the policy is attached, only init and the loader run, on EEVDF.
-Everything after that runs under Kairos Scheduler.
+Until the policy is attached, only the kernel's own threads and the attach
+program run, on EEVDF. Everything after that, init included, runs under
+Kairos Scheduler. If the attach program fails, the kernel says so and boots
+on, and init loads the scheduler itself, as it did before.
 
 ### How a task gets its class
 
@@ -152,11 +163,12 @@ CPUs are alike and there are no threads, it is just `0 1 2 3 ...`.
 
 | What happens | Who notices | What follows |
 |---|---|---|
-| The loader ends: a crash, a kill, an error | the kernel, then init | The kernel gives every task back to EEVDF at once. init starts the loader again: at once after a run of a minute or more, otherwise after 1, 2, 4 and 8 s, and it gives up after five short runs in a row. |
-| The policy breaks a kernel rule, or a task waits 30 s | the kernel | It unloads the policy, and the loader ends with a status that says why; then as above. |
+| The loader ends: a crash, a kill | init | The scheduler keeps running, held by its pin. init starts a new loader, which adopts it: at once after a run of a minute or more, otherwise after 1, 2, 4 and 8 s, and it gives up after five short runs in a row. |
+| The policy breaks a kernel rule, or a task waits 30 s | the kernel, then the loader | The kernel unloads the policy and gives every task back to EEVDF. The loader removes the pins and ends with a status that says why; init loads the scheduler again by the same rule, removing any pins left behind first. An unload someone asked for (SysRq-S) is left alone. |
+| The attach program fails before init | the kernel | It says so and boots on; init loads the scheduler itself. |
 | A service ends | the service manager: the service's group is empty | It starts the service again, by the same rule. |
 | The service manager ends | init | It starts a new one, which finds the running services by their groups and looks after them. |
-| The scheduler itself is the problem | you | Boot with `kairos.noscheduler`: init leaves it off, and EEVDF runs everything. |
+| The scheduler itself is the problem | you | Boot with `kairos.noscheduler`: the kernel and init leave it off, and EEVDF runs everything. |
 | The kernel keeps no classes (one without our patches) | init: there is no `kairos.class` | It says so and starts the scheduler with the older rule: batch is anything below the group `batch`. |
 
 ## Layout
@@ -169,9 +181,10 @@ kernel/config/     the kernel's config: a starting point, our switches, and
 userspace/init/    Kairos's init: the first program the kernel starts
 userspace/service/ the service manager, and the service and batch commands
 userspace/probe/   a small LC program, run by the demo service probe
-image/             the first file system: its list of files, the services'
-                   descriptions, the boot test's self-test, and a fallback
-                   first program
+image/             the first file system: its list of files, the program
+                   the kernel runs before init to attach the scheduler,
+                   the services' descriptions, the boot test's self-test,
+                   and a fallback first program
 scheduler/         Kairos Scheduler, a git submodule at a pinned commit
 scripts/           the scripts below
 docs/              DESIGN_LOG.md: the roadmap and one entry per component
@@ -236,12 +249,15 @@ parent of everything else. It:
 - mounts the file systems through which the kernel shows its own
   information, and the control groups, with the groups `lc` and `batch`,
   and writes `batch` into the batch group's class;
-- starts Kairos Scheduler's loader, and waits until the kernel runs the
-  scheduler before it starts anything else;
+- keeps the file systems mounted before it started: the attach program's
+  `/sys` and BPF file system, which hold the scheduler's pin;
+- starts Kairos Scheduler's loader: one that adopts the scheduler the
+  kernel attached, or, if none runs, one that loads and pins it, and then
+  waits until the kernel runs it before it starts anything else;
 - when the loader ends, reads its exit status and starts it again, unless
-  it was stopped on purpose; after a short run it waits 1, 2, 4 and 8 s
-  first, and after five short runs in a row it gives up. Meanwhile the
-  kernel's own scheduler runs everything;
+  the scheduler was stopped on purpose; after a short run it waits 1, 2, 4
+  and 8 s first, and after five short runs in a row it gives up. If only
+  the loader died, the scheduler keeps running meanwhile;
 - starts the service manager, and starts it again when it ends;
 - starts a shell, on the terminal behind the console, and starts a new one
   when that shell ends;
@@ -269,7 +285,13 @@ repository's `main` stays as it was evaluated:
   this option there;
 - `--split-order=layout`: the order in which CPUs join the LC pool, by
   the CPU layout, and the pool in whole cores. It prints the order when
-  it starts.
+  it starts;
+- `--pin DIR`, `--pin-and-exit DIR` and `--adopt DIR`: the scheduler held
+  by pins in the BPF file system instead of by the loader, and a loader
+  that watches a pinned scheduler. Old pins are removed before a new
+  scheduler is loaded: releasing one unloads whichever scheduler runs. The
+  policy's timers stop when the scheduler exits, so an unloaded scheduler
+  whose pins remain leaves nothing running.
 
 `scripts/scheduler-build.sh`, which `image-build.sh` runs, builds the BPF
 library, bpftool and a header of the kernel's types from the pinned kernel
@@ -304,6 +326,8 @@ Our patches so far:
 | 0002 | a write to a group's class reaches every group below it that inherits |
 | 0003 | the controller's section in Linux's cgroup v2 document |
 | 0004 | `bpf_kairos_task_class()`, a task's class for the BPF scheduler; `kairos_task_class()` for kernel code |
+| 0005 | before init, the kernel runs `/bin/kairos-attach` from the first file system and waits for it; `kairos.noscheduler` skips it |
+| 0006 | `kairos.noscheduler` in the kernel's list of boot parameters |
 
 ## The kernel config
 
