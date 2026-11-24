@@ -214,19 +214,46 @@ static int make_group(const char *path)
 	return 0;
 }
 
-static int switch_on_cpu_controller(void)
+/* Switch a controller on for the groups below @group ("+cpu", "+memory"). */
+static int switch_on(const char *group, const char *controller)
 {
+	char path[128];
 	int fd, ret = 0;
 
-	fd = open(CGROUPS "/cgroup.subtree_control", O_WRONLY);
-	if (fd < 0 || write(fd, "+cpu", 4) < 0) {
-		say("can't switch on the CPU controller in %s: %s", CGROUPS,
-		    strerror(errno));
+	snprintf(path, sizeof(path), "%s/cgroup.subtree_control", group);
+	fd = open(path, O_WRONLY);
+	if (fd < 0 || write(fd, controller, strlen(controller)) < 0) {
+		say("can't switch on %s in %s: %s", controller + 1, group, strerror(errno));
 		ret = -1;
 	}
 	if (fd >= 0)
 		close(fd);
 	return ret;
+}
+
+static int switch_on_cpu_controller(void)
+{
+	return switch_on(CGROUPS, "+cpu");
+}
+
+/*
+ * The memory controller: it charges every page of memory to the group of
+ * the task that first used it, and lets the kernel protect or limit groups
+ * when memory runs short. Kairos's kernel protects LC groups by their
+ * class. It is switched on all the way down, below lc and batch too, so
+ * that every service, and every command run with batch, has its pages
+ * counted on its own; a group relabelled LC (kairos.class) then has its own
+ * pages to protect. (A group can only pass a controller on to the groups
+ * below it while it holds no processes itself: lc and batch never do.)
+ * Without it, as in a kernel without the memory controller, memory is
+ * shared as before.
+ */
+static void switch_on_memory_controller(void)
+{
+	if (switch_on(CGROUPS, "+memory") == 0) {
+		switch_on(CGROUPS "/lc", "+memory");
+		switch_on(CGROUPS "/batch", "+memory");
+	}
 }
 
 /*
@@ -262,6 +289,8 @@ static void make_class_groups(void)
 		       switch_on_cpu_controller() == 0;
 	if (!class_groups)
 		say("without its control groups, Kairos Scheduler takes a task's class from its scheduling policy");
+	else
+		switch_on_memory_controller();
 	kernel_classes = class_groups && set_batch_class() == 0;
 }
 

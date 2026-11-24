@@ -137,6 +137,17 @@ if grep -qw kairos.memory /proc/cmdline; then
 	passes=$(wc -l <$d/passes)
 	touch $d/stop
 	echo "kairos.test: memory lc-reads $(((after - before) / 2)) KiB in $passes passes"
+	# With the memory controller, from the LC program's own group: pages
+	# taken from it and read back (refaults), the time its tasks were
+	# stalled waiting for memory (pressure: total, in us), and how often
+	# its protection was breached because nothing else could be taken
+	# (memory.events low).
+	stat() {
+		sed -n "s/^$1 //p" "$g/memory.stat" 2>/dev/null
+	}
+	echo "kairos.test: memory lc-refaults $(stat workingset_refault_file)"
+	echo "kairos.test: memory lc-stall $(sed -n 's/^some .*total=//p' "$g/memory.pressure" 2>/dev/null)"
+	echo "kairos.test: memory lc-breaches $(sed -n 's/^low //p' "$g/memory.events" 2>/dev/null)"
 	wait
 	exit 0
 fi

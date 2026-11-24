@@ -67,6 +67,11 @@ case $kib in
 	exit 1
 	;;
 esac
+# Reported, not judged: from the LC program's own memory group.
+more() {
+	sed -n "s|^kairos\.test: memory $1 ||p" "$log" | tr -d '\r' | head -n 1
+}
+echo "(reported) LC group: $(more lc-refaults) pages read back, stalled $(more lc-stall) us, protection breached $(more lc-breaches) times"
 if [ "$kib" -lt 1600 ]; then
 	printf '%-9s ok    %s: the LC file stayed in memory\n' lc-reads "$line"
 else
