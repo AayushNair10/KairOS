@@ -3,7 +3,8 @@
 #
 # usage: boot-test.sh [--smp N] [--kernel FILE] [WORD...]
 #
-#   --smp N    number of CPUs to give the machine (default 4)
+#   --smp N    number of CPUs to give the machine (default 4), or a layout
+#              in QEMU's form, such as 8,clusters=2,cores=2,threads=2
 #   --kernel FILE  boot this kernel image instead of the one kernel-build.sh
 #              built (see run-qemu.sh)
 #   WORD...    extra words for the kernel's command line
@@ -96,6 +97,14 @@ while [ $# -gt 0 ]; do
 	esac
 done
 
+# The number of CPUs: --smp's value, or the first part of a layout. (Never
+# the whole layout in arithmetic: bash reads "8,clusters=2,..." as a list of
+# assignments.)
+ncpu=${smp%%,*}
+case $ncpu in
+'' | *[!0-9]*) die "--smp $smp: no number of CPUs at its start" ;;
+esac
+
 # Is the scheduler meant to be off?
 off=0
 for word in "${words[@]}"; do
@@ -147,10 +156,10 @@ else
 fi
 
 cpus=$(fact cpus)
-if [ "$cpus" = "$smp" ]; then
-	ok cpus "$cpus of $smp running"
+if [ "$cpus" = "$ncpu" ]; then
+	ok cpus "$cpus of $ncpu running"
 else
-	bad cpus "${cpus:-none} of $smp running"
+	bad cpus "${cpus:-none} of $ncpu running"
 fi
 
 devices=$(fact devices)
@@ -246,14 +255,14 @@ crunch=$(fact "service crunch")
 status=$(fact "status probe")
 if [ "$manager" != "parent 1" ]; then
 	bad services "the service manager: ${manager:-not reported}"
-elif [ "$probe" = "1 in lc" ] && [ "$crunch" = "$((smp + 1)) in batch" ]; then
+elif [ "$probe" = "1 in lc" ] && [ "$crunch" = "$((ncpu + 1)) in batch" ]; then
 	if [ "$status" = "lc running" ]; then
-		ok services "probe in lc; crunch in batch, with its $smp loops; status agrees"
+		ok services "probe in lc; crunch in batch, with its $ncpu loops; status agrees"
 	else
 		bad services "running, but service status says probe is \"${status}\""
 	fi
 else
-	bad services "probe: ${probe:-not reported}; crunch: ${crunch:-not reported} (want 1 in lc, $((smp + 1)) in batch)"
+	bad services "probe: ${probe:-not reported}; crunch: ${crunch:-not reported} (want 1 in lc, $((ncpu + 1)) in batch)"
 fi
 
 kclass=("lc $(fact "kclass lc")" "batch $(fact "kclass batch")"
@@ -310,8 +319,8 @@ if [ -z "$batch_med" ] || [ -z "$lc_med" ] || [ -z "$idle_med" ]; then
 	bad class "not measured"
 elif [ $off = 1 ]; then
 	ok class "for reference, under EEVDF: $delays"
-elif [ "$smp" -gt "$(nproc)" ]; then
-	ok class "not judged, $smp emulated CPUs on $(nproc) real ones: $delays"
+elif [ "$ncpu" -gt "$(nproc)" ]; then
+	ok class "not judged, $ncpu emulated CPUs on $(nproc) real ones: $delays"
 elif [ $((batch_med * 2)) -le "$lc_med" ]; then
 	ok class "$delays"
 else
