@@ -192,19 +192,21 @@ kernel/config/   the kernel config: base (a starting point that ships with
                  Linux: allnoconfig), kairos.config (our switches) and
                  debug.config (lockdep and friends, for --debug builds)
 image/           the first file system: initramfs.list (its files), selftest
-                 (what a boot test runs in place of the shell),
+                 (what a boot test runs in place of the shell; with
+                 kairos.layout, the layout test's short version),
                  services/ (one description per service: class, start,
                  run; packed into /etc/kairos/services) and init.fallback
                  (a shell script that can stand in for init: boot with
                  rdinit=/init.fallback)
 scripts/         kernel-fetch.sh, kernel-export.sh, kernel-check.sh,
                  kernel-build.sh, scheduler-build.sh, image-build.sh,
-                 run-qemu.sh, boot-test.sh, lib.sh
+                 run-qemu.sh, boot-test.sh, layout-test.sh, lib.sh
 docs/            DESIGN_LOG.md, notes
 userspace/       init/init.c: Kairos's init, process 1, one statically
                  linked C program. It mounts the control groups (lc,
                  batch; writes batch's kairos.class), starts Kairos
-                 Scheduler's loader first (--class=kernel) and restarts
+                 Scheduler's loader first (--class=kernel,
+                 --split-order=layout) and restarts
                  it by a rule, then the service manager.
                  service/service.c: the service manager (each service in
                  a control group under its class), the service command
@@ -222,7 +224,14 @@ userspace/       init/init.c: Kairos's init, process 1, one statically
   (unattended boot, checks the console; `--smp N` and extra kernel
   command-line words are passed on), `scripts/run-qemu.sh` (a shell;
   `--log FILE` runs unattended). Both take `--kernel FILE` to boot another
-  image, such as the debug build's, with the same initramfs.
+  image, such as the debug build's, with the same initramfs, and a CPU
+  layout as `--smp` (`8,clusters=2,cores=2,threads=2`). `run-qemu.sh
+  --qemu ARG` passes an argument on to QEMU (memory nodes), `--dump-dtb
+  FILE` writes QEMU's device tree and `--dtb FILE` boots with one (edited
+  with `fdtput`, e.g. unequal `capacity-dmips-mhz`).
+  `scripts/layout-test.sh [LAYOUT...]` boots four CPU layouts and checks
+  the loader's CPU order and where the probe ran (~8 min).
+- The image has no `/tmp`: in hand tests, write files to `/`.
 - Timing measured in QEMU is emulated (no KVM): compare configurations
   against each other in the same run, never against real hardware, and
   don't judge timing when the machine has more CPUs than the VM (each

@@ -22,7 +22,8 @@ A service manager runs each service in a control group for its class,
 latency-critical (LC) or batch. Four kernel patches make the class
 something the kernel keeps: every control group has one, inherited by the
 groups below it, and the scheduler asks the kernel for each task's class.
-The shell and tools are busybox's. The roadmap, and the reasoning behind each decision, are in
+The CPUs kept for LC work follow the machine's layout: the fastest first,
+close together, in whole cores. The shell and tools are busybox's. The roadmap, and the reasoning behind each decision, are in
 [`docs/DESIGN_LOG.md`](docs/DESIGN_LOG.md).
 
 ## Design
@@ -131,6 +132,22 @@ a small LC program's median wake-up delay was 2.5 to 14 times shorter with
 crunch as batch than with crunch relabelled LC while it ran (in QEMU, on 1
 to 4 CPUs).
 
+### Which CPUs are LC
+
+The scheduler keeps the first N CPUs of an order for LC work, N sized to
+LC demand every millisecond. The order comes from the CPU layout the
+kernel describes in `/sys`, read once when the scheduler loads:
+
+1. the fastest CPUs first (on a phone-style chip, the big cores);
+2. then one memory node, one shared cache and one cluster filled before
+   the next, so a growing pool stays close together;
+3. the hardware threads of a core side by side, and the pool rounded up
+   to whole cores, so a batch task never shares a core with LC work.
+
+For example, booted with CPUs 4 to 7 twice as fast as 0 to 3, the order
+is `4 5 6 7 0 1 2 3` and the probe runs on the fast CPUs. On a machine where all
+CPUs are alike and there are no threads, it is just `0 1 2 3 ...`.
+
 ### When something fails
 
 | What happens | Who notices | What follows |
@@ -172,8 +189,14 @@ git submodule update --init  # once: Kairos Scheduler at the pinned commit
 ./scripts/kernel-build.sh    # put the config together and build the kernel
 ./scripts/image-build.sh     # build init, the services and the scheduler; pack the first file system
 ./scripts/boot-test.sh       # boot unattended and check what the console says
+./scripts/layout-test.sh     # boot several CPU layouts; check where LC work runs
 ./scripts/run-qemu.sh        # boot to a shell; "poweroff" leaves
 ```
+
+`run-qemu.sh` and `boot-test.sh` take a CPU layout as `--smp`, such as
+`--smp 8,clusters=2,cores=2,threads=2`. `run-qemu.sh --qemu ARG` passes
+more to QEMU (memory nodes, for example), and `--dtb FILE` boots with an
+edited device tree; `layout-test.sh` uses both.
 
 Everything built goes to `~/kairos-build` (set `KAIROS_BUILD` for another
 place). `kernel-build.sh --debug` builds a slower kernel that checks
@@ -243,7 +266,10 @@ repository's `main` stays as it was evaluated:
   group's place in the tree;
 - `--class=kernel`: a task's class from the kernel, asked at each
   decision. It still loads on a kernel without our patches, and refuses
-  this option there.
+  this option there;
+- `--split-order=layout`: the order in which CPUs join the LC pool, by
+  the CPU layout, and the pool in whole cores. It prints the order when
+  it starts.
 
 `scripts/scheduler-build.sh`, which `image-build.sh` runs, builds the BPF
 library, bpftool and a header of the kernel's types from the pinned kernel

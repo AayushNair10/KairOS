@@ -19,7 +19,7 @@ and the scheduling policy as a BPF program on sched_ext.
 | 5 | A service manager that sets task classes (done; the shell was split off, see 5b) | cgroups, scheduling policies, event loops | none (a scheduler change on its `kairos-os` branch) |
 | 5b | Our own shell (optional, not scheduled) | parsing, pipes, process groups, job control | none |
 | 6 | Task class as a kernel concept (done: a cgroup controller of our own, read by BPF) | syscall entry, task_struct, user ABI, kfuncs | patch (0001 to 0004) |
-| 7 | LC and batch pools that follow CPU topology | sched domains, NUMA, CPU capacity | policy; maybe a patch |
+| 7 | LC and batch pools that follow CPU topology (done: the loader orders the CPUs by layout; whole cores) | sched domains, NUMA, CPU capacity | config only (a scheduler change on its `kairos-os` branch) |
 | 8 | Scheduler attached before PID 1 | initcalls, kernel threads, loading BPF from inside the kernel | patch (not sized) |
 | 9 | A root file system on a virtio disk | VFS, block layer, virtio drivers, page cache, journaling | config; maybe none |
 | 10 | Memory reclaim that knows LC from batch | page allocator, reclaim, memory cgroups | patch |
@@ -1266,3 +1266,190 @@ Open questions / next:
 - Disk: 3.6 GB free; the lockdep build takes 1.1 GB in
   `~/kairos-build-debug`.
 
+
+## 7. LC and batch pools that follow the CPU layout — 2026-11-24
+
+Options:
+- A: the loader reads the CPU layout from `/sys` once at load and puts
+  the CPUs in an order: fastest first, a core's hardware threads side by
+  side, one cache group filled before the next. The LC pool stays "the
+  first N", rounded to whole cores. Config only, no kernel code.
+- B: a layout-aware policy: the pool grows by whole cores within a cache
+  group; batch borrows an idle LC thread only if the other thread of its
+  core runs no LC work; LC wakeups prefer whole idle cores; CPU sets
+  become kernel CPU masks, lifting the 64-CPU limit.
+- C: cpuset partitions: the service manager gives `lc` chosen whole cores
+  and `batch` the rest. The strongest isolation, even under EEVDF, but
+  batch never borrows an idle LC CPU, and resizing a partition rebuilds
+  the scheduling domains, so it can't follow demand per second.
+- D: a kernel patch that lets the BPF scheduler ask the kernel's own
+  scheduling tree for a CPU's cache group and thread siblings; the policy
+  builds its order from that at load.
+
+My pick and reasoning:
+- "I am thinking between A and B. It depends on whether the CPU rates
+  change on every wakeup. I don't think that is the case, so I will go
+  with A. D might not be the most compatible with our design. I am not
+  sure about C. If pool resizing does not need to be as aggressive, we
+  could go with C."
+- After the verdict and plan: "yes, go ahead with step 1".
+
+Verdict: A.
+- Right: the layout doesn't change while the system runs. Which CPUs are
+  threads of one core, which share a cache and which are fast is fixed;
+  frequency moves but doesn't reorder cores, and the Kairos kernel can't
+  add or remove CPUs. So the order can be computed once, at load.
+- Missed: B's per-wakeup part isn't about the layout changing but about
+  who runs where right now ("is the other thread of this idle LC CPU
+  running LC work?"). A fixed order can't express that, so under A a
+  batch task can still borrow the thread next to a running LC task.
+- Why A anyway: that interference can't be measured here, since QEMU's
+  threads share no real core, and the scheduler's rules were each chosen
+  by measurement. A takes the gains that need none.
+- D, a mistaken rejection: D is compatible with the design (the same
+  policy, with the layout from the kernel instead of `/sys`). It loses
+  because in Kairos the layout never changes while running, so `/sys`
+  read once is as accurate, and the patch would sit in intricate code
+  (domains are rebuilt and swapped under RCU) for no gain today.
+- C, half right: slow resizing is one cost; the bigger one is no
+  borrowing at all, Kairos Scheduler's central idea. And the pool must
+  move fast: it follows a ~64 ms average, re-checked every millisecond.
+
+Where the others fit:
+- B: sched_ext schedulers on machines with hardware threads (from memory,
+  scx_lavd and scx_bpfland prefer whole idle cores and keep tasks within
+  a cache group); Linux's core scheduling applies a per-moment sibling
+  rule in the kernel, for security against side channels.
+- C: isolation over the use of idle CPUs: Kubernetes' static CPU manager
+  gives guaranteed pods exclusive cores; real-time and telecom systems
+  isolate CPUs.
+- D: CPUs that come and go at runtime: cloud VMs that add vCPUs, cpusets
+  rewritten on the fly.
+
+Linux concepts learned:
+- On arm64 the firmware describes the layout in the device tree:
+  `/cpus/cpu-map` (socket, cluster, core, thread), read by
+  `parse_dt_topology()`/`parse_cluster()` in
+  `drivers/base/arch_topology.c`. A CPU's speed is its
+  `capacity-dmips-mhz`, used only if every CPU has one
+  (`topology_parse_cpu_capacity()`), times its reference frequency (or 1),
+  scaled so the fastest is 1024 (`topology_normalize_cpu_scale()`):
+  `/sys/devices/system/cpu/cpuN/cpu_capacity`.
+- `/sys/devices/system/cpu/cpuN/topology/core_cpus_list` and
+  `cluster_cpus_list`; `cache/indexI/level` and `shared_cpu_list` from
+  `drivers/base/cacheinfo.c` (QEMU's L2 is shared by all CPUs); a
+  `nodeK` link per CPU with NUMA. Memory nodes from the device tree's
+  `numa-node-id` (`drivers/of/of_numa.c`).
+- QEMU: `-smp N,clusters=,cores=,threads=` writes the cpu-map; `-numa
+  node,memdev=,cpus=` with `memory-backend-ram` objects writes the nodes
+  (it warns if a cluster spans two); `-machine dumpdtb=FILE` writes its
+  device tree, `fdtput` edits it, `-dtb` boots with it.
+- Scheduling domains (`kernel/sched/topology.c`): one level per
+  `CONFIG_SCHED_SMT`, `SCHED_CLUSTER`, `SCHED_MC`, `NUMA` (SMT, CLS, MC,
+  PKG, NUMA); without them one PKG level. `sched_verbose` prints the tree
+  at KERN_DEBUG, so it needs `ignore_loglevel` on a quiet console
+  (`sched_domain_debug()`).
+- What sched_ext gives BPF: `scx_bpf_cpuperf_cap()`, `scx_bpf_cpu_node()`,
+  `scx_bpf_get_idle_smtmask()` (just the idle mask without SMT); no
+  cache layout.
+- sched_ext keeps the running task and refills its slice when a CPU has
+  nothing else to run (`balance_one()`, `SCX_RQ_BAL_KEEP`, unless
+  `SCX_OPS_ENQ_LAST`), without calling `stopping()`.
+- The verifier: an index into a global array through `MEMBER_VPTR`, a
+  loop through `bpf_for`.
+
+What changed: Kairos Scheduler's LC pool is still "the first N CPUs of an
+order", sized to LC demand every millisecond, but the order now follows
+the CPU layout. At load the loader reads each CPU's speed, memory node,
+last-level cache, cluster and core from `/sys`, and sorts: fastest first,
+then one node, cache and cluster before the next, a core's threads side
+by side (`--split-order=layout`, on the scheduler's `kairos-os` branch;
+number order stays the default, as evaluated). It also marks where each
+core ends, and the policy rounds the pool up to whole cores, so a batch
+task never shares a core with an LC CPU. Four kernel switches give the
+kernel the layout (its scheduling tree, memory nodes). Init starts the
+loader with the new order.
+
+What each step did, in order:
+1. The checks and tooling first, failing: `layout-test.sh` with four
+   layouts, `run-qemu.sh --qemu/--dtb/--dump-dtb`, and a `kairos.layout`
+   mode of the self-test (`17091a6`).
+2. The boot test takes a layout for `--smp` (`c6abf3b`); the four kernel
+   switches (`c077c44`).
+3. The loader's `--split-order=layout` (`kairos-os` `4173ab0`).
+4. The pool rounded up to whole cores (`kairos-os` `a23f30f`).
+5. Init passes the option; the scheduler pin moves (`be59043`).
+
+Found on the way:
+- A lone CPU-bound LC task on an idle machine is counted in lumps: LC
+  demand read 0.06 for seconds, then 4 to 9. The policy adds run time
+  when a task stops running, and sched_ext doesn't stop a task that has
+  no competition (above). The same on the scheduler's `main`.
+- The one class-check failure after step 2 (3230 us as batch) was noise:
+  an interleaved A/B found no difference between the kernels with and
+  without the four switches (below).
+- QEMU numbers a core's threads side by side, so there the layout order
+  differs from number order only for speeds and memory nodes.
+- With the scheduler off, the image has no `/tmp`; hand tests write to `/`.
+- checkpatch's SPDX check now runs (`python3-ply` and `python3-git`
+  installed, with approval).
+
+How it's tested:
+- `./scripts/layout-test.sh`: 16 of 16. Per layout, the order the loader
+  printed, the probe's CPU in 100 samples (90 needed on the order's first
+  two), the speeds and the nodes:
+  4 equal CPUs `0 1 2 3`; 2 clusters x 2 cores x 2 threads
+  `0 1 2 3 4 5 6 7`; CPUs 4-7 twice as fast `4 5 6 7 0 1 2 3`, the probe
+  on CPU 4 100 times; 2 nodes (0: CPUs 0-1, 4-5) `0 1 4 5 2 3 6 7`.
+  Before init's change, the fast layout failed: number order, the probe
+  on the slow CPUs.
+- `./scripts/boot-test.sh`: 21 of 21 at 1, 2, 4 and 8 CPUs, on the
+  threads layout and with `kairos.noscheduler`; on the lockdep build at
+  4 CPUs and the threads layout, and the nodes layout booted: no reports.
+- By hand, threads layout: `--lc-min 3` gave a pool of 4 by layout, 3 by
+  number, 3 by layout with `--lc-max 3`; 3 on 4 CPUs without threads. An
+  LC loop of ~1.1 CPUs of demand: pool 2, 4, 2 by layout; 2, 3, 2 by
+  number.
+- A/B at 4 CPUs, the kernel before and after the four switches, same
+  image, 10 pairs interleaved (`~/kairos-data/kairos-os/2026-11-24-ab-layout`):
+  the probe's median delay, as batch 441 vs 456 us, as LC 2350 vs 2190,
+  without crunch 496 vs 511; Wilcoxon signed-rank, Holm-adjusted p = 1.0
+  for each; all 20 runs passed. One kernel varied 227 to 851 us as batch
+  between boots.
+
+Interview questions:
+1. The LC pool is "the first N CPUs of an order". On a machine with
+   hardware threads, fast and slow cores and two memory nodes, what order
+   do you use, and why does a pool of 3 become 4 on a machine with two
+   threads per core?
+2. How does Linux on arm64 learn which CPUs share a core, a cluster or a
+   memory node, and how fast each CPU is? How did you test unequal CPU
+   speeds in an emulator that has none?
+3. One busy LC task on an idle machine made the measured LC demand read
+   near zero for seconds, then jump to 9 CPUs. What in sched_ext causes
+   that, and why does it matter less than it looks?
+
+Resume line: "Made Kairos Scheduler's latency-critical CPU pool follow
+the machine's CPU layout: the loader orders CPUs by the kernel's topology
+in sysfs (fastest first, one NUMA node, cache and cluster before the
+next, SMT siblings together) and the BPF policy rounds the pool to whole
+cores. Verified placement on emulated SMT, NUMA and mixed-speed layouts
+in QEMU (edited device trees), and found with a 10-pair interleaved A/B
+no measurable latency change from the kernel's topology options."
+
+Open questions / next:
+- B's sibling rule (batch doesn't borrow the other thread of a core
+  running LC work), once component 12 can measure it.
+- The 64-CPU limit: CPU sets are 64-bit numbers throughout the evaluated
+  code.
+- LC demand in lumps for a lone CPU-bound LC task (above); counting run
+  time on the tick too would fix it. Only on an idle machine; not
+  measured under load.
+- The layout test checks placement, not the pool's size; whole-core
+  rounding was checked by hand.
+- A layout that changes while running (CPU hotplug, cpusets) would need
+  the loader restarted; D's way if Kairos ever has one.
+- Push: the scheduler's `kairos-os` (`4173ab0`, `a23f30f`) first, then
+  this repository's component 7 commits.
+- Disk: 9.9 GB free, after removing old copies of editor extensions and
+  of the Claude CLI (with approval).
