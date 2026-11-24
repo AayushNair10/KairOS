@@ -24,8 +24,11 @@
 #   sched_ext  the kernel can take a BPF scheduler
 #   scheduler  Kairos Scheduler was running before init started its first
 #              program
-#   loader     its loader is init's child, has no terminal, and asks the
-#              kernel for each task's class
+#   early      the kernel attached it before it started init: the kernel
+#              said so, and sched_ext's "enabled" line comes before "Run
+#              /init"
+#   loader     its loader is init's child, has no terminal, and adopted
+#              the scheduler attached before init instead of loading one
 #   leftovers  init collected a finished process that it had adopted
 #   terminal   init gave the program it started a terminal of its own
 #   services   the service manager, init's child, runs the two demo
@@ -52,17 +55,19 @@
 #              the computer running QEMU: each emulated CPU is a thread
 #              there, and the delays measure how those threads share the
 #              real CPUs
-#   restart    after its loader was killed, init started the scheduler again
+#   restart    after its loader was killed, the scheduler kept running (no
+#              scheduler was enabled again), and init started a new loader
 #   shutdown   before the power went off, init asked a program that was
 #              still running to finish
 #   unload     at power off, the loader unloaded the scheduler when it was
 #              asked to
 #   poweroff   the system powered off by itself, without a panic
 #
-# With the word kairos.noscheduler, which tells init to leave the scheduler
-# off, the four checks about it expect it off: scheduler (init said so and
-# the kernel has none), loader and restart (no loader was ever started) and
-# unload (the kernel never had a BPF scheduler to unload).
+# With the word kairos.noscheduler, which tells the kernel and init to leave
+# the scheduler off, the five checks about it expect it off: scheduler (init
+# said so and the kernel has none), early (the kernel said so and attached
+# nothing), loader and restart (no loader was ever started) and unload (the
+# kernel never had a BPF scheduler to unload).
 #
 # It exits with 0 only if every check passes.
 
@@ -214,6 +219,34 @@ else
 	bad scheduler "the scheduler was ${scheduler:-not reported} (state ${state:-not reported}) when the first program started"
 fi
 
+# The console's line numbers of the first "enabled" line and of the kernel
+# starting /init (0: not there). Only the part before the self-test's first
+# line counts: the boot itself.
+line_of() {
+	sed '/^kairos\.test: /q' "$log" | tr -d '\r' | grep -n -m 1 -- "$1" | cut -d: -f1 || true
+}
+enabled_at=$(line_of 'sched_ext: BPF scheduler "kairos" enabled')
+init_at=$(line_of '^Run /init as init process')
+if [ $off = 1 ]; then
+	if [ -z "$enabled_at" ] &&
+		grep -q '^kairos: kairos.noscheduler: not attaching Kairos Scheduler' "$log"; then
+		ok early "nothing attached before init, as kairos.noscheduler asks; the kernel said so"
+	elif [ -z "$enabled_at" ]; then
+		bad early "nothing attached, but the kernel didn't say it left the scheduler off"
+	else
+		bad early "a scheduler was enabled during the boot despite kairos.noscheduler"
+	fi
+elif [ -z "$init_at" ]; then
+	bad early "the kernel never started /init"
+elif [ -n "$enabled_at" ] && [ "$enabled_at" -lt "$init_at" ] &&
+	grep -q '^kairos: Kairos Scheduler attached before init' "$log"; then
+	ok early "the kernel attached Kairos Scheduler before it started init"
+elif [ -n "$enabled_at" ] && [ "$enabled_at" -lt "$init_at" ]; then
+	bad early "enabled before init, but the kernel didn't say it attached it"
+else
+	bad early "not attached before init (enabled ${enabled_at:+at console line $enabled_at, }/init at line $init_at)"
+fi
+
 loader=$(fact loader)
 if [ $off = 1 ]; then
 	case $loader in
@@ -222,13 +255,15 @@ if [ $off = 1 ]; then
 	*) bad loader "running despite kairos.noscheduler: $loader" ;;
 	esac
 else
-	rule=$(fact "loader class")
+	mode=$(fact "loader mode")
 	case $loader in
 	"parent 1 terminal 0")
-		if [ "$rule" = "kernel none" ]; then
-			ok loader "init's child, no terminal, the class from the kernel"
+		if [ "$mode" = adopt ]; then
+			ok loader "init's child, no terminal, adopted the scheduler attached before init"
+		elif [ "$mode" = load ]; then
+			bad loader "init's child, but it loaded the scheduler itself"
 		else
-			bad loader "init's child, but the class rule is ${rule:-not reported}"
+			bad loader "init's child, but the self-test didn't say how it got the scheduler"
 		fi
 		;;
 	"") bad loader "not reported" ;;
@@ -338,7 +373,12 @@ if [ $off = 1 ]; then
 	fi
 else
 	case $restart in
-	*" s parent 1") ok restart "running again ${restart% parent 1} after its loader was killed" ;;
+	*" s parent 1 reloads 0")
+		ok restart "the scheduler outlived its killed loader; init started a new loader ${restart% parent 1 *} later"
+		;;
+	*" s parent 1 reloads "*)
+		bad restart "the scheduler went with its killed loader: enabled again ${restart##* reloads } time(s)"
+		;;
 	none | "") bad restart "not running again 20 s after its loader was killed" ;;
 	*) bad restart "$restart" ;;
 	esac

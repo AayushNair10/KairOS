@@ -84,6 +84,14 @@ if [ -n "$loader" ]; then
 	class=$(echo "$args" | sed -n 's/^--class=//p' | tail -n 1)
 	group=$(echo "$args" | sed -n 's/^--batch-cgroup=//p' | tail -n 1)
 	echo "kairos.test: loader class ${class:-policy} ${group:-none}"
+	# Whether it loaded the scheduler itself, or adopted one that was
+	# attached before init started (--adopt: it watches the scheduler the
+	# kernel's attach program pinned).
+	if echo "$args" | grep -q '^--adopt'; then
+		echo "kairos.test: loader mode adopt"
+	else
+		echo "kairos.test: loader mode load"
+	fi
 else
 	echo "kairos.test: loader none"
 fi
@@ -243,13 +251,16 @@ echo "kairos.test: kclass lc/crunch $(kclass lc/crunch) $(procs lc/crunch)"
 service stop crunch >/dev/null 2>&1
 sed -i 's/^class .*/class batch/' $crunch
 
-# Restart. Kill the scheduler's loader outright, as a crash would. The
-# kernel unloads the scheduler as soon as its loader is gone, and init
-# should start it again. Wait up to 20 s for a new loader with the
-# scheduler running, and say how long it took and who started it.
+# Restart. Kill the scheduler's loader outright, as a crash would. Init
+# should start a new one. Wait up to 20 s for a new loader with the
+# scheduler running, and say how long it took, who started it, and how many
+# times a scheduler was enabled meanwhile (the kernel counts enables): 0 if
+# the scheduler outlived its loader, held by its pin; 1 if the kernel
+# unloaded it with the loader and the new loader loaded it again.
 old=$(pidof scx_kairos)
 new=
 if [ -n "$old" ]; then
+	seq=$(cat /sys/kernel/sched_ext/enable_seq)
 	kill -9 "$old"
 	tenths=0
 	while [ $tenths -lt 200 ]; do
@@ -265,7 +276,8 @@ if [ -n "$old" ]; then
 fi
 if [ -n "$new" ]; then
 	set -- $(sed 's/^.*) //' "/proc/$new/stat")
-	echo "kairos.test: restart $((tenths / 10)).$((tenths % 10)) s parent $2"
+	reloads=$(($(cat /sys/kernel/sched_ext/enable_seq) - seq))
+	echo "kairos.test: restart $((tenths / 10)).$((tenths % 10)) s parent $2 reloads $reloads"
 else
 	echo "kairos.test: restart none"
 fi
