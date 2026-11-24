@@ -55,6 +55,15 @@
 #define SCHEDULER	"/bin/scx_kairos"
 
 /*
+ * Where the scheduler is pinned: a folder in the BPF file system. A pin is a
+ * file that holds the scheduler, so it runs whatever happens to the loader;
+ * the loader removes the pin when asked to stop, which unloads it. The
+ * kernel's attach program pins it here before init starts, too.
+ */
+#define BPF_FS		"/sys/fs/bpf"
+#define PINS		BPF_FS "/kairos"
+
+/*
  * The service manager: it starts the services, each in a control group
  * below the group for its class, and starts them again when they end.
  */
@@ -139,11 +148,34 @@ static void say(const char *fmt, ...)
 }
 
 /*
+ * Is a file system mounted on @where? A folder that is a mount point is on a
+ * different device than the folder it sits in.
+ */
+static int mounted(const char *where)
+{
+	char parent[64];
+	struct stat here, above;
+
+	snprintf(parent, sizeof(parent), "%s/..", where);
+	return stat(where, &here) == 0 && stat(parent, &above) == 0 &&
+	       here.st_dev != above.st_dev;
+}
+
+/*
  * Mount one of the kernel's information file systems. They hold no data on
  * any disk: the kernel makes up their contents when they are read.
+ *
+ * One that is mounted already stays as it is. The kernel's attach program
+ * mounts /sys and the BPF file system before init starts, and pins the
+ * scheduler there; each mount of the BPF file system is a separate one, so
+ * mounting again would hide the pins, and a new /sys would hide that mount.
  */
 static int mount_info(const char *type, const char *where)
 {
+	if (mounted(where)) {
+		say("%s was mounted before init; keeping it", where);
+		return 0;
+	}
 	if (mount(type, where, type, 0, NULL) < 0) {
 		say("can't mount %s on %s: %s", type, where, strerror(errno));
 		return -1;
@@ -559,9 +591,18 @@ static int sleep_until(long due)
 	return sigtimedwait(&wanted, NULL, &wait);
 }
 
-/* Start the scheduler's loader, without waiting for anything. */
+/*
+ * Start the scheduler's loader, without waiting for anything.
+ *
+ * If a scheduler is running already, the loader adopts it: the kernel
+ * attached and pinned it before init started, or the last loader was killed
+ * and the pin kept the scheduler running. The adopter loads nothing; it
+ * watches the pinned scheduler and ends, with the same statuses, when the
+ * scheduler does. Otherwise the loader loads it and pins it (--pin).
+ */
 static void launch_scheduler(void)
 {
+	char *const adopt[] = { SCHEDULER, "--adopt", PINS, "--quiet", NULL };
 	/*
 	 * --main-config: the configuration the scheduler's evaluation chose.
 	 * A --class after it changes one part of it, the rule for a task's
@@ -583,20 +624,24 @@ static void launch_scheduler(void)
 	 */
 	char *const by_kernel[] = {
 		SCHEDULER, "--main-config", "--class=kernel",
-		"--split-order=layout", "--quiet", NULL
+		"--split-order=layout", "--pin=" PINS, "--quiet", NULL
 	};
 	char *const by_group[] = {
 		SCHEDULER, "--main-config", "--class=cgroup",
 		"--batch-cgroup=" CGROUPS "/batch", "--split-order=layout",
-		"--quiet", NULL
+		"--pin=" PINS, "--quiet", NULL
 	};
 	char *const by_policy[] = {
-		SCHEDULER, "--main-config", "--split-order=layout", "--quiet", NULL
+		SCHEDULER, "--main-config", "--split-order=layout", "--pin=" PINS,
+		"--quiet", NULL
 	};
 
 	scheduler_started = milliseconds();
-	scheduler = start(kernel_classes ? by_kernel :
-			  class_groups ? by_group : by_policy, 0);
+	if (scheduler_running())
+		scheduler = start(adopt, 0);
+	else
+		scheduler = start(kernel_classes ? by_kernel :
+				  class_groups ? by_group : by_policy, 0);
 }
 
 /*
@@ -684,6 +729,11 @@ static void scheduler_ended(int status)
  * Start Kairos Scheduler at boot, and return once the kernel runs it, its
  * loader has ended, or SCHEDULER_WAIT seconds have passed.
  *
+ * Kairos's kernel attaches the scheduler before it starts init, so usually
+ * it runs already: init only starts a loader to adopt it, and doesn't wait.
+ * A kernel without that (or with kairos.noscheduler, or after a failed
+ * attach) leaves it to init.
+ *
  * Waiting means that no program init starts ever runs under the kernel's
  * default scheduler; only init and the loader do, for the second or so the
  * loader takes. Nothing tells init when the scheduler is in place, so it
@@ -699,6 +749,11 @@ static void start_scheduler(void)
 	sigemptyset(&finished);
 	sigaddset(&finished, SIGCHLD);
 
+	if (scheduler_running()) {
+		say("Kairos Scheduler was attached before init; adopting it");
+		launch_scheduler();
+		return;
+	}
 	say("starting Kairos Scheduler");
 	launch_scheduler();
 
@@ -737,6 +792,7 @@ int main(void)
 
 	mount_info("proc", "/proc");		/* processes and kernel state */
 	mount_info("sysfs", "/sys");		/* devices and kernel settings */
+	mount_info("bpf", BPF_FS);		/* pinned BPF objects */
 	mount_info("devtmpfs", "/dev");		/* one entry per device */
 	make_class_groups();			/* /sys/fs/cgroup, lc, batch */
 
