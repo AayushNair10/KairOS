@@ -2,7 +2,10 @@
 # Boot one disk four times and check that it keeps what it is given, and
 # that its journal brings it back after a power cut.
 #
-# usage: disk-test.sh
+# usage: disk-test.sh [--kernel FILE]
+#
+#   --kernel FILE  boot this kernel image instead of the one kernel-build.sh
+#                  built (see run-qemu.sh), e.g. the lock-checking build's
 #
 # The test works on a copy of the disk image (disk-build.sh), so the image
 # itself stays fresh. Each boot has kairos.test and kairos.disk on its
@@ -32,6 +35,24 @@
 
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
+kernel=()
+while [ $# -gt 0 ]; do
+	case $1 in
+	--kernel)
+		[ $# -ge 2 ] || die "--kernel needs a file"
+		kernel=(--kernel "$2")
+		shift 2
+		;;
+	-h | --help)
+		sed -n '2,/^$/s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"
+		exit 0
+		;;
+	*)
+		die "unknown argument: $1"
+		;;
+	esac
+done
+
 image=$KAIROS_BUILD/disk.img
 copy=$KAIROS_BUILD/disk-test.img
 [ -f "$image" ] || die "no disk image at $image: run scripts/disk-build.sh"
@@ -51,7 +72,7 @@ boot() {
 	local n=$1
 	shift
 	rm -f "$KAIROS_BUILD/disk-test-$n.log"
-	"$REPO_ROOT/scripts/run-qemu.sh" --disk "$copy" --log "$KAIROS_BUILD/disk-test-$n.log" \
+	"$REPO_ROOT/scripts/run-qemu.sh" "${kernel[@]}" --disk "$copy" --log "$KAIROS_BUILD/disk-test-$n.log" \
 		--timeout 120 kairos.test kairos.disk "$@" >/dev/null || true
 }
 
