@@ -603,16 +603,31 @@ echo "kairos.test: relabel lc: crunch $1, below $2; inherit: crunch $3, below $4
 # group below lc and in one below batch each start three long waits: a plain
 # sleep, a poll with a timeout (the shell's read -t) and a futex wait (the
 # probe's -z). Each wait has its own length, so its timer can be told apart
-# (in hundreds of seconds: 31, 33, 35 for LC, 41, 43, 45 for batch).
-# Printed: LC's sleep, poll and futex slack, then batch's ("none": no such
-# timer was found).
-slack() {
-	awk '/ # expires at / {
+# (in hundreds of seconds: 31, 33, 35 for LC, 41, 43, 45 for batch). Only
+# timers that wake a waiting task (hrtimer_wakeup) count: the kernel's own
+# timers can be due at such times too (sched_clock_poll was, at about
+# 4,300 s). The list isn't a snapshot: it is walked by position while
+# timers come and go, so a timer can be listed twice or missed; a timer is
+# known by its address, and the list is read up to three times. Printed:
+# LC's sleep, poll and futex slack, then batch's ("none": no such timer
+# was found; "many": more than one).
+slackread() {
+	awk '/^ #[0-9]+: / {
+		timer = $2
+		f = $3
+	}
+	/ # expires at / && f == "hrtimer_wakeup," {
 		match($0, /\[in -?[0-9]+ to -?[0-9]+ nsecs\]/)
 		split(substr($0, RSTART + 4, RLENGTH - 11), t, " to ")
 		k = int(t[1] / 1e11)
-		if (k == 31 || k == 33 || k == 35 || k == 41 || k == 43 || k == 45)
-			found[k] = t[2] - t[1]
+		if (k == 31 || k == 33 || k == 35 || k == 41 || k == 43 || k == 45) {
+			# Decided first: assigning to found[k] creates it. The
+			# same timer (address) may be listed twice: the list is
+			# walked by position while timers come and go.
+			v = (k in found && which[k] != timer) ? "many" : t[2] - t[1]
+			found[k] = v
+			which[k] = timer
+		}
 	}
 	END {
 		n = split("31 33 35 41 43 45", ks, " ")
@@ -622,6 +637,17 @@ slack() {
 			printf "%s ", (ks[i] in found) ? found[ks[i]] : "none"
 		}
 	}' /proc/timer_list
+}
+# The walk can also miss a timer: read the list up to three times.
+slack() {
+	for try in 1 2 3; do
+		r=$(slackread)
+		case "$r" in
+		*none* | *many*) ;;
+		*) break ;;
+		esac
+	done
+	echo "$r"
 }
 slackpids=
 for class in lc batch; do
