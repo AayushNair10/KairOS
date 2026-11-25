@@ -29,6 +29,7 @@
  * Process 1 must never finish. The kernel panics if it does.
  */
 
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -257,6 +258,51 @@ static void switch_on_memory_controller(void)
 }
 
 /*
+ * The I/O controller, the same way: every disk request carries the group
+ * it is for, so that Kairos's kernel can serve LC's requests before
+ * batch's, and every service's disk use is counted on its own.
+ */
+static void switch_on_io_controller(void)
+{
+	if (switch_on(CGROUPS, "+io") == 0) {
+		switch_on(CGROUPS "/lc", "+io");
+		switch_on(CGROUPS "/batch", "+io");
+	}
+}
+
+/*
+ * The disks' I/O scheduler, mq-deadline, serves requests by priority class
+ * (LC's before batch's in Kairos's kernel), but serves a waiting request
+ * of a lower class anyway once it has waited this long: batch's disk
+ * requests wait at most 2 s, as Kairos Scheduler lets batch work wait at
+ * most 2 s for a CPU (its --max-wait-ms). The kernel's default is 10 s.
+ */
+#define IO_AGING_MS	"2000"
+
+static void set_io_aging(void)
+{
+	char path[300];
+	struct dirent *e;
+	DIR *d = opendir("/sys/block");
+	int fd;
+
+	while (d && (e = readdir(d))) {
+		if (e->d_name[0] == '.')
+			continue;
+		snprintf(path, sizeof(path), "/sys/block/%s/queue/iosched/prio_aging_expire",
+			 e->d_name);
+		fd = open(path, O_WRONLY);
+		if (fd < 0)
+			continue;	/* another scheduler, or none */
+		if (write(fd, IO_AGING_MS, strlen(IO_AGING_MS)) < 0)
+			say("can't set %s: %s", path, strerror(errno));
+		close(fd);
+	}
+	if (d)
+		closedir(d);
+}
+
+/*
  * Kairos's kernel keeps a class for every group: its kairos controller, on
  * in every group, gives each a kairos.class file. A group's class is "lc",
  * "batch", or "inherit" (its parent's, the default); the root is LC. So
@@ -289,8 +335,10 @@ static void make_class_groups(void)
 		       switch_on_cpu_controller() == 0;
 	if (!class_groups)
 		say("without its control groups, Kairos Scheduler takes a task's class from its scheduling policy");
-	else
+	else {
 		switch_on_memory_controller();
+		switch_on_io_controller();
+	}
 	kernel_classes = class_groups && set_batch_class() == 0;
 }
 
@@ -1077,6 +1125,7 @@ int main(void)
 	 */
 	mount_info("tmpfs", "/run");
 	make_class_groups();			/* /sys/fs/cgroup, lc, batch */
+	set_io_aging();				/* batch's disk requests wait <= 2 s */
 
 	/* Where the shell looks for programs. Everything is in /bin. */
 	setenv("PATH", "/bin", 1);
