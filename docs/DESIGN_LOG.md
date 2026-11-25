@@ -24,7 +24,7 @@ and the scheduling policy as a BPF program on sched_ext.
 | 9 | A root file system on a virtio disk (done: a two-stage boot from the initramfs to ext4) | VFS, block layer, virtio drivers, page cache, journaling | config only |
 | 10 | Memory reclaim that knows LC from batch (done: reclaim, the allocation reserve and the OOM killer follow the class) | page allocator, reclaim, memory cgroups | patch (0007 to 0010) |
 | 11 | Block I/O that knows LC from batch (done: batch's requests get the idle I/O class; mq-deadline serves LC first, batch waits at most 2 s) | I/O schedulers, I/O priority, cgroup writeback | patch (0011, 0012) |
-| 12 | Measurement at real speed | needs QEMU on the Mac (hvf) or a second VM; ask first | none |
+| 12 | Measuring Kairos (done: inside the VM: instruction-counted time, counts from the kernel's trace events, and a real-speed check in the dev VM on its own kernel) | tracing, measurement design, emulation against hardware virtualisation | none |
 | 13 | Native scheduling class: decide with measurements | the scheduler core | maybe |
 
 - Components 1 to 5 need no kernel changes. They end with a system that
@@ -2206,3 +2206,221 @@ Open questions / next:
 - Push: this repository's component 11 commits.
 - Next on the roadmap: component 12, measurement at real speed (needs
   QEMU on the Mac or a second VM: ask first).
+
+## 12. Measuring Kairos: what emulation can and can't tell — 2026-11-25
+
+Options:
+- A: QEMU on the Mac with hardware acceleration (hvf): the same kernel,
+  first file system and disk at real speed; most of the test tooling
+  carries over. Needs QEMU installed on the Mac and runs there.
+- B: Kairos as its own VM on Apple's Virtualization framework (vfkit or
+  a small Swift launcher): closest to how the dev VM runs, but no device
+  tree edits or disk throttling.
+- C: real hardware (a Raspberry Pi 5): real cores, storage and firmware;
+  board support, boot and drivers to add.
+- D: stay emulated inside the VM and measure what speed can't distort:
+  instruction-counted time, counts from the kernel's trace events, timings
+  calibrated within a run.
+
+My pick and reasoning:
+- "A or D, since I don't want anything to leak outside the VM. Also, A
+  could be an option if it shows better results. It's up to you."
+- After the verdict and plan: "I can just compare it with EEVDF and all,
+  run on this VM, so it's OK."
+
+Verdict: D.
+- The constraint given decides it: A, B and C all run outside the VM. "A
+  if it shows better results" can't be known without leaving the VM to
+  find out; A stays the natural next step if that rule is relaxed, and
+  everything built here carries over.
+- Added during the work: the dev VM itself runs at real speed (Apple's
+  hypervisor) with sched_ext, and loading a scheduler there is allowed.
+  So D gained a real-speed cross-check without leaving the VM: the same
+  probe program on the VM's own kernel (Ubuntu's, without our patches).
+- Grading: keeping to the stated constraint was right, and comparing
+  against EEVDF on this VM was a good addition: it turned "is the method
+  repeatable" into "does the method rank schedulers the way real speed
+  does", which is the question that mattered.
+
+Where the others fit (from memory):
+- A: how kernel developers usually measure: a hardware-accelerated VM
+  (KVM, hvf), the guest at near-native speed.
+- B: how macOS-native tools run Linux (Lima, Docker Desktop, Podman
+  machine).
+- C: bringing a system up on a board; the only way to see real firmware,
+  interrupts and storage.
+- D's instruction counting: QEMU's record and replay, deterministic
+  testing, and cycle-level research simulators (gem5 runs the other way:
+  slow, but with caches and pipelines modelled).
+
+Linux concepts learned:
+- Tracing (`/sys/kernel/tracing`, tracefs): one ring buffer per CPU
+  (`buffer_size_kb` is per CPU); `events/<system>/<event>/enable` and
+  `tracing_on`; when full it overwrites its oldest events and counts
+  them in `per_cpu/cpuN/stats` ("overrun"). Each event's text comes from
+  its `TP_printk` (`include/trace/events/sched.h`, `block.h`).
+- `sched_wakeup` (`kernel/sched/core.c`) and `sched_switch` (from
+  `__schedule()`; a preempted task's state shows as "R+").
+- `block_rq_insert` (mq-deadline's `dd_insert_request()`) and
+  `block_rq_issue` (`blk_mq_start_request()`, called by the driver):
+  a request taken out of the scheduler with no free device slot waits on
+  the hardware queue's dispatch list (`blk_mq_dispatch_rq_list()`) and is
+  sent before anything still in the scheduler. The I/O class is printed
+  lower case (be, idle).
+- A process's `comm` is the name it was started with (exec's file name,
+  so a link's name), which is how trace events name it.
+- The cpu controller's `cpu.idle`: the group's tasks become idle work;
+  EEVDF preempts an idle task at once for a waking non-idle one
+  (`check_preempt_wakeup_fair()`, `se_is_idle()`). Per task: `SCHED_IDLE`,
+  `SCHED_BATCH`.
+- Timer slack (`/proc/PID/timerslack_ns`, 50 µs for ordinary tasks): a
+  sleep's timer may end that much late, so wakeups can be grouped.
+- Pipe wakeups are synchronous wakeups (`wake_up_interruptible_sync_poll()`,
+  `fs/pipe.c`): a hint that the waker is about to sleep.
+- QEMU: `-icount shift=N,sleep=off` needs single-threaded TCG (one host
+  thread, the CPUs in turns); ordinary TCG runs a host thread per CPU
+  (MTTCG). An idle CPU waits in WFI, and the host has to wake its thread.
+
+What changed: Kairos can now be measured in three ways without leaving
+the VM, each with known blind spots, and its tests count events where
+they can. Instruction-counted time (QEMU's icount, `--icount` or
+`KAIROS_ICOUNT`) makes timings repeatable and independent of the host,
+so runs go in parallel. The self-test reads the kernel's trace events:
+for the disk, how many requests overtake an LC read; for the CPU, how
+many tasks have an LC task's CPU before it runs; and it reports any
+events lost. Two new tests, an LC program's wakeup delay with batch busy
+(`cpu-test.sh`) and a pipe ping-pong (`overhead-test.sh`), run against
+Linux's own scheduler too, and against it with batch as an idle group.
+A real-speed check runs the same probe program in the dev VM itself, on
+its own kernel. Nothing in the kernel or the scheduler changed.
+
+What each step did, in order:
+1. Instruction-counted time in `run-qemu.sh` (`47066ff`).
+2. Counts from trace events: `cpu-test.sh`, and the order check in
+   `io-test.sh` (`a148045`).
+3. The probe's ping-pong and `overhead-test.sh` (`9ff5827`).
+4. The comparisons (no code change): instruction-counted (10 rounds, 4
+   runs at once), ordinary emulation (10 rounds, one at a time), 1 CPU
+   instruction-counted (10 rounds), and real speed in the dev VM (10
+   rounds).
+5. The write-up: the README's "Measuring Kairos", this entry.
+
+Found on the way:
+- The first order count (requests sent to the disk while an LC read
+  waited) failed with the hook on: 1.01 on average. One is expected: with
+  a 1-deep disk, the next request is already out of the scheduler,
+  waiting for the slot. The check now counts requests that came in after
+  the LC read and still went first: 0.00 on, 9.11 off.
+- The first CPU count (tasks switched to before the LC task) was 0 for
+  every setup: the delay comes from the task already running when the LC
+  task wakes, not from others queued ahead. The count now includes it:
+  with batch busy, about 1 for every scheduler, so the question is only
+  how soon that task is preempted, which only time can show.
+- The instruction-counted ping-pong put Kairos Scheduler at +83% over
+  EEVDF, while the scheduler project's E7 at real speed had it taking
+  18% less time. A 1-CPU run gave the same +83%, so the extra
+  instructions are its own, not work on other CPUs. Rerun at real speed
+  today: +22%, not significant on its own (p = 0.11). E7's result isn't
+  explained (a guess: the scheduler has changed since its commit, and
+  the benchmark program differs).
+- With every CPU busy, instruction-counted wakeups took about 250 µs for
+  every scheduler: the woken CPU waits for its turn. On 1 CPU all three
+  are at 57-58 µs.
+- In ordinary emulation, waking an idle emulated CPU takes about 0.5 ms:
+  the LC program is as late with no batch at all as with it. In the real
+  VM too, an idle CPU wakes more slowly (median 263-442 µs) than a busy
+  one is preempted (57 µs).
+- The 50 µs timer slack is the floor of every probe measurement.
+- Component 5's open question (EEVDF faster than Kairos Scheduler in
+  emulation): within emulation's floor; 10 rounds, no difference (p =
+  0.32).
+- Disk timings under instruction-counted time are meaningless: the disk
+  is slowed in real time while the guest's clock skips ahead whenever
+  every CPU waits for it (a read "alone" in 10-790 µs). The counts there
+  agree with ordinary emulation.
+
+How it's tested:
+- The comparisons (`~/kairos-data/kairos-os/2026-11-25-measure/`:
+  `measure.sh`, `realspeed.sh`, `analyze.py`, `summary.txt`), paired by
+  round, exact Wilcoxon signed-rank, Holm-adjusted within each table. k:
+  Kairos Scheduler; e: EEVDF; i: EEVDF with batch as idle work.
+  - Ping-pong, one CPU, k / e: instruction-counted 14.36 / 7.85 µs (10 of
+    10, p = 0.004; each config within 0.1% over 10 runs); ordinary 137.7
+    / 85.8 µs (10 of 10, p = 0.004); real speed 2.40 / 1.96 µs (k lower
+    in 2 of 10, p = 0.11). Any CPU: 18.4 / 13.5; 94.8 / 88.9; 28.0 / 26.9
+    µs (real speed p = 0.02).
+  - LC wakeup with batch busy, median and 99th percentile, k / e / i:
+    instruction-counted 4 CPUs 220 / 267 / 205 µs and 349 / 291 / 414 µs
+    (no difference, p ≥ 0.86); ordinary 521 / 598 / 455 µs and 3.5 / 4.4
+    / 3.2 ms (p ≥ 0.32); 1 CPU instruction-counted 58 / 57 / 57 µs (k 1
+    µs later in 10 of 10, p = 0.004); real speed 57 / 58 / 56 µs and
+    582 / 1,741 / 585 µs (k against e: 9 of 10, p = 0.008; k against i:
+    p = 0.77). Relabelled LC (Kairos Scheduler): 888 µs instruction-
+    counted, 2.4 ms ordinary, 2.7 ms on 1 CPU (10 of 10, p = 0.002).
+    No trace events lost in any run.
+  - Disk, hook on / off: requests overtaking an LC read 0.00 / 9.56
+    (ordinary, 5 of 5) and 0.00 / 5.53 (instruction-counted, 2 of 2); LC
+    read 13.9 / 86.0 ms, fsync 45.1 / 293.1 ms (ordinary, 5 of 5; with 5
+    pairs the exact test can't go below p = 0.0625 per metric; component
+    11's 10 pairs gave p = 0.0098).
+  - Memory, instruction-counted, hooks on / off (2 pairs): LC pages read
+    back 97, 92 / 60,731, 57,877; LC stalled 4, 2 / 401, 351 ms.
+- The suite, in ordinary emulation, one at a time: `boot-test.sh` 29 of
+  29 at 1, 4 and 8 CPUs, with kairos.noscheduler and with --no-disk;
+  `layout-test.sh` 16 of 16; `disk-test.sh` 6 of 6; `memory-test.sh` 1
+  of 1; `io-test.sh` 4 of 4 (order: 0.00 requests overtook an LC read,
+  0.95 reached the disk while one waited; batch's requests came in as
+  907 idle, 2 best-effort); `cpu-test.sh` 2 of 2 (324 µs as batch, 2,176
+  µs as LC), with kairos.noscheduler 1 of 1; `overhead-test.sh` reported
+  (134.9 µs a round trip on one CPU); `kernel-check.sh`: 12 patches ok.
+  On a quiet VM a boot test took about 30 s, the layout test 31 s.
+- Under instruction-counted time: `boot-test.sh` 29 of 29 at 1 CPU (3
+  runs); at 4 CPUs in 7 of 8 runs. Once the class check failed (312 µs as
+  batch, 591 µs as LC; it wants at most half): the CPUs' turns put a floor
+  under as-batch and narrow the ratio. At 1 CPU it is 56 µs against 1.7
+  to 3.4 ms.
+
+Interview questions:
+1. Your instruction-counted runs repeat to 0.1%, yet they put the BPF
+   scheduler's cost at +83% over EEVDF where real speed says +22%. How
+   can a perfectly repeatable measurement be wrong, and what is it still
+   good for?
+2. In both emulators, Kairos Scheduler, EEVDF and EEVDF with idle batch
+   gave the same LC wakeup latency, but at real speed their 99th
+   percentiles differed threefold. What hid the difference in each
+   emulator, and how did you show it?
+3. How did you judge the I/O hook from the kernel's trace events, and
+   why does at least one request reach the disk while an LC read waits,
+   even with perfect priority?
+
+Resume line: "Built a measurement setup for Kairos inside a laptop VM:
+deterministic instruction-counted QEMU runs (repeatable to 0.1%, run in
+parallel), counts from kernel trace events (disk requests overtaking a
+latency-critical read: 9.6 to 0 with the I/O hook), and a real-speed
+cross-check against Linux's EEVDF. Found that emulation hid wakeup
+latency differences and overstated the BPF scheduler's overhead fourfold;
+at real speed, Kairos Scheduler cut the latency-critical program's
+99th-percentile wakeup delay to a third of EEVDF's with SCHED_BATCH batch
+work (10 rounds, p = 0.008), matching SCHED_IDLE batch."
+
+Open questions / next:
+- Our kernel patches (the class lookup, the memory and I/O hooks) have no
+  real-speed numbers: that needs our kernel at real speed, option A (QEMU
+  with hardware acceleration on the Mac), if the rule about staying in
+  the VM is relaxed.
+- Hardware threads: component 7's sibling rule stays unmeasured; the M2
+  has none.
+- E7 (2026-11-02) had Kairos Scheduler's pipe round trip 18% faster than
+  EEVDF's; today's real-speed run has it 22% slower (p = 0.11). Not
+  explained.
+- The CPU test's probe only wakes up. Ranking Kairos Scheduler against
+  SCHED_IDLE batch needs a real service: the scheduler repo's E3-idle
+  found it ahead.
+- For component 13: at real speed, the BPF path costs about 0.4 µs more
+  per round trip on one CPU (about 0.2 µs per wakeup and task switch),
+  and isn't significant on its own; that bounds what a native port could
+  save. In instruction counts it is about 6,200 instructions a round
+  trip (1 CPU: 14,062 against 7,825).
+- Push: this repository's component 12 commits.
+- Next on the roadmap: component 13, a native scheduling class: decide
+  with these measurements.

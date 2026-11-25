@@ -28,7 +28,9 @@ groups below it, and the scheduler asks the kernel for each task's class.
 The CPUs kept for LC work follow the machine's layout: the fastest first,
 close together, in whole cores. When memory runs short, the kernel takes it
 from batch work first, and kills batch work first if it runs out; when the
-disk is busy, LC's requests go first. The shell and tools are busybox's. The roadmap, and the reasoning behind each decision, are in
+disk is busy, LC's requests go first. Each of these is measured against
+Linux's own scheduler and with its hook turned off (see
+[Measuring Kairos](#measuring-kairos)). The shell and tools are busybox's. The roadmap, and the reasoning behind each decision, are in
 [`docs/DESIGN_LOG.md`](docs/DESIGN_LOG.md).
 
 ## Design
@@ -230,6 +232,53 @@ writer at work, an LC program's reads took about 11 ms instead of about
 | Memory runs out | the kernel | It kills a batch program before any LC one. |
 | The kernel keeps no classes (one without our patches) | init: there is no `kairos.class` | It says so and starts the scheduler with the older rule: batch is anything below the group `batch`. |
 
+## Measuring Kairos
+
+Kairos is built and tested in a VM on a laptop that can't nest hardware
+virtualisation, so QEMU emulates every instruction, 10 to 50 times
+slower than real. There are three ways to measure without leaving that
+VM, and each one is blind to something:
+
+| | Ordinary emulation | Instruction-counted time | Real speed |
+|---|---|---|---|
+| What runs | Kairos's kernel; the emulated CPUs in parallel | Kairos's kernel; the emulated CPUs take turns | the VM's own kernel (Ubuntu's, with sched_ext): Kairos Scheduler without our kernel patches |
+| Timings | depend on the VM's load: one run at a time, compared in interleaved pairs | the clock advances per instruction: repeatable to 0.1%, runs can go in parallel | real, with the host's noise |
+| Blind to | anything faster than waking an emulated CPU (about 0.5 ms) | cost per instruction (caches, how many run per cycle); with every CPU busy, a woken task waits for its CPU's turn; a disk that is slow in real time looks fast | our kernel patches |
+
+Counts of events from the kernel's own trace points don't depend on the
+clock at all, so the tests count where they can: how many disk requests
+overtake an LC read, how many tasks have an LC task's CPU before it runs,
+how many of LC's pages are read back from the disk.
+
+What the three showed, Kairos Scheduler against Linux's own scheduler
+(EEVDF), in 10 interleaved rounds each unless noted
+(`~/kairos-data/kairos-os/2026-11-25-measure/`, outside the repository):
+
+| | Ordinary emulation | Instruction-counted | Real speed |
+|---|---|---|---|
+| Disk: requests that overtake an LC read, hook on / off | 0.00 / 9.6 (5 pairs) | 0.00 / 5.5 (2 pairs) | not run: needs our kernel |
+| Memory: LC pages read back from the disk, hooks on / off | 10-pair comparison in component 10 | under 100 / about 59,000 (2 pairs) | not run: needs our kernel |
+| An LC wakeup with batch busy on every CPU: Kairos Scheduler / EEVDF / EEVDF with batch as idle work | no difference (median about 0.5 ms for all three, the same as with no batch at all) | no difference on 4 CPUs; on 1 CPU all three are at the floor, Kairos Scheduler 1 µs later | median the same for all three (57 µs, mostly the 50 µs timer slack); 99th percentile 0.58 / 1.74 / 0.59 ms |
+| A pipe round trip (2 wakeups, 2 task switches) on one CPU: Kairos Scheduler / EEVDF | 138 / 86 µs (+60%) | 14.4 / 7.9 µs (+83%), repeating to 0.1% | 2.40 / 1.96 µs (+22%) |
+
+- **Counts carry over from one method to another; times don't.** The
+  disk and memory results hold under instruction-counted time, while the
+  disk's own timings there are meaningless.
+- **Neither emulation can rank schedulers by wakeup latency.** Each has
+  a floor larger than the differences: waking an emulated CPU, or
+  waiting for its turn. Both still catch a scheduler that doesn't
+  preempt at all: with the busy loops relabelled LC, the LC program waits
+  4 to 46 times longer.
+- **At real speed, Kairos Scheduler cuts the LC program's 99th percentile
+  to a third** of EEVDF's with batch as ordinary background work
+  (`SCHED_BATCH`; 9 of 10 rounds, p = 0.008), and matches EEVDF with
+  batch as idle work (`SCHED_IDLE`). This probe only wakes up; the
+  scheduler's own evaluation, with a real service under bursts, found it
+  ahead of `SCHED_IDLE` batch as well.
+- **Instruction counts overstate the BPF scheduler's cost about fourfold.**
+  Its decisions take more instructions than EEVDF's, but cheap ones: at
+  real speed a round trip costs about 0.4 µs more.
+
 ## Layout
 
 ```
@@ -266,6 +315,8 @@ git submodule update --init  # once: Kairos Scheduler at the pinned commit
 ./scripts/disk-test.sh       # boot one disk four times, with a power cut
 ./scripts/memory-test.sh     # memory pressure: does LC keep its memory?
 ./scripts/io-test.sh         # a slowed disk: do LC's requests go first?
+./scripts/cpu-test.sh        # busy batch work: how late are LC's wakeups?
+./scripts/overhead-test.sh   # what a wakeup and a task switch cost
 ./scripts/run-qemu.sh        # boot to a shell; "poweroff" leaves
 ```
 
@@ -278,6 +329,11 @@ writes when QEMU ends; the tests boot that way.
 `--smp 8,clusters=2,cores=2,threads=2`. `run-qemu.sh --qemu ARG` passes
 more to QEMU (memory nodes, for example), and `--dtb FILE` boots with an
 edited device tree; `layout-test.sh` uses both.
+
+`cpu-test.sh` and `overhead-test.sh` measure Linux's own scheduler
+instead with `kairos.noscheduler`. `KAIROS_ICOUNT=0` runs any test in
+instruction-counted time (`run-qemu.sh --icount`): see
+[Measuring Kairos](#measuring-kairos) for what that can and can't show.
 
 Everything built goes to `~/kairos-build` (set `KAIROS_BUILD` for another
 place). `kernel-build.sh --debug` builds a slower kernel that checks

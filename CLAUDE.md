@@ -212,7 +212,9 @@ image/           the first file system: initramfs.list (its files),
                  /sys and the BPF file system, loads the scheduler with
                  --pin-and-exit /sys/fs/bpf/kairos; output to /dev/kmsg),
                  selftest (what a boot test runs in place of the shell;
-                 with kairos.layout, the layout test's short version),
+                 with kairos.layout, the layout test's short version;
+                 kairos.cpu, kairos.overhead, kairos.io count from the
+                 kernel's trace events and report events lost),
                  services/ (one description per service: class, start,
                  run; packed into /etc/kairos/services) and init.fallback
                  (a shell script that can stand in for init: boot with
@@ -226,8 +228,14 @@ scripts/         kernel-fetch.sh, kernel-export.sh, kernel-check.sh,
                  an LC program re-reads 16 MB every 2 s; judged by the LC
                  group's own refaults), io-test.sh (a slowed disk:
                  --disk-limit 200, virtio_blk.queue_depth=1, 64 scheduler
-                 slots; LC's reads with 8 batch readers, fsync, batch's
-                 io.stat, starvation), lib.sh
+                 slots; LC's reads with 8 batch readers, how many
+                 requests overtook them (trace events), fsync, batch's
+                 io.stat, starvation), cpu-test.sh (an LC program's
+                 wakeup delay with crunch as batch and relabelled LC, and
+                 how many tasks had its CPU first; kairos.noscheduler for
+                 EEVDF, plus kairos.batchidle for batch as an idle group),
+                 overhead-test.sh (the probe's ping-pong: a wakeup and a
+                 task switch), lib.sh
 docs/            DESIGN_LOG.md, notes
 userspace/       init/init.c: Kairos's init, process 1, one statically
                  linked C program, in two stages. From the initramfs with
@@ -250,7 +258,10 @@ userspace/       init/init.c: Kairos's init, process 1, one statically
                  service/service.c: the service manager (each service in
                  a control group under its class), the service command
                  and batch (the same program). probe/probe.c: the demo LC
-                 program. Planned (optional): our own shell
+                 program (also disk modes, and -t: a pipe ping-pong;
+                 /bin/lcprobe is a link to it, so trace events can tell
+                 the measured one apart). Planned (optional): our own
+                 shell
 ```
 - Build and boot: `scripts/kernel-build.sh` (config + build into
   `~/kairos-build`; `--config-only` to check the config; `--debug` adds
@@ -269,7 +280,13 @@ userspace/       init/init.c: Kairos's init, process 1, one statically
   FILE` writes QEMU's device tree and `--dtb FILE` boots with one (edited
   with `fdtput`, e.g. unequal `capacity-dmips-mhz`).
   `scripts/layout-test.sh [LAYOUT...]` boots four CPU layouts and checks
-  the loader's CPU order and where the probe ran (~8 min).
+  the loader's CPU order and where the probe ran (31 s in component
+  12's run; ~8 min was noted before).
+  `run-qemu.sh --icount SHIFT` (or `KAIROS_ICOUNT=SHIFT` for any test
+  script) runs in instruction-counted time: the guest's clock advances
+  2^SHIFT ns per instruction, the CPUs take turns on one host thread, and
+  idle time is skipped. Its timings don't depend on the host, so such runs
+  can go in parallel (each in its own `KAIROS_BUILD` folder).
 - The image has no `/tmp`: in hand tests, write files to `/`.
 - Memory: `kairos.nomemclass` turns the memory hooks off, so one kernel
   can be compared with and without them; compare in interleaved pairs
@@ -303,7 +320,25 @@ userspace/       init/init.c: Kairos's init, process 1, one statically
 - Timing measured in QEMU is emulated (no KVM): compare configurations
   against each other in the same run, never against real hardware, and
   don't judge timing when the machine has more CPUs than the VM (each
-  emulated CPU is a thread on the VM's CPUs).
+  emulated CPU is a thread on the VM's CPUs). Prefer counts from the
+  kernel's trace events, which don't depend on the clock. Neither
+  emulation can rank schedulers by wakeup latency: waking an idle
+  emulated CPU takes about 0.5 ms, and in instruction-counted time a busy
+  CPU waits for its turn (about 250 µs); every probe measurement also
+  includes up to 50 µs of timer slack. Instruction counts overstate the
+  BPF scheduler's cost (+83% against +22% at real speed), and disk timings
+  under them are meaningless (the disk is slowed in real time while the
+  clock skips idle time). Use instruction-counted time to measure, not
+  for timing checks: on 4 CPUs the boot test's class check failed there
+  once in 8 runs. Component 12's measurements:
+  `~/kairos-data/kairos-os/2026-11-25-measure/`.
+- Real speed: the dev VM itself runs at real speed with sched_ext, so
+  scheduler timings can be checked there, on its own kernel (Ubuntu's,
+  without our patches), with the same probe program
+  (`~/kairos-build/userspace/probe` is static) and the scheduler repo's
+  build; loading and unloading a scheduler there is the allowed sudo
+  (`realspeed.sh` in component 12's folder). Run it only on a quiet VM,
+  never during other tests.
 - A new behaviour of init gets a fact printed by `image/selftest` and a
   check in `scripts/boot-test.sh`. Add the check first and show it failing,
   then make the change. Words for user space on the kernel's command line
