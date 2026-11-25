@@ -13,6 +13,7 @@
  *
  * usage: probe [-p PERIOD_US] [-w WORK_US] [-r REPORT_S] [-n REPORTS]
  *              [-d FILE | -f FILE]
+ *        probe -t TRIPS
  *
  *   -p  time between wakeups (default 10000: 10 ms)
  *   -w  work done after each wakeup, measured on the clock (default 200).
@@ -26,6 +27,10 @@
  *       every read goes to the disk; report how long the reads took
  *   -f  disk mode, writes: at each wakeup, write 4 KiB to FILE and wait
  *       until it is on the disk (fsync); report how long that took
+ *   -t  ping-pong: two processes pass a byte back and forth through two
+ *       pipes TRIPS times; report the time per round trip. Each one is two
+ *       wakeups and two task switches, so it measures the cost of those:
+ *       the scheduler's own path, and the system calls around it.
  */
 
 #define _GNU_SOURCE	/* O_DIRECT */
@@ -37,6 +42,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 
 #define NSEC_PER_SEC	1000000000LL
 #define NSEC_PER_USEC	1000LL
@@ -55,6 +61,41 @@ static int compare(const void *a, const void *b)
 	long long x = *(const long long *)a, y = *(const long long *)b;
 
 	return (x > y) - (x < y);
+}
+
+/* -t: the ping-pong, then exit. */
+static int ping_pong(long long trips)
+{
+	int there[2], back[2];
+	long long i, start, took;
+	char c = 0;
+	pid_t child;
+
+	if (pipe(there) < 0 || pipe(back) < 0) {
+		fprintf(stderr, "probe: pipe: %s\n", strerror(errno));
+		return 1;
+	}
+	child = fork();
+	if (child < 0) {
+		fprintf(stderr, "probe: fork: %s\n", strerror(errno));
+		return 1;
+	}
+	if (child == 0) {
+		for (i = 0; i < trips; i++)
+			if (read(there[0], &c, 1) != 1 || write(back[1], &c, 1) != 1)
+				_exit(1);
+		_exit(0);
+	}
+	start = now_ns();
+	for (i = 0; i < trips; i++)
+		if (write(there[1], &c, 1) != 1 || read(back[0], &c, 1) != 1) {
+			fprintf(stderr, "probe: the other side ended\n");
+			return 1;
+		}
+	took = now_ns() - start;
+	waitpid(child, NULL, 0);
+	printf("probe: %lld round trips; took: %lld ns each\n", trips, took / trips);
+	return 0;
 }
 
 /* A whole number from an option, or exit. */
@@ -81,7 +122,7 @@ int main(int argc, char **argv)
 	int opt, writes = 0, fd = -1;
 	void *buf = NULL;
 
-	while ((opt = getopt(argc, argv, "p:w:r:n:d:f:")) != -1) {
+	while ((opt = getopt(argc, argv, "p:w:r:n:d:f:t:")) != -1) {
 		switch (opt) {
 		case 'p':
 			period = number(optarg) * NSEC_PER_USEC;
@@ -100,8 +141,10 @@ int main(int argc, char **argv)
 			disk = optarg;
 			writes = opt == 'f';
 			break;
+		case 't':
+			return ping_pong(number(optarg));
 		default:
-			fprintf(stderr, "usage: probe [-p PERIOD_US] [-w WORK_US] [-r REPORT_S] [-n REPORTS] [-d FILE | -f FILE]\n");
+			fprintf(stderr, "usage: probe [-p PERIOD_US] [-w WORK_US] [-r REPORT_S] [-n REPORTS] [-d FILE | -f FILE] | -t TRIPS\n");
 			return 2;
 		}
 	}

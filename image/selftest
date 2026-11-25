@@ -249,6 +249,22 @@ if grep -qw kairos.cpu /proc/cmdline; then
 	exit 0
 fi
 
+# Overhead mode (scripts/overhead-test.sh): with kairos.overhead, what a
+# wakeup and a task switch cost: the probe's ping-pong, 20000 round trips,
+# first with both processes on CPU 0, then wherever the scheduler puts
+# them; in ns per round trip. The demo probe service is stopped first, so
+# nothing else runs. Then the self-test ends.
+if grep -qw kairos.overhead /proc/cmdline; then
+	pingpong() {
+		"$@" probe -t 20000 | sed -n 's/.*took: \([0-9]*\) ns each.*/\1/p'
+	}
+	service stop probe >/dev/null 2>&1
+	sleep 1
+	echo "kairos.test: overhead one-cpu $(pingpong taskset 1)"
+	echo "kairos.test: overhead any-cpu $(pingpong env)"
+	exit 0
+fi
+
 # I/O mode (scripts/io-test.sh): with kairos.io, LC and batch compete for
 # the disk, then the self-test ends; init powers off. The test slows the
 # disk (QEMU serves a few hundred requests a second) and lets one request
