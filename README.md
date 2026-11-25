@@ -16,7 +16,8 @@ It has three parts:
 
 ## Status
 
-Early. A minimal Kairos kernel builds and boots in QEMU, and runs from an
+Every component on the roadmap is done (an own shell is optional and not
+scheduled). A minimal Kairos kernel builds and boots in QEMU, and runs from an
 ext4 disk that keeps its files from one boot to the next. The kernel attaches
 Kairos Scheduler before it starts Kairos's own init, so every program runs
 under it; init, the first process, watches it and starts it again if it
@@ -28,9 +29,12 @@ groups below it, and the scheduler asks the kernel for each task's class.
 The CPUs kept for LC work follow the machine's layout: the fastest first,
 close together, in whole cores. When memory runs short, the kernel takes it
 from batch work first, and kills batch work first if it runs out; when the
-disk is busy, LC's requests go first. Each of these is measured against
-Linux's own scheduler and with its hook turned off (see
-[Measuring Kairos](#measuring-kairos)). The shell and tools are busybox's. The roadmap, and the reasoning behind each decision, are in
+disk is busy, LC's requests go first; when an LC program sleeps, it wakes
+on time. Each of these is measured against Linux's own scheduler and
+with its hook turned off (see [Measuring Kairos](#measuring-kairos)). The
+scheduler stays a BPF program rather than a class built into the kernel:
+measured, its decisions cost about 0.2 µs per wakeup, too little for a
+port to pay for its risk. The shell and tools are busybox's. The roadmap, and the reasoning behind each decision, are in
 [`docs/DESIGN_LOG.md`](docs/DESIGN_LOG.md).
 
 ## Design
@@ -216,6 +220,23 @@ pages they are (cgroup writeback). `kairos.noioclass` turns the hook off.
 On a slowed disk (`scripts/io-test.sh`), with 8 batch readers and a batch
 writer at work, an LC program's reads took about 11 ms instead of about
 80 ms, and its `fsync` about 42 ms instead of about 300 ms.
+
+### When a task sleeps
+
+A program that sleeps, or waits with a timeout, asks the kernel to wake it
+at a set time. The kernel may wake it up to the program's *timer slack*
+late, 50 µs by default, so that one interrupt can serve several timers;
+realtime programs get none. In Kairos's kernel an LC program gets none
+either (patches 0013 to 0015), in every kind of timed wait: sleeps,
+`poll`/`select`/`epoll` timeouts, futex waits and the rest. A program that
+chose its own slack keeps it, and batch keeps the usual. The class is read
+when the wait begins, so a relabel applies at the next wait.
+`kairos.notimerclass` turns it off.
+
+At real speed, in the dev VM, taking the slack away from an LC program
+cut its typical wakeup delay from 58 µs to 9 µs with batch busy on every
+CPU. It doesn't change the slowest wakeups, and it doesn't help a program
+woken by the network or by another program rather than by its own timer.
 
 ### When something fails
 
@@ -470,6 +491,9 @@ Our patches so far:
 | 0010 | the memory hooks in the cgroup document, `kairos.nomemclass` in the boot parameters |
 | 0011 | a batch group's disk requests get the idle I/O priority class (synchronous writes keep theirs); `CONFIG_KAIROS_IO` and `kairos.noioclass` |
 | 0012 | the I/O hook in the cgroup document, `kairos.noioclass` in the boot parameters |
+| 0013 | an LC task's sleeps and `poll`/`select`/`epoll` timeouts get no timer slack, unless it chose its own; `CONFIG_KAIROS_TIMERS` and `kairos.notimerclass` |
+| 0014 | the same for its other timed waits: futex waits, `sigtimedwait`, `semtimedop`, `io_getevents`, the kernel's `wait_event_hrtimeout` |
+| 0015 | the timer hook in the cgroup document, `kairos.notimerclass` in the boot parameters |
 
 ## The kernel config
 

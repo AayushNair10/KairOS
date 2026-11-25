@@ -200,7 +200,14 @@ kernel/patches/  our kernel changes as a patch series (the source of truth):
                  with kairos.noioclass): a batch request with the default
                  priority gets the idle class in bio_set_ioprio()
                  (block/blk-core.c), synchronous writes keep theirs, and
-                 the documentation
+                 the documentation; 0013-0015 timers that follow the
+                 class (CONFIG_KAIROS_TIMERS, off with
+                 kairos.notimerclass): kairos_timer_slack() (kernel/
+                 cgroup/kairos.c) gives an LC task that kept its slack
+                 none, like a realtime task, in every timed wait (sleeps,
+                 poll/select/epoll, futex, sigtimedwait, semtimedop,
+                 io_getevents, wait_event_hrtimeout), and the
+                 documentation
 scheduler/       Kairos Scheduler, a git submodule at a pinned commit
                  (its code is in scheduler/scheduler/)
 kernel/config/   the kernel config: base (a starting point that ships with
@@ -258,7 +265,8 @@ userspace/       init/init.c: Kairos's init, process 1, one statically
                  service/service.c: the service manager (each service in
                  a control group under its class), the service command
                  and batch (the same program). probe/probe.c: the demo LC
-                 program (also disk modes, and -t: a pipe ping-pong;
+                 program (also disk modes, -t: a pipe ping-pong, and -z:
+                 a futex wait that only its timeout ends;
                  /bin/lcprobe is a link to it, so trace events can tell
                  the measured one apart). Planned (optional): our own
                  shell
@@ -299,7 +307,19 @@ userspace/       init/init.c: Kairos's init, process 1, one statically
   1-deep virtio disk gets 2), or requests wait for a slot in arrival order
   before it sees them. The probe has a disk mode (`-d FILE`: O_DIRECT
   reads; `-f FILE`: write and fsync). `run-qemu.sh --disk-limit N` caps
-  the disk at N requests a second.
+  the disk at N requests a second. The I/O test reports how many of the
+  disk's interrupts each CPU handled (all on CPU 0 by default, the first
+  LC CPU on equal CPUs); `kairos.irqbatch` sends them to the last CPU, a
+  trial that helped nothing in emulation (component 13), kept for a
+  real-speed retry.
+- Timers: `kairos.notimerclass` turns the timer hook off. Judge it by the
+  slack itself, read from `/proc/timer_list` (a timer's earliest and
+  latest firing time), not by timing: that list is walked by position
+  while timers come and go, so a timer can show twice or not at all (know
+  it by its address, read again), and the kernel's own timers (e.g.
+  sched_clock_poll) can be due at any time. Only `hrtimer_wakeup` timers
+  belong to a waiting task. busybox has no pkill: end test processes by
+  putting them in a group and writing its `cgroup.kill`.
 - The disk: `run-qemu.sh` attaches `~/kairos-build/disk.img` (or `--disk
   FILE`) and keeps the writes; `--throwaway` discards them (QEMU's
   snapshot mode), `--no-disk` boots from memory only. `boot-test.sh` and

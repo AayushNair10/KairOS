@@ -5,6 +5,9 @@ recorded as new entries; old entries aren't rewritten.
 
 ## Roadmap (tentative; version 1, 2026-11-11)
 
+Status, 2026-11-25: components 0 to 13 are done; 5b (our own shell) is
+optional and not scheduled.
+
 Kairos is option D of component 0: an upstream Linux kernel at a pinned
 version plus a short series of our own patches, our own init and user space,
 and the scheduling policy as a BPF program on sched_ext.
@@ -25,7 +28,7 @@ and the scheduling policy as a BPF program on sched_ext.
 | 10 | Memory reclaim that knows LC from batch (done: reclaim, the allocation reserve and the OOM killer follow the class) | page allocator, reclaim, memory cgroups | patch (0007 to 0010) |
 | 11 | Block I/O that knows LC from batch (done: batch's requests get the idle I/O class; mq-deadline serves LC first, batch waits at most 2 s) | I/O schedulers, I/O priority, cgroup writeback | patch (0011, 0012) |
 | 12 | Measuring Kairos (done: inside the VM: instruction-counted time, counts from the kernel's trace events, and a real-speed check in the dev VM on its own kernel) | tracing, measurement design, emulation against hardware virtualisation | none |
-| 13 | Native scheduling class: decide with measurements | the scheduler core | maybe |
+| 13 | Native scheduling class: decide with measurements (done: no port, the BPF path costs about 0.2 µs per wakeup; instead LC tasks' timed waits get no timer slack) | scheduling classes, hrtimers and timer slack, interrupt routing | patch (0013 to 0015) |
 
 - Components 1 to 5 need no kernel changes. They end with a system that
   boots into Kairos.
@@ -2424,3 +2427,224 @@ Open questions / next:
 - Push: this repository's component 12 commits.
 - Next on the roadmap: component 13, a native scheduling class: decide
   with these measurements.
+
+## 13. The native-class decision, and timers that know LC from batch — 2026-11-25
+
+The roadmap's component 13 was "native scheduling class: decide with
+measurements". Asked as: which parts, if any, should move out of BPF
+into the kernel, keeping BPF as the fallback, to improve performance?
+
+Options:
+- A: an in-kernel fast path inside sched_ext: when an LC task wakes and
+  an LC CPU is free or held by a borrower, the kernel places it and
+  preempts in C, from pools the BPF program publishes; everything else
+  stays in BPF. If BPF fails, sched_ext throws it out and EEVDF runs all.
+- B: a native Kairos class first, with Kairos Scheduler loaded in
+  sched_ext's partial mode as a standby; a watchdog of ours moves every
+  task to it if the native class misbehaves (not after a crash). The
+  largest; two copies of the policy.
+- C: the scheduler stays in BPF; the kernel serves LC tasks better
+  elsewhere: no timer slack for LC tasks (component 12 found slack is
+  most of a typical LC wakeup delay), and device interrupts off LC CPUs.
+- D: reuse Linux: no new kernel code; when the BPF scheduler is off,
+  init makes batch's group an idle group, so the fallback is EEVDF tuned
+  for LC and batch rather than plain EEVDF.
+
+My pick and reasoning:
+- Before the options: "I would like eBPF to be the fallback just in
+  case something fails, so try to integrate the components which will
+  actually improve the performance."
+- "The fast path sounds the best, since that is the ones which require
+  less latency; everything else can be in BPF." (A)
+- After the verdict: "yes, write the plan for C".
+
+Verdict: C.
+- Measured before deciding: at real speed, turning the slack off for
+  one LC probe cut its median wakeup delay from 58 to 9 µs (6 of 6
+  pairs, batch busy, EEVDF); its 99th percentile didn't move. A's best
+  case, from component 12, is about 0.2 µs per wakeup (not significant
+  at real speed): about 250 times smaller.
+- C keeps the policy in BPF with sched_ext's safety net (EEVDF if BPF
+  fails), fits what Kairos is (the class steers a fourth subsystem), and
+  is a small kernel change.
+- Grading: the shape was right: keep the policy in BPF and the native
+  part small (mechanism in the kernel, policy outside, as sched_ext
+  itself is built). The reason was mistaken: "the fast path needs low
+  latency, so make it native" assumes the time spent running the
+  decision is what makes LC late. It is about 0.2 µs of a 58 µs wakeup
+  and a 1.4 ms request; latency comes from what is decided and when the
+  CPU is handed over. Missed: the fast path is already mostly kernel
+  code (Kairos Scheduler calls sched_ext's C helpers to find idle CPUs,
+  insert into a CPU's own queue and preempt a CPU); in A, BPF isn't the
+  fallback (if it fails, the fast path goes with it, to EEVDF); no
+  reasons were given for rejecting B, C and D.
+- Why the others lose: A patches sched_ext's hottest code against its
+  upstream design, for a gain too small to measure. B is the most work
+  and risk (a crash can't fall back; two policies to keep in step), for
+  the same per-decision gain. D changes nothing while the scheduler
+  runs; worth doing some day as a small init change.
+
+Where the others fit (from memory):
+- A: when the decision is a large share of the latency budget:
+  microsecond-scale datacenter schedulers (Shenango, Caladan, Shinjuku);
+  Google's ghOSt splits kernel mechanism from outside policy;
+  sched_ext's own built-in idle-CPU selection is upstream's fast path.
+- B: kernels that can't depend on BPF or need hooks sched_ext doesn't
+  expose: Android vendor kernels' scheduler patches, out-of-tree
+  replacements such as MuQSS, embedded systems.
+- D: servers tuned with Linux's own knobs (systemd's idle CPU weight sets
+  cpu.idle).
+- C, for context: Linux gives realtime tasks no slack; systemd can set
+  a service's slack (TimerSlackNSec=); Android once raised background
+  apps' slack through a control group, the mirror image of this; keeping
+  interrupts off latency-critical CPUs is standard in low-latency
+  tuning (the "cpu-partitioning" profile, irqaffinity, isolcpus).
+
+Linux concepts learned:
+- Scheduling classes (`struct sched_class` in `kernel/sched/sched.h`:
+  about 30 hooks such as enqueue_task, pick_task, select_task_rq,
+  wakeup_preempt, task_tick), defined with `DEFINE_SCHED_CLASS()` and
+  ordered by the linker script (`SCHED_DATA` in
+  `include/asm-generic/vmlinux.lds.h`: stop, deadline, realtime, fair,
+  ext, idle). A task's class follows its policy
+  (`__setscheduler_class()`, `task_should_scx()`); sched_ext can take
+  every task or, with `SCX_OPS_SWITCH_PARTIAL`, only SCHED_EXT ones.
+  Kairos Scheduler already uses sched_ext's C helpers on its hot path:
+  `scx_bpf_select_cpu_dfl()`, `scx_bpf_pick_idle_cpu()`,
+  `scx_bpf_dsq_insert()` (into a CPU's own queue), `scx_bpf_kick_cpu()`.
+- High-resolution timers with a range: `hrtimer_set_expires_range_ns()`
+  sets a soft and a hard expiry; the timer may fire anywhere between, so
+  the kernel can serve several with one interrupt. A task's
+  `timer_slack_ns` (50 µs from `init_task`; `prctl(PR_SET_TIMERSLACK)`,
+  `/proc/PID/timerslack_ns`) and `default_timer_slack_ns` (copied from
+  the parent's slack at fork); realtime and deadline tasks get 0
+  (`__setparam_*` path, `kernel/sched/syscalls.c`).
+- Where the slack is read: `hrtimer_nanosleep()` (sleeps),
+  `select_estimate_accuracy()` in `fs/select.c` (poll, select and epoll:
+  0.1% of the timeout, at most 100 ms, at least the task's slack; 0.5%
+  for niced tasks), `futex_setup_timer()` callers, `sigtimedwait`,
+  `semtimedop`, `io_getevents`, `wait_event_hrtimeout()`.
+- `/proc/timer_list` (`kernel/time/timer_list.c`, always built): every
+  pending hrtimer per CPU, with its function and "expires at SOFT-HARD";
+  walked by position under the base lock, one timer per step, so a timer
+  can be printed twice or missed. `sched_clock_poll` is the scheduler
+  clock's wrap-around check.
+- Interrupts: `/proc/interrupts` (per CPU), `/proc/irq/N/smp_affinity_list`
+  and `effective_affinity_list`; on GICv3 a device interrupt is routed
+  to one CPU of its mask (QEMU's virt: CPU 0); a completion that wakes a
+  task on another CPU sends a rescheduling interrupt (IPI0).
+
+What changed: the decision is recorded, and the class steers a fourth
+subsystem. The scheduler stays a BPF program on sched_ext, with EEVDF
+as the safety net. With CONFIG_KAIROS_TIMERS (off at boot with
+`kairos.notimerclass`), every timed wait of an LC task (sleeps, poll,
+select and epoll timeouts, futex waits, sigtimedwait, semtimedop,
+io_getevents, the kernel's wait_event_hrtimeout) gets no timer slack,
+as a realtime task's does, unless the task chose its own; batch keeps
+the usual 50 µs. One function decides, reading the class when the wait
+begins. Moving device interrupts off the LC CPUs was tried and dropped:
+it helped nothing measurable.
+
+What each step did, in order:
+1. The check first, failing: the boot test reads LC's and batch's slack
+   from the kernel's timer list; the probe's futex wait (`577dfbb`).
+2. Patch 0013: the switch, the boot word, the helper, sleeps and poll
+   (`be9d7cc`; kernel `c644b8b60`).
+3. Patch 0014: the other timed waits (`b94261e`; kernel `71ec39c11`).
+4. Patch 0015: documentation (`fdcff8e`; kernel `23021a6f0`); the
+   lock-checking build.
+5. The measurements: instruction-counted (1 and 4 CPUs) and ordinary
+   emulation, hook on against off, 10 rounds each (no code change).
+6. Interrupts: counted, tried, dropped; the count stays in the I/O test
+   (`0cc7066`).
+7. The wrap-up.
+
+Found on the way:
+- The slack check misread `/proc/timer_list` twice in 12 runs, both test
+  artifacts (`f65ac0e`): a kernel timer (sched_clock_poll) was due at
+  about 4,300 s with no slack, in the same slot as batch's poll; and the
+  list is walked by position, so a timer can be listed twice or missed.
+  Only task timers count now, each known by its address, read up to
+  three times: 12 of 12 then.
+- busybox has no pkill: the first version of the check left batch's
+  waits running and the self-test waited on them. Each class's waits
+  now sit in a group of their own, ended with cgroup.kill.
+- busybox's awk creates an array entry on the left of an assignment
+  before it evaluates the right, so "found[k] = (k in found) ? ..." is
+  always true.
+- My parallel runner gave the 1-CPU and 4-CPU runs the same scratch
+  folder names; they overwrote each other. That batch was set aside
+  (`discarded-name-clash/`), the scratch folder now carries the output
+  folder's name, and all 40 runs were redone.
+- Disk interrupts: all on CPU 0, the first LC CPU on equal CPUs (QEMU's
+  GICv3 routes a device interrupt to one CPU); each completion then
+  wakes the reader elsewhere with a rescheduling interrupt. Steering
+  them to the last CPU moved them but didn't help LC's reads, and LC's
+  fsync was slower in 9 of 10 pairs (not significant): a guess, the
+  completion now has to wake LC on another CPU.
+- In ordinary emulation the hook's ~50 µs is inside the floor of waking
+  an emulated CPU (component 12): no difference with batch busy, 369 to
+  294 µs without (p = 0.11).
+- The first lock-checking boot test failed its class check while three
+  emulators loaded the VM; on a quiet VM it passed 30 of 30.
+
+How it's tested:
+- `./scripts/boot-test.sh`: 30 lines, all ok, at 1, 4 and 8 CPUs, with
+  kairos.noscheduler, --no-disk and kairos.notimerclass, and on the
+  lock-checking build (no lock or RCU reports). New check, seen failing
+  first: slack (LC's sleep, poll and futex wait 0 ns; batch's 50000,
+  100000000 and 50000; with kairos.notimerclass the usual for both).
+- The comparisons (`~/kairos-data/kairos-os/2026-11-25-timers/`:
+  `analyze.py`, `summary.txt`), hook on against off, paired by round,
+  exact Wilcoxon, Holm-adjusted:
+  - instruction-counted, 1 CPU: LC probe's wakeup 9 / 59 µs without
+    batch, 8 / 58 µs with batch busy (median and 99th percentile), 10 of
+    10, p = 0.008;
+  - instruction-counted, 4 CPUs: 7.5 / 57 µs without batch (10 of 10,
+    p = 0.008); with batch busy no difference (173 / 205 µs, the CPUs'
+    turns);
+  - ordinary emulation: no significant difference (the emulation floor);
+  - real speed, the same mechanism by hand (component 12's VM, slack off
+    for one probe, 6 pairs): 58 to 9 µs median, 99th percentile
+    unchanged.
+- The interrupt trial, 10 pairs, ordinary emulation: no difference
+  (LC read 11.4 / 11.7 ms, fsync 43.9 / 45.2 ms).
+- `layout-test.sh` 16 of 16, `disk-test.sh` 6 of 6, `memory-test.sh` 1
+  of 1, `io-test.sh` 4 of 4, `cpu-test.sh` 2 of 2 (EEVDF 1 of 1);
+  `kernel-check.sh`: 15 patches ok; the semaphore and async I/O files,
+  not in our config, compiled cleanly with System V IPC switched on.
+
+Interview questions:
+1. Why didn't moving Kairos Scheduler's wakeup path out of BPF into the
+   kernel make sense, even though that path is the latency-critical one?
+2. What is timer slack, why does Linux add it, and why does the kernel
+   decide an LC task's slack when the wait begins rather than when the
+   task changes class?
+3. Your interrupt-steering trial moved every disk interrupt off the LC
+   CPU and made nothing faster. Why might it not help, or even hurt, an
+   LC task's own I/O?
+
+Resume line: "Decided with measurements against porting the BPF scheduler
+into the kernel (its decision path costs about 0.2 µs per wakeup at real
+speed), and instead made Linux's timers class-aware (kernel patches):
+latency-critical tasks' timed waits get no timer slack across sleeps,
+poll/epoll, futex and the other timed waits, cutting their typical
+timer wakeup delay from 58 to 9 µs at real speed (8 vs 58 µs in 10
+deterministic emulated pairs, p = 0.008)."
+
+Open questions / next:
+- The hook helps only timer-driven wakeups; a service woken by the
+  network or by another task gains nothing, and the slowest wakeups
+  didn't move.
+- Batch could get more slack instead (Android once did that for
+  background apps), to group its timers into fewer interrupts; not
+  measured.
+- No real-speed run of our kernel with the hook: the real-speed number
+  is the same mechanism by hand on Ubuntu's kernel.
+- Interrupts: steering didn't help in emulation; worth retrying at real
+  speed (`kairos.irqbatch`), and with LC's own device queues kept near
+  LC rather than moved away.
+- D (a tuned EEVDF fallback when the scheduler is off) is still worth a
+  small init change.
+- Every roadmap component is now done; the optional shell (5b) remains.
+- Push: this repository's component 12 and 13 commits.
