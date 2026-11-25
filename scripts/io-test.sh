@@ -27,12 +27,24 @@
 #            the one request at the disk, then its own. 20 ms is halfway.
 #            (Not a multiple of its time alone: alone, its few requests
 #            never meet QEMU's limit, and take about 1 ms.)
+#   order    while the LC program reads with batch at work, fewer than
+#            half a request on average overtakes an LC request: comes into
+#            the I/O scheduler after it and reaches the disk first (from
+#            the kernel's trace of disk requests, which must lose no
+#            events). With batch's requests idle class, only another
+#            best-effort request can (the journal's writes); without the
+#            hook, batch's readers do, as the scheduler sweeps the disk in
+#            sector order. Also reported: how many requests reach the disk
+#            while an LC request waits. At least one does: with one
+#            request at a time at the device, the next is already out of
+#            the scheduler, waiting for that slot, when an LC one comes in.
 #   charged  batch's writes are charged to batch's group by the I/O
 #            controller: at least 64 MiB of the 128 MiB it wrote
 #   starved  with LC keeping the disk busy, batch still gets reads done,
 #            and none of them waits more than 3 s (mq-deadline serves a
 #            batch request once it has waited its aging limit, 2 s)
-# and, only reported: the LC program's fsync time.
+# and, only reported: the LC program's fsync time, and the priority classes
+# of the other requests during the read test.
 #
 # The console's output is kept in ~/kairos-build/io-test.log. It exits with
 # 0 only if every check passes.
@@ -91,6 +103,23 @@ case "$alone$loaded" in
 	fi
 	;;
 esac
+# LC-requests mean-sent-while-waiting most mean-overtaking be=N idle=N lost N
+read -r on_n on_mean on_most on_over on_be on_idle _ on_lost <<<"$(fact order)"
+case "$on_n" in
+'' | 0 | *[!0-9]*)
+	printf '%-8s FAIL  not reported\n' order
+	failed=1
+	;;
+*)
+	what="$on_n LC requests: $on_over overtook one on average; $on_mean reached the disk while one waited ($on_most at most); $on_lost trace events lost"
+	if [ "$on_lost" = 0 ] && awk -v m="$on_over" 'BEGIN { exit !(m < 0.5) }'; then
+		printf '%-8s ok    %s\n' order "$what"
+	else
+		printf '%-8s FAIL  %s\n' order "$what"
+		failed=1
+	fi
+	;;
+esac
 case $writes in
 '' | *[!0-9]*)
 	printf '%-8s FAIL  batch wrote 128 MiB; its group was charged %s\n' charged "${writes:-nothing (no io.stat)}"
@@ -121,4 +150,5 @@ case "$breads$bmost" in
 	;;
 esac
 echo "(reported) LC fsync with batch writing: median ${fsync:-?} us, 99% ${fsync99:-?} us"
+echo "(reported) the other requests' classes, as they came in: ${on_be:-?}, ${on_idle:-?}"
 exit $failed

@@ -53,6 +53,9 @@ file /etc/kairos/services/crunch ${KAIROS_REPO}/image/services/crunch 0644 0 0
 # The demo LC program that the probe service runs, compiled from
 # userspace/probe/probe.c.
 file /bin/probe ${PROBE} 0755 0 0
+# The same program under another name, for the I/O test's LC reader: trace
+# events name a process by the name it was started as.
+slink /bin/lcprobe probe 0777 0 0
 
 # A shell script that can stand in for init:
 # scripts/run-qemu.sh rdinit=/init.fallback
