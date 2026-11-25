@@ -1,0 +1,165 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Aayush Nair <aayushnair204@gmail.com>
+Date: Tue, 24 Nov 2026 23:37:31 -0500
+Subject: [PATCH] block: Give Kairos batch requests the idle I/O priority class
+
+A disk request takes the I/O priority its task chose, or a best-effort
+one derived from the task's nice value; an I/O scheduler that honours
+priority classes (mq-deadline, BFQ) serves realtime, then best-effort,
+then idle requests. Kairos runs a latency-critical service next to batch
+work, and the kernel keeps every group's class (CONFIG_CGROUP_KAIROS):
+with every request best-effort, the service's reads wait behind
+whatever batch has queued.
+
+Add CONFIG_KAIROS_IO: in bio_set_ioprio(), a request with the default
+best-effort priority becomes idle if it is for a batch group and its
+task didn't choose a priority with ioprio_set(). The default may come
+from bio_set_ioprio() itself or, earlier, from the kiocb, which takes
+get_current_ioprio() when the I/O begins and which direct I/O copies
+into the bio. Writes the kernel waits for synchronously keep their
+priority: an fsync, or a journal commit writing out the data it depends
+on, may have a latency-critical task waiting behind them. With cgroup
+writeback, write-out by the kernel's threads counts for the group that
+dirtied the pages.
+
+"kairos.noioclass" on the command line turns it off.
+
+Signed-off-by: Aayush Nair <aayushnair204@gmail.com>
+---
+ block/blk-core.c             | 29 +++++++++++++++++++++++++++++
+ include/linux/kairos_class.h | 19 +++++++++++++++++++
+ init/Kconfig                 | 15 +++++++++++++++
+ kernel/cgroup/kairos.c       | 14 ++++++++++++++
+ 4 files changed, 77 insertions(+)
+
+diff --git a/block/blk-core.c b/block/blk-core.c
+index 474700ffaa1c895cb28f5fb0ec9e6b1f5c601b74..e1345bee0a3edfb955737914e6c0efafbaed769e 100644
+--- a/block/blk-core.c
++++ b/block/blk-core.c
+@@ -40,6 +40,7 @@
+ #include <linux/part_stat.h>
+ #include <linux/sched/sysctl.h>
+ #include <linux/blk-crypto.h>
++#include <linux/kairos_class.h>
+ 
+ #define CREATE_TRACE_POINTS
+ #include <trace/events/block.h>
+@@ -892,11 +893,39 @@ void submit_bio_noacct(struct bio *bio)
+ }
+ EXPORT_SYMBOL(submit_bio_noacct);
+ 
++/*
++ * Kairos (CONFIG_KAIROS_IO): should a request with the default best-effort
++ * priority be idle instead? The default comes either from the code above,
++ * or earlier, from the task when the I/O began: a kiocb takes
++ * get_current_ioprio(), and direct I/O copies it into the bio. Yes if the
++ * request is for a batch group and the task didn't choose an I/O priority
++ * of its own (with ioprio_set()), unless it is a write that the kernel
++ * waits for synchronously: an fsync, or a journal commit writing out the
++ * data it depends on, which a latency-critical task may be waiting for.
++ * Writeback from the kernel's threads counts for the group that dirtied
++ * the pages.
++ */
++static bool kairos_idle_bio(struct bio *bio)
++{
++	struct io_context *ioc = current->io_context;
++	struct cgroup_subsys_state *css;
++
++	if (!kairos_ioclass_on() ||
++	    IOPRIO_PRIO_CLASS(bio->bi_ioprio) != IOPRIO_CLASS_BE ||
++	    (ioc && IOPRIO_PRIO_CLASS(ioc->ioprio) != IOPRIO_CLASS_NONE) ||
++	    (op_is_write(bio_op(bio)) && op_is_sync(bio->bi_opf)))
++		return false;
++	css = bio_blkcg_css(bio);
++	return css && kairos_cgroup_class(css->cgroup) == KAIROS_CLASS_BATCH;
++}
++
+ static void bio_set_ioprio(struct bio *bio)
+ {
+ 	/* Nobody set ioprio so far? Initialize it based on task's nice value */
+ 	if (IOPRIO_PRIO_CLASS(bio->bi_ioprio) == IOPRIO_CLASS_NONE)
+ 		bio->bi_ioprio = get_current_ioprio();
++	if (kairos_idle_bio(bio))
++		bio->bi_ioprio = IOPRIO_PRIO_VALUE(IOPRIO_CLASS_IDLE, 0);
+ 	blkcg_set_ioprio(bio);
+ }
+ 
+diff --git a/include/linux/kairos_class.h b/include/linux/kairos_class.h
+index 0cc28340ee78833a71dfa9afa6bd830a30994abd..ff82b8c77cddfacebb7d9c4af3f930240265d932 100644
+--- a/include/linux/kairos_class.h
++++ b/include/linux/kairos_class.h
+@@ -57,4 +57,23 @@ static inline bool kairos_memclass_on(void)
+ }
+ #endif
+ 
++/*
++ * Kairos's I/O hook (CONFIG_KAIROS_IO) lets the class set the I/O priority
++ * of batch requests. It is on unless "kairos.noioclass" is on the kernel
++ * command line.
++ */
++#ifdef CONFIG_KAIROS_IO
++extern bool kairos_ioclass;
++
++static inline bool kairos_ioclass_on(void)
++{
++	return READ_ONCE(kairos_ioclass);
++}
++#else
++static inline bool kairos_ioclass_on(void)
++{
++	return false;
++}
++#endif
++
+ #endif /* _LINUX_KAIROS_CLASS_H */
+diff --git a/init/Kconfig b/init/Kconfig
+index d1dd2ab8f2e8dff69bc98712b7468e59fc88c2c6..a0fb912df7ee3c17eb1c6163457582f5e9d76bb7 100644
+--- a/init/Kconfig
++++ b/init/Kconfig
+@@ -1378,6 +1378,21 @@ config KAIROS_MEMORY
+ 
+ 	  If unsure, say N.
+ 
++config KAIROS_IO
++	bool "Disk I/O that follows Kairos task classes"
++	depends on CGROUP_KAIROS && BLK_CGROUP
++	default n
++	help
++	  Lets the class of the kairos controller (CGROUP_KAIROS) steer disk
++	  I/O: a request for a batch group that has no I/O priority of its
++	  own gets the idle class, so that an I/O scheduler which honours
++	  classes (mq-deadline, BFQ) serves latency-critical requests first.
++	  Writes the kernel waits for synchronously keep their priority.
++
++	  "kairos.noioclass" on the kernel command line turns it off.
++
++	  If unsure, say N.
++
+ config CGROUP_DEBUG
+ 	bool "Debug controller"
+ 	default n
+diff --git a/kernel/cgroup/kairos.c b/kernel/cgroup/kairos.c
+index 5536998852a1dd21c3dfb1eeb9e8a165e8c68c1f..df856d1695d162c7384f8175fa632fe574c81066 100644
+--- a/kernel/cgroup/kairos.c
++++ b/kernel/cgroup/kairos.c
+@@ -257,6 +257,20 @@ static int __init kairos_nomemclass_setup(char *str)
+ __setup("kairos.nomemclass", kairos_nomemclass_setup);
+ #endif
+ 
++#ifdef CONFIG_KAIROS_IO
++/* Kairos's I/O hook: on, unless kairos.noioclass is on the command line. */
++bool kairos_ioclass __read_mostly = true;
++
++static int __init kairos_noioclass_setup(char *str)
++{
++	if (*str)
++		return 0;
++	kairos_ioclass = false;
++	return 1;
++}
++__setup("kairos.noioclass", kairos_noioclass_setup);
++#endif
++
+ __bpf_kfunc_start_defs();
+ 
+ /**

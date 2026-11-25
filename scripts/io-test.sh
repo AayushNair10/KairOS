@@ -10,21 +10,23 @@
 #
 # The kernel is started with kairos.test and kairos.io, on a throwaway copy
 # of the disk, slowed down: QEMU serves at most 200 requests a second, and
-# virtio_blk.queue_depth=2 lets the kernel hand at most 2 requests to the
-# disk at once, so the others wait in the kernel, where the I/O scheduler
-# decides their order (a disk with a shallow queue). An LC program reads 4
-# KiB past the page cache every 50 ms, first alone, then while batch reads
-# back to back and writes 128 MB; then it writes 4 KiB and waits for the
-# disk (fsync) every 200 ms while batch's writes are written out (see
+# virtio_blk.queue_depth=1 lets the kernel hand the disk one request at a
+# time, so the others wait in the kernel, where the I/O scheduler decides
+# their order (a disk with a shallow queue); the self-test gives the
+# scheduler room for 64. An LC program reads 4 KiB past the page cache
+# every 50 ms, first alone, then while batch reads back to back (8
+# readers) and writes 128 MB; then it writes 4 KiB and waits for the disk
+# (fsync) every 200 ms while batch's writes are written out (see
 # image/selftest).
 #
 # The checks:
-#   reads    the LC program's median read time with batch at work is at most
-#            15 ms: with the disk busy, each request takes 5 ms (200 a
-#            second), and LC may wait for the requests already at the disk
-#            (2 at most), then its own. Behind the whole queue it waits
-#            longer. (Not a multiple of its time alone: alone, its few
-#            requests never meet QEMU's limit, and take about 1 ms.)
+#   reads    the LC program's median read time with batch at work is under
+#            20 ms. With the disk busy each request takes about 5 ms (200
+#            a second). Behind the whole queue (a request from each of the
+#            8 readers) LC waits about 40 ms; first in line, it waits for
+#            the one request at the disk, then its own. 20 ms is halfway.
+#            (Not a multiple of its time alone: alone, its few requests
+#            never meet QEMU's limit, and take about 1 ms.)
 #   charged  batch's writes are charged to batch's group by the I/O
 #            controller: at least 64 MiB of the 128 MiB it wrote
 # and, only reported: the LC program's fsync time.
@@ -60,7 +62,7 @@ done
 log=$KAIROS_BUILD/io-test.log
 rm -f "$log"
 "$REPO_ROOT/scripts/run-qemu.sh" "${kernel[@]}" --throwaway --disk-limit 200 --log "$log" \
-	--timeout 240 kairos.test kairos.io virtio_blk.queue_depth=2 "${words[@]}" >/dev/null || true
+	--timeout 240 kairos.test kairos.io virtio_blk.queue_depth=1 "${words[@]}" >/dev/null || true
 
 fact() {
 	sed -n "s|^kairos\.test: io $1 ||p" "$log" | tr -d '\r' | head -n 1
@@ -78,10 +80,10 @@ case "$alone$loaded" in
 	failed=1
 	;;
 *)
-	if [ "$loaded" -le 15000 ]; then
+	if [ "$loaded" -lt 20000 ]; then
 		printf '%-8s ok    %s\n' reads "$times"
 	else
-		printf '%-8s FAIL  %s: over 15 ms, behind batch\n' reads "$times"
+		printf '%-8s FAIL  %s: 20 ms or more, behind batch\n' reads "$times"
 		failed=1
 	fi
 	;;
