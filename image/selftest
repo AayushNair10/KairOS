@@ -292,10 +292,21 @@ fi
 # while one batch reader reads too; how many reads batch got done in 8 s,
 # and the longest one, in us. A batch request is served when no LC request
 # waits, or once it has waited mq-deadline's aging limit (init: 2 s).
+# With kairos.irqbatch too, the disk's interrupts go to the last CPU
+# instead of CPU 0, where they land by default: on equal CPUs the LC pool
+# starts at CPU 0, batch's end is the last. A trial (component 13): io
+# irqs reports, at the end, how many of the disk's interrupts each CPU
+# handled.
+diskirq() {
+	awk '/virtio/ { sub(":", "", $1); print $1; exit }' /proc/interrupts
+}
 if grep -qw kairos.io /proc/cmdline; then
 	d=/var/lib/kairos-test
 	g=/sys/fs/cgroup/lc/iotest
 	mkdir -p $d $g
+	if grep -qw kairos.irqbatch /proc/cmdline; then
+		echo $(($(nproc) - 1)) >/proc/irq/$(diskirq)/smp_affinity_list
+	fi
 	echo 64 >/sys/block/vda/queue/nr_requests
 	dd if=/dev/zero of=$d/lcdata bs=1M count=16 conv=fsync 2>/dev/null
 	dd if=/dev/zero of=$d/batchdata bs=1M count=64 conv=fsync 2>/dev/null
@@ -323,6 +334,7 @@ if grep -qw kairos.io /proc/cmdline; then
 	echo "kairos.test: io batch-starved $(batch probe -d $d/batchdata -p 1000 -r 8 -n 1 |
 		sed -n 's/^probe: \([0-9]*\) reads.*most \([0-9]*\) us.*/\1 \2/p')"
 	wait
+	echo "kairos.test: io irqs $(awk -v n="$(nproc)" '/virtio/ { s = $2; for (i = 3; i <= n + 1; i++) s = s " " $i; print s; exit }' /proc/interrupts)"
 	exit 0
 fi
 

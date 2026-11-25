@@ -151,4 +151,5 @@ case "$breads$bmost" in
 esac
 echo "(reported) LC fsync with batch writing: median ${fsync:-?} us, 99% ${fsync99:-?} us"
 echo "(reported) the other requests' classes, as they came in: ${on_be:-?}, ${on_idle:-?}"
+echo "(reported) the disk's interrupts handled by each CPU: $(fact irqs)"
 exit $failed
