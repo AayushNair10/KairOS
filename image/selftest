@@ -91,6 +91,10 @@ fi
 # batch-writes: the bytes batch wrote, as the I/O controller charged them
 # (batch's io.stat): the kernel's threads write them out later, and cgroup
 # writeback charges them to the group that made them.
+# batch-starved: LC keeps the disk busy (4 readers, back to back) for 9 s
+# while one batch reader reads too; how many reads batch got done in 8 s,
+# and the longest one, in us. A batch request is served when no LC request
+# waits, or once it has waited mq-deadline's aging limit (init: 2 s).
 if grep -qw kairos.io /proc/cmdline; then
 	d=/var/lib/kairos-test
 	g=/sys/fs/cgroup/lc/iotest
@@ -113,6 +117,12 @@ if grep -qw kairos.io /proc/cmdline; then
 	wait
 	sync
 	echo "kairos.test: io batch-writes $(sed -n 's/.* wbytes=\([0-9]*\).*/\1/p' /sys/fs/cgroup/batch/io.stat 2>/dev/null | head -n 1)"
+	for i in 1 2 3 4; do
+		sh -c "echo \$\$ >$g/cgroup.procs; exec probe -d $d/lcdata -p 1000 -r 9 -n 1" >/dev/null &
+	done
+	echo "kairos.test: io batch-starved $(batch probe -d $d/batchdata -p 1000 -r 8 -n 1 |
+		sed -n 's/^probe: \([0-9]*\) reads.*most \([0-9]*\) us.*/\1 \2/p')"
+	wait
 	exit 0
 fi
 

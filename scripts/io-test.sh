@@ -29,6 +29,9 @@
 #            never meet QEMU's limit, and take about 1 ms.)
 #   charged  batch's writes are charged to batch's group by the I/O
 #            controller: at least 64 MiB of the 128 MiB it wrote
+#   starved  with LC keeping the disk busy, batch still gets reads done,
+#            and none of them waits more than 3 s (mq-deadline serves a
+#            batch request once it has waited its aging limit, 2 s)
 # and, only reported: the LC program's fsync time.
 #
 # The console's output is kept in ~/kairos-build/io-test.log. It exits with
@@ -98,6 +101,21 @@ case $writes in
 		printf '%-8s ok    batch wrote 128 MiB; its group was charged %s MiB\n' charged $((writes / 1048576))
 	else
 		printf '%-8s FAIL  batch wrote 128 MiB; its group was charged %s MiB\n' charged $((writes / 1048576))
+		failed=1
+	fi
+	;;
+esac
+read -r breads bmost <<<"$(fact batch-starved)"
+case "$breads$bmost" in
+'' | *[!0-9]*)
+	printf '%-8s FAIL  batch reported no reads while LC kept the disk busy\n' starved
+	failed=1
+	;;
+*)
+	if [ "$breads" -ge 1 ] && [ "$bmost" -le 3000000 ]; then
+		printf '%-8s ok    batch did %s reads in 8 s with LC keeping the disk busy; the longest took %s ms\n' starved "$breads" $((bmost / 1000))
+	else
+		printf '%-8s FAIL  batch did %s reads in 8 s; the longest took %s ms\n' starved "$breads" $((bmost / 1000))
 		failed=1
 	fi
 	;;
