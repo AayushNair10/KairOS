@@ -4,7 +4,7 @@
 # usage: run-qemu.sh [--smp N] [--mem SIZE] [--kernel FILE] [--qemu ARG]...
 #                    [--dtb FILE | --dump-dtb FILE] [--log FILE]
 #                    [--timeout SECONDS] [--disk FILE | --no-disk]
-#                    [--throwaway] [--disk-limit N] [WORD...]
+#                    [--throwaway] [--disk-limit N] [--icount SHIFT] [WORD...]
 #
 #   --smp N            number of CPUs (default 4). QEMU's form for a layout
 #                      works too: 8,clusters=2,cores=2,threads=2 is 2
@@ -33,6 +33,17 @@
 #                      as it was. The tests boot this way
 #   --disk-limit N     a slow disk: QEMU serves at most N requests a second
 #                      (its I/O throttling), so that requests queue
+#   --icount SHIFT     instruction-counted time: the guest's clock advances
+#                      2^SHIFT ns for every instruction executed, whatever
+#                      the host's speed or load, and the CPUs take turns on
+#                      one host thread (QEMU's icount, single-threaded TCG).
+#                      Timings then repeat from run to run and don't depend
+#                      on what else the VM is doing, so runs may go in
+#                      parallel. Every instruction counts the same: no
+#                      caches, no memory stalls; and with several CPUs busy,
+#                      each advances the clock for all. The default is
+#                      $KAIROS_ICOUNT, if set (so the test scripts pass it
+#                      on)
 #   WORD...            extra words for the kernel's command line
 #
 # QEMU plays two parts. It is the machine: an ARM board called "virt", with
@@ -58,11 +69,12 @@ disk=
 nodisk=0
 throwaway=0
 disk_limit=
+icount=${KAIROS_ICOUNT:-}
 extra=()
 words=()
 while [ $# -gt 0 ]; do
 	case $1 in
-	--smp | --mem | --kernel | --qemu | --dtb | --dump-dtb | --log | --timeout | --disk | --disk-limit)
+	--smp | --mem | --kernel | --qemu | --dtb | --dump-dtb | --log | --timeout | --disk | --disk-limit | --icount)
 		[ $# -ge 2 ] || die "$1 needs a value"
 		case $1 in
 		--smp) smp=$2 ;;
@@ -75,6 +87,7 @@ while [ $# -gt 0 ]; do
 		--timeout) timeout=$2 ;;
 		--disk) disk=$2 ;;
 		--disk-limit) disk_limit=$2 ;;
+		--icount) icount=$2 ;;
 		esac
 		shift 2
 		;;
@@ -128,6 +141,14 @@ if [ -n "$dtb" ]; then
 	args+=(-dtb "$dtb")
 fi
 args+=("${extra[@]}")
+if [ -n "$icount" ]; then
+	# sleep=off: when every CPU is idle, the clock jumps to the next
+	# timer instead of waiting for it in real time. One host thread does
+	# the work of every CPU, so the run takes longer in real time: the
+	# limit for --log runs is 4 times as long.
+	args+=(-accel tcg,thread=single -icount "shift=$icount,sleep=off")
+	timeout=$((timeout * 4))
+fi
 
 # The disk. On this board QEMU's virtio devices sit in memory-mapped slots
 # that the device tree lists; virtio-blk-device puts a disk in the first
