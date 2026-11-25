@@ -1,0 +1,56 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Aayush Nair <aayushnair204@gmail.com>
+Date: Tue, 24 Nov 2026 23:39:36 -0500
+Subject: [PATCH] Documentation: Describe how Kairos task classes steer disk
+ I/O
+
+The kairos controller's section says what CONFIG_KAIROS_IO does with a
+cgroup's class: a batch request with the default priority gets the idle
+class, synchronous writes keep theirs, writeback counts for the cgroup
+that dirtied the pages, and mq-deadline's prio_aging_expire bounds the
+wait; kernel-parameters.txt lists kairos.noioclass.
+
+Signed-off-by: Aayush Nair <aayushnair204@gmail.com>
+---
+ Documentation/admin-guide/cgroup-v2.rst         | 11 +++++++++++
+ Documentation/admin-guide/kernel-parameters.txt |  5 +++++
+ 2 files changed, 16 insertions(+)
+
+diff --git a/Documentation/admin-guide/cgroup-v2.rst b/Documentation/admin-guide/cgroup-v2.rst
+index 6dc9896c2f76f0912b5c18fef8de2a9457d63223..c886bb547f83b0464a4d3597fc5d5b08b739c81c 100644
+--- a/Documentation/admin-guide/cgroup-v2.rst
++++ b/Documentation/admin-guide/cgroup-v2.rst
+@@ -3003,6 +3003,17 @@ Memory is charged to the cgroup of the task that first uses it, so a
+ page which batch work brought into memory isn't protected when a
+ latency-critical task uses it later.
+ 
++With the CONFIG_KAIROS_IO config option the class also steers disk I/O,
++unless "kairos.noioclass" is on the kernel command line: a request for a
++batch cgroup with the default best-effort I/O priority, from a task which
++didn't choose one with ioprio_set(), gets the idle class, so that an I/O
++scheduler which honours classes (mq-deadline, BFQ) serves
++latency-critical requests first.  Writes which the kernel waits for
++synchronously, such as an fsync or a journal commit, keep their priority.
++With cgroup writeback, writeback counts for the cgroup that dirtied the
++pages.  mq-deadline serves an idle request anyway once it has waited
++"prio_aging_expire".
++
+ 
+ Non-normative information
+ -------------------------
+diff --git a/Documentation/admin-guide/kernel-parameters.txt b/Documentation/admin-guide/kernel-parameters.txt
+index 8f6b801d65bc27979d6993da40f27f4b8c969359..6c77a0dec8483801b658e9a0f4eac5f837e7d7c2 100644
+--- a/Documentation/admin-guide/kernel-parameters.txt
++++ b/Documentation/admin-guide/kernel-parameters.txt
+@@ -2900,6 +2900,11 @@ Kernel parameters
+ 	js=		[HW,JOY] Analog joystick
+ 			See Documentation/input/joydev/joystick.rst.
+ 
++	kairos.noioclass
++			[KNL] Don't let Kairos task classes steer disk I/O
++			(CONFIG_KAIROS_IO): a batch request keeps its
++			best-effort I/O priority.
++
+ 	kairos.nomemclass
+ 			[KNL] Don't let Kairos task classes steer memory
+ 			(CONFIG_KAIROS_MEMORY): reclaim, the page allocator's
