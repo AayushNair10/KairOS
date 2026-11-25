@@ -33,6 +33,15 @@ else
 	echo "kairos.test: bootlog none"
 fi
 
+# The disk's I/O scheduler (the one in brackets is in use), and
+# mq-deadline's aging limit: how many ms a request of a lower priority
+# class may wait before it is served anyway.
+if [ -e /sys/block/vda/queue/scheduler ]; then
+	echo "kairos.test: iosched $(cat /sys/block/vda/queue/scheduler) aging $(cat /sys/block/vda/queue/iosched/prio_aging_expire 2>/dev/null || echo none)"
+else
+	echo "kairos.test: iosched no disk"
+fi
+
 # Disk mode (scripts/disk-test.sh): with kairos.disk, report the marker the
 # previous boot left on the disk, leave a new one (the boot's number in the
 # log), write it out, and end; init powers off cleanly. With
@@ -61,6 +70,45 @@ if grep -qw kairos.disk /proc/cmdline; then
 		echo "kairos.test: power cut"
 		poweroff -f -n
 	fi
+	exit 0
+fi
+
+# I/O mode (scripts/io-test.sh): with kairos.io, LC and batch compete for
+# the disk, then the self-test ends; init powers off. The test slows the
+# disk (QEMU serves a few hundred requests a second) and lets at most 2
+# requests be at the device at once (virtio_blk.queue_depth=2), so the
+# rest wait in the kernel, where the I/O scheduler orders them.
+#
+# lc-alone, lc-loaded: how long the LC program's reads took (median and
+# 99th percentile, in us): from its own group below lc, a 4 KiB read past
+# the page cache every 50 ms for 5 s; first alone, then while batch reads
+# back to back (4 readers) and writes 128 MB.
+# lc-fsync: how long its 4 KiB writes took to reach the disk (fsync),
+# every 200 ms for 5 s, while batch's writes are being written out.
+# batch-writes: the bytes batch wrote, as the I/O controller charged them
+# (batch's io.stat): the kernel's threads write them out later, and cgroup
+# writeback charges them to the group that made them.
+if grep -qw kairos.io /proc/cmdline; then
+	d=/var/lib/kairos-test
+	g=/sys/fs/cgroup/lc/iotest
+	mkdir -p $d $g
+	dd if=/dev/zero of=$d/lcdata bs=1M count=16 conv=fsync 2>/dev/null
+	dd if=/dev/zero of=$d/batchdata bs=1M count=64 conv=fsync 2>/dev/null
+	lcprobe() {
+		sh -c "echo \$\$ >$g/cgroup.procs; exec probe $*" |
+			sed -n 's/.*median \([0-9]*\) us, 99% \([0-9]*\) us.*/\1 \2/p'
+	}
+	echo "kairos.test: io lc-alone $(lcprobe -d $d/lcdata -p 50000 -r 5 -n 1)"
+	for i in 1 2 3 4; do
+		batch probe -d $d/batchdata -p 1000 -r 18 -n 1 >/dev/null &
+	done
+	batch dd if=/dev/zero of=$d/batchwrite bs=1M count=128 2>/dev/null &
+	sleep 2
+	echo "kairos.test: io lc-loaded $(lcprobe -d $d/lcdata -p 50000 -r 5 -n 1)"
+	echo "kairos.test: io lc-fsync $(lcprobe -f $d/lcsync -p 200000 -r 5 -n 1)"
+	wait
+	sync
+	echo "kairos.test: io batch-writes $(sed -n 's/.* wbytes=\([0-9]*\).*/\1/p' /sys/fs/cgroup/batch/io.stat 2>/dev/null | head -n 1)"
 	exit 0
 fi
 

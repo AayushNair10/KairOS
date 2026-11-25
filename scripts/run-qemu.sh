@@ -4,7 +4,7 @@
 # usage: run-qemu.sh [--smp N] [--mem SIZE] [--kernel FILE] [--qemu ARG]...
 #                    [--dtb FILE | --dump-dtb FILE] [--log FILE]
 #                    [--timeout SECONDS] [--disk FILE | --no-disk]
-#                    [--throwaway] [WORD...]
+#                    [--throwaway] [--disk-limit N] [WORD...]
 #
 #   --smp N            number of CPUs (default 4). QEMU's form for a layout
 #                      works too: 8,clusters=2,cores=2,threads=2 is 2
@@ -31,6 +31,8 @@
 #   --throwaway        writes to the disk go to a temporary file and are lost
 #                      when QEMU ends (QEMU's snapshot mode); the disk stays
 #                      as it was. The tests boot this way
+#   --disk-limit N     a slow disk: QEMU serves at most N requests a second
+#                      (its I/O throttling), so that requests queue
 #   WORD...            extra words for the kernel's command line
 #
 # QEMU plays two parts. It is the machine: an ARM board called "virt", with
@@ -55,11 +57,12 @@ dump_dtb=
 disk=
 nodisk=0
 throwaway=0
+disk_limit=
 extra=()
 words=()
 while [ $# -gt 0 ]; do
 	case $1 in
-	--smp | --mem | --kernel | --qemu | --dtb | --dump-dtb | --log | --timeout | --disk)
+	--smp | --mem | --kernel | --qemu | --dtb | --dump-dtb | --log | --timeout | --disk | --disk-limit)
 		[ $# -ge 2 ] || die "$1 needs a value"
 		case $1 in
 		--smp) smp=$2 ;;
@@ -71,6 +74,7 @@ while [ $# -gt 0 ]; do
 		--log) log=$2 ;;
 		--timeout) timeout=$2 ;;
 		--disk) disk=$2 ;;
+		--disk-limit) disk_limit=$2 ;;
 		esac
 		shift 2
 		;;
@@ -134,7 +138,7 @@ if [ $nodisk = 0 ]; then
 	fi
 	disk=${disk:-$DISK}
 	if [ -f "$disk" ]; then
-		args+=(-drive "file=$disk,format=raw,if=none,id=disk0"
+		args+=(-drive "file=$disk,format=raw,if=none,id=disk0${disk_limit:+,throttling.iops-total=$disk_limit}"
 			-device virtio-blk-device,drive=disk0)
 		if [ $throwaway = 1 ]; then
 			args+=(-snapshot)

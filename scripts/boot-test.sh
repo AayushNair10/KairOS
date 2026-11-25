@@ -31,6 +31,10 @@
 #   cgroups    the control groups are mounted, with Kairos's two class
 #              groups (lc and batch) and the CPU controller on for both
 #   memory     the memory controller is on for lc and batch too
+#   io         the I/O controller is on for lc and batch too
+#   iosched    the disk's I/O scheduler is mq-deadline, which serves
+#              requests by priority class, and a lower class waits at most
+#              2000 ms (with --no-disk: there is no disk)
 #   sched_ext  the kernel can take a BPF scheduler
 #   scheduler  Kairos Scheduler was running before init started its first
 #              program
@@ -258,6 +262,24 @@ if has_word memory "$lc" && has_word memory "$batch"; then
 	ok memory "on for lc and batch"
 else
 	bad memory "lc: ${lc:-no controllers}; batch: ${batch:-no controllers} (want memory in both)"
+fi
+if has_word io "$lc" && has_word io "$batch"; then
+	ok io "on for lc and batch"
+else
+	bad io "lc: ${lc:-no controllers}; batch: ${batch:-no controllers} (want io in both)"
+fi
+iosched=$(fact iosched)
+if [ $nodisk = 1 ]; then
+	if [ "$iosched" = "no disk" ]; then
+		ok iosched "no disk"
+	else
+		bad iosched "${iosched:-not reported} (want no disk)"
+	fi
+else
+	case $iosched in
+	*"[mq-deadline]"*" aging 2000") ok iosched "$iosched" ;;
+	*) bad iosched "${iosched:-not reported} (want [mq-deadline], aging 2000)" ;;
+	esac
 fi
 
 state=$(fact sched_ext)
