@@ -595,6 +595,53 @@ fi
 rmdir "$crunchg/below"
 echo "kairos.test: relabel lc: crunch $1, below $2; inherit: crunch $3, below $4; nonsense $5"
 
+# Timer slack: how late the kernel may fire the timer of a task's timed
+# wait, in ns. Each timed wait arms a timer with a range, from its earliest
+# to its latest firing time, so that the kernel can serve several timers
+# with one interrupt; the range is the slack. It is read from the kernel's
+# own list of pending timers (/proc/timer_list), not timed. Programs in a
+# group below lc and in one below batch each start three long waits: a plain
+# sleep, a poll with a timeout (the shell's read -t) and a futex wait (the
+# probe's -z). Each wait has its own length, so its timer can be told apart
+# (in hundreds of seconds: 31, 33, 35 for LC, 41, 43, 45 for batch).
+# Printed: LC's sleep, poll and futex slack, then batch's ("none": no such
+# timer was found).
+slack() {
+	awk '/ # expires at / {
+		match($0, /\[in -?[0-9]+ to -?[0-9]+ nsecs\]/)
+		split(substr($0, RSTART + 4, RLENGTH - 11), t, " to ")
+		k = int(t[1] / 1e11)
+		if (k == 31 || k == 33 || k == 35 || k == 41 || k == 43 || k == 45)
+			found[k] = t[2] - t[1]
+	}
+	END {
+		n = split("31 33 35 41 43 45", ks, " ")
+		for (i = 1; i <= n; i++) {
+			if (i == 4)
+				printf "batch "
+			printf "%s ", (ks[i] in found) ? found[ks[i]] : "none"
+		}
+	}' /proc/timer_list
+}
+slackpids=
+for class in lc batch; do
+	g=/sys/fs/cgroup/$class/slacktest
+	mkdir -p $g
+	n=3
+	[ $class = batch ] && n=4
+	for w in "exec sleep ${n}150" "sleep 9000 | { read -t ${n}350 x; }" "exec probe -z ${n}550"; do
+		sh -c "echo \$\$ >$g/cgroup.procs; $w" &
+		slackpids="$slackpids $!"
+	done
+done
+sleep 1
+echo "kairos.test: slack lc $(slack)"
+for class in lc batch; do
+	echo 1 >/sys/fs/cgroup/$class/slacktest/cgroup.kill
+done
+wait $slackpids 2>/dev/null
+rmdir /sys/fs/cgroup/lc/slacktest /sys/fs/cgroup/batch/slacktest 2>/dev/null
+
 # Class. How late a small LC program's wakeups are while crunch keeps every
 # CPU busy: once with crunch as batch, once with crunch as LC, and once
 # without crunch, for reference. Each is the median and the 99th

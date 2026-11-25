@@ -61,6 +61,12 @@
 #   relabel    one write made crunch's group LC, and a group made below it
 #              started as LC; "inherit" gave both batch's class back; a
 #              word that isn't a class was refused
+#   slack      the kernel gives an LC program's timed waits no timer slack:
+#              a sleep, a poll with a timeout and a futex wait below lc
+#              have none, the same waits below batch have the usual (50000
+#              ns; a long poll more), read from the kernel's list of
+#              pending timers (with kairos.notimerclass, which turns that
+#              off: LC's are the usual too)
 #   oomscore   the kernel would kill batch first when memory runs out:
 #              crunch's out-of-memory score, as batch, is at least 300
 #              above the probe's, and after one write makes it LC, it isn't
@@ -137,10 +143,14 @@ case $ncpu in
 '' | *[!0-9]*) die "--smp $smp: no number of CPUs at its start" ;;
 esac
 
-# Is the scheduler meant to be off? Are the memory hooks?
+# Is the scheduler meant to be off? Are the memory hooks? The timer hook?
 off=0
 memclass=1
+timerclass=1
 for word in "${words[@]}"; do
+	if [ "$word" = kairos.notimerclass ]; then
+		timerclass=0
+	fi
 	if [ "$word" = kairos.noscheduler ]; then
 		off=1
 	fi
@@ -449,6 +459,24 @@ elif [ $((batch_med * 2)) -le "$lc_med" ]; then
 else
 	bad class "$delays: as batch isn't at most half of as LC"
 fi
+
+# Timer slack, in ns: LC's sleep, poll and futex wait, then batch's.
+read -r _ l_sleep l_poll l_futex _ b_sleep b_poll b_futex <<<"$(fact slack)"
+slacks="LC: sleep $l_sleep, poll $l_poll, futex $l_futex; batch: sleep $b_sleep, poll $b_poll, futex $b_futex (ns)"
+case "$l_sleep$l_poll$l_futex$b_sleep$b_poll$b_futex" in
+'' | *[!0-9]*) bad slack "not all found: $slacks" ;;
+*)
+	if [ "$b_sleep" != 50000 ] || [ "$b_futex" != 50000 ] || [ "$b_poll" -lt 50000 ]; then
+		bad slack "batch's aren't the usual: $slacks"
+	elif [ $timerclass = 1 ] && [ "$l_sleep$l_poll$l_futex" = 000 ]; then
+		ok slack "$slacks"
+	elif [ $timerclass = 0 ] && [ "$l_sleep $l_poll $l_futex" = "$b_sleep $b_poll $b_futex" ]; then
+		ok slack "the usual for LC too, as kairos.notimerclass asks: $slacks"
+	else
+		bad slack "$slacks"
+	fi
+	;;
+esac
 
 # Out-of-memory scores: crunch's and the probe's, with crunch batch, then
 # LC.

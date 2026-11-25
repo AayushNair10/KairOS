@@ -14,6 +14,7 @@
  * usage: probe [-p PERIOD_US] [-w WORK_US] [-r REPORT_S] [-n REPORTS]
  *              [-d FILE | -f FILE]
  *        probe -t TRIPS
+ *        probe -z SECONDS
  *
  *   -p  time between wakeups (default 10000: 10 ms)
  *   -w  work done after each wakeup, measured on the clock (default 200).
@@ -31,6 +32,9 @@
  *       pipes TRIPS times; report the time per round trip. Each one is two
  *       wakeups and two task switches, so it measures the cost of those:
  *       the scheduler's own path, and the system calls around it.
+ *   -z  wait on a futex that nobody wakes, for SECONDS, then exit: a timed
+ *       wait of the kind threads use (pthread_cond_timedwait), for testing
+ *       the timer slack such waits get
  */
 
 #define _GNU_SOURCE	/* O_DIRECT */
@@ -42,7 +46,9 @@
 #include <time.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <sys/wait.h>
+#include <linux/futex.h>
 
 #define NSEC_PER_SEC	1000000000LL
 #define NSEC_PER_USEC	1000LL
@@ -98,6 +104,18 @@ static int ping_pong(long long trips)
 	return 0;
 }
 
+/* -z: a futex wait that only its timeout ends, then exit. */
+static int futex_sleep(long long seconds)
+{
+	static int word;	/* stays 0: the wait never sees its value change */
+	struct timespec timeout = { .tv_sec = seconds };
+
+	while (syscall(SYS_futex, &word, FUTEX_WAIT_PRIVATE, 0, &timeout,
+		       NULL, 0) < 0 && errno == EINTR)
+		;
+	return 0;
+}
+
 /* A whole number from an option, or exit. */
 static long long number(const char *s)
 {
@@ -122,7 +140,7 @@ int main(int argc, char **argv)
 	int opt, writes = 0, fd = -1;
 	void *buf = NULL;
 
-	while ((opt = getopt(argc, argv, "p:w:r:n:d:f:t:")) != -1) {
+	while ((opt = getopt(argc, argv, "p:w:r:n:d:f:t:z:")) != -1) {
 		switch (opt) {
 		case 'p':
 			period = number(optarg) * NSEC_PER_USEC;
@@ -143,8 +161,10 @@ int main(int argc, char **argv)
 			break;
 		case 't':
 			return ping_pong(number(optarg));
+		case 'z':
+			return futex_sleep(number(optarg));
 		default:
-			fprintf(stderr, "usage: probe [-p PERIOD_US] [-w WORK_US] [-r REPORT_S] [-n REPORTS] [-d FILE | -f FILE] | -t TRIPS\n");
+			fprintf(stderr, "usage: probe [-p PERIOD_US] [-w WORK_US] [-r REPORT_S] [-n REPORTS] [-d FILE | -f FILE] | -t TRIPS | -z SECONDS\n");
 			return 2;
 		}
 	}
