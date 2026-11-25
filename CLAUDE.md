@@ -195,7 +195,12 @@ kernel/patches/  our kernel changes as a patch series (the source of truth):
                  (mm/oom_kill.c), reclaim passes over LC groups like
                  memory.low (mm/vmscan.c, kairos_cgroup_class()), LC
                  tasks get the realtime allocation reserve
-                 (mm/page_alloc.c), and the documentation
+                 (mm/page_alloc.c), and the documentation; 0011-0012
+                 disk I/O that follows the class (CONFIG_KAIROS_IO, off
+                 with kairos.noioclass): a batch request with the default
+                 priority gets the idle class in bio_set_ioprio()
+                 (block/blk-core.c), synchronous writes keep theirs, and
+                 the documentation
 scheduler/       Kairos Scheduler, a git submodule at a pinned commit
                  (its code is in scheduler/scheduler/)
 kernel/config/   the kernel config: base (a starting point that ships with
@@ -219,7 +224,10 @@ scripts/         kernel-fetch.sh, kernel-export.sh, kernel-check.sh,
                  run-qemu.sh, boot-test.sh, layout-test.sh, disk-test.sh,
                  memory-test.sh (192 MB: batch streams a file of holes,
                  an LC program re-reads 16 MB every 2 s; judged by the LC
-                 group's own refaults), lib.sh
+                 group's own refaults), io-test.sh (a slowed disk:
+                 --disk-limit 200, virtio_blk.queue_depth=1, 64 scheduler
+                 slots; LC's reads with 8 batch readers, fsync, batch's
+                 io.stat, starvation), lib.sh
 docs/            DESIGN_LOG.md, notes
 userspace/       init/init.c: Kairos's init, process 1, one statically
                  linked C program, in two stages. From the initramfs with
@@ -233,8 +241,9 @@ userspace/       init/init.c: Kairos's init, process 1, one statically
                  --adopt /sys/fs/bpf/kairos if the kernel attached it,
                  else a load (--class=kernel, --split-order=layout,
                  --pin); restarts it by a rule, then the service manager.
-                 It switches on the cpu and memory controllers for lc
-                 and batch, and memory below them too.
+                 It switches on the cpu, memory and io controllers for
+                 lc and batch, memory and io below them too, and sets
+                 mq-deadline's prio_aging_expire to 2000 ms.
                  On the disk it also mounts /run as tmpfs, appends to
                  /var/log/kairos/boots (fsync), and at power-off syncs and
                  remounts / read-only.
@@ -268,6 +277,12 @@ userspace/       init/init.c: Kairos's init, process 1, one statically
   and again). Pages are charged to the group that first used them:
   busybox's are the root's, which nothing protects, so judge LC by its
   own group's `memory.stat`, not total disk reads.
+- I/O: `kairos.noioclass` turns the I/O hook off. A scheduler only orders
+  requests it holds: on a shallow device it needs room (nr_requests; a
+  1-deep virtio disk gets 2), or requests wait for a slot in arrival order
+  before it sees them. The probe has a disk mode (`-d FILE`: O_DIRECT
+  reads; `-f FILE`: write and fsync). `run-qemu.sh --disk-limit N` caps
+  the disk at N requests a second.
 - The disk: `run-qemu.sh` attaches `~/kairos-build/disk.img` (or `--disk
   FILE`) and keeps the writes; `--throwaway` discards them (QEMU's
   snapshot mode), `--no-disk` boots from memory only. `boot-test.sh` and

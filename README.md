@@ -27,8 +27,8 @@ something the kernel keeps: every control group has one, inherited by the
 groups below it, and the scheduler asks the kernel for each task's class.
 The CPUs kept for LC work follow the machine's layout: the fastest first,
 close together, in whole cores. When memory runs short, the kernel takes it
-from batch work first, and kills batch work first if it runs out. The shell
-and tools are busybox's. The roadmap, and the reasoning behind each decision, are in
+from batch work first, and kills batch work first if it runs out; when the
+disk is busy, LC's requests go first. The shell and tools are busybox's. The roadmap, and the reasoning behind each decision, are in
 [`docs/DESIGN_LOG.md`](docs/DESIGN_LOG.md).
 
 ## Design
@@ -194,6 +194,27 @@ interleaved pairs), the LC program's time stalled on memory had a median
 of 4 ms with the hooks and 154 ms without, and its file was pushed out in
 none of the 10 runs with them and 6 of 10 without.
 
+### When the disk is busy
+
+Every disk request carries the control group it is for. Kairos's kernel
+gives a request from a batch group the idle priority class, unless the
+program chose a priority of its own (patch 0011); the disk's I/O
+scheduler, mq-deadline, serves every LC request before any idle one. Two
+limits keep that safe:
+
+- a write the kernel waits for synchronously (an `fsync`, or a journal
+  commit writing out the data it depends on) keeps its priority, since an
+  LC program may be waiting behind it;
+- a batch request that has waited 2 s is served anyway (mq-deadline's
+  aging limit, which init sets to match the scheduler's 2 s starvation
+  guard).
+
+Writes that the kernel's own threads do later count for the group whose
+pages they are (cgroup writeback). `kairos.noioclass` turns the hook off.
+On a slowed disk (`scripts/io-test.sh`), with 8 batch readers and a batch
+writer at work, an LC program's reads took about 11 ms instead of about
+80 ms, and its `fsync` about 42 ms instead of about 300 ms.
+
 ### When something fails
 
 | What happens | Who notices | What follows |
@@ -244,6 +265,7 @@ git submodule update --init  # once: Kairos Scheduler at the pinned commit
 ./scripts/layout-test.sh     # boot several CPU layouts; check where LC work runs
 ./scripts/disk-test.sh       # boot one disk four times, with a power cut
 ./scripts/memory-test.sh     # memory pressure: does LC keep its memory?
+./scripts/io-test.sh         # a slowed disk: do LC's requests go first?
 ./scripts/run-qemu.sh        # boot to a shell; "poweroff" leaves
 ```
 
@@ -300,9 +322,10 @@ parent of everything else. It:
 - mounts the file systems through which the kernel shows its own
   information, an in-memory `/run` for files about this boot only, and
   the control groups, with the groups `lc` and `batch`, writes `batch`
-  into the batch group's class, and switches the CPU and memory
-  controllers on for them (the memory controller below them too, so
-  every service has its memory counted on its own);
+  into the batch group's class, and switches the CPU, memory and I/O
+  controllers on for them (memory and I/O below them too, so every
+  service has its memory and disk use counted on its own); and gives the
+  disks' I/O scheduler a 2 s limit on how long a batch request waits;
 - adds a line to the boot log on the disk (`/var/log/kairos/boots`),
   written out at once;
 - keeps the file systems mounted before it started: the attach program's
@@ -389,6 +412,8 @@ Our patches so far:
 | 0008 | reclaim passes over LC groups while other groups have memory to give; `kairos_cgroup_class()`, a group's class |
 | 0009 | LC tasks may dip into the allocator's reserves as realtime tasks may |
 | 0010 | the memory hooks in the cgroup document, `kairos.nomemclass` in the boot parameters |
+| 0011 | a batch group's disk requests get the idle I/O priority class (synchronous writes keep theirs); `CONFIG_KAIROS_IO` and `kairos.noioclass` |
+| 0012 | the I/O hook in the cgroup document, `kairos.noioclass` in the boot parameters |
 
 ## The kernel config
 

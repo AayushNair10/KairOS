@@ -23,7 +23,7 @@ and the scheduling policy as a BPF program on sched_ext.
 | 8 | Scheduler attached before PID 1 (done: the kernel runs an attach program before init; the scheduler held by a pin) | initcalls, kernel threads, user-mode helpers, BPF object lifetimes | patch (0005, 0006) |
 | 9 | A root file system on a virtio disk (done: a two-stage boot from the initramfs to ext4) | VFS, block layer, virtio drivers, page cache, journaling | config only |
 | 10 | Memory reclaim that knows LC from batch (done: reclaim, the allocation reserve and the OOM killer follow the class) | page allocator, reclaim, memory cgroups | patch (0007 to 0010) |
-| 11 | Block I/O that knows LC from batch | I/O schedulers, I/O priority | patch |
+| 11 | Block I/O that knows LC from batch (done: batch's requests get the idle I/O class; mq-deadline serves LC first, batch waits at most 2 s) | I/O schedulers, I/O priority, cgroup writeback | patch (0011, 0012) |
 | 12 | Measurement at real speed | needs QEMU on the Mac (hvf) or a second VM; ask first | none |
 | 13 | Native scheduling class: decide with measurements | the scheduler core | maybe |
 
@@ -2033,3 +2033,176 @@ Open questions / next:
   failed once while the LC pool was briefly 3.
 - Push: this repository's component 10 commits.
 - Next on the roadmap: component 11, block I/O that knows LC from batch.
+
+## 11. Block I/O that knows LC from batch — 2026-11-25
+
+Options:
+- A: I/O priority by group with Linux's own policy: the I/O controller,
+  its priority policy (io.prio.class), cgroup writeback and mq-deadline;
+  init sets lc to "promote to realtime" and batch to "idle". Config only;
+  the class would live in two places.
+- B: a latency target for LC (io.latency): when LC's requests miss it,
+  the kernel shrinks batch's queue depth. Config only; reacts after a
+  miss.
+- C: the class becomes I/O priority in the kernel (patch): a batch
+  group's request gets the idle class, mq-deadline orders the classes,
+  cgroup writeback charges write-out to the group that dirtied the pages.
+- D: proportional shares priced by cost (io.cost, io.weight): LC 10000,
+  batch 100. Config only; needs a cost model of the device.
+
+My pick and reasoning:
+- "A is group wise, which won't work because the classification itself is
+  task-wise, so using groups doesn't really make sense. With respect to B,
+  this might delay LC tasks, so I would give the edge to C and D. I am not
+  sure how starvation works here, but if it slows down the OS, I would
+  prefer D; if not, C."
+- After the verdict: "yes, write the plan for C".
+
+Verdict: C.
+- It doesn't slow the OS: the root group (init, the shell, kernel
+  threads) is LC and keeps its priority; only batch waits, only while LC
+  keeps the disk busy, and at most mq-deadline's aging limit (set to 2 s,
+  the scheduler's starvation guard). It continues components 6 and 10
+  (the kernel's class read at the moment of the decision; a relabel
+  applies at once), in a small patch where the block layer already sets
+  a request's priority. The real risk named was priority inversion, not
+  starvation: an LC fsync waiting for batch's data in a journal commit.
+- Grading: "A won't work because classification is task-wise" is
+  mistaken: Kairos's class is per group (component 6), and C is per group
+  too; A's flaw is a second copy of the class. "B might delay LC" is right
+  and is B's core weakness (it acts only after a miss). Framing C vs D
+  on whether starvation slows the OS was the right question. D loses
+  because it shares throughput over time rather than putting LC's next
+  request first, needs a device cost model the virtual disk can't give,
+  and has the most tuning.
+
+Where the others fit (from memory):
+- A: a service manager setting I/O priority per service (systemd's
+  IOSchedulingClass=); Android lowering background apps' I/O priority.
+- B: io.latency was built at Facebook for latency-sensitive services,
+  later largely replaced there by D.
+- D: Meta's production I/O control (iocost); multi-tenant cloud disks
+  shared by weight.
+
+Linux concepts learned:
+- `submit_bio()` -> `bio_set_ioprio()` (`block/blk-core.c`): a request
+  with no priority takes the task's (`get_current_ioprio()`: the
+  io_context's, else best-effort from niceness via `task_nice_ioclass()`),
+  then the group's policy (`blkcg_set_ioprio()`, io.prio.class). A kiocb
+  takes `get_current_ioprio()` when the I/O begins (`init_sync_kiocb()`),
+  and direct I/O copies it into the bio (`fs/iomap/direct-io.c`): most
+  requests arrive with a priority already set.
+- A request's group: attached when the bio is made
+  (`bio_associate_blkg()`: the submitting task's), or for write-out the
+  group that dirtied the pages (cgroup writeback, via the
+  writeback_control); `bio_blkcg_css()`. io.stat per group, hierarchical.
+- mq-deadline (`block/mq-deadline.c`): one queue per class (realtime,
+  best-effort, idle) served in that order, deadlines per request, and a
+  lower class served anyway after `prio_aging_expire` (10 s by default,
+  in `/sys/block/*/queue/iosched/`). A single-queue device gets it by
+  default (`block/elevator.c`); a multi-queue one gets none, which ignores
+  priorities.
+- blk-mq slots: hardware tags (the device's queue depth;
+  `virtio_blk.queue_depth`) and scheduler requests (`nr_requests`, by
+  default twice a small depth). A request waits for a scheduler request
+  in arrival order before the scheduler sees it: a scheduler can only
+  reorder what it holds.
+- `op_is_sync()`: reads, and writes with REQ_SYNC, FUA or PREFLUSH
+  (fsync's writeback, WB_SYNC_ALL). ext4's ordered journal writes the data
+  its metadata points to before committing.
+- QEMU's drive throttling (`throttling.iops-total`) makes a slow disk.
+
+What changed: the class the kernel keeps for every group (component 6)
+now steers disk I/O, with CONFIG_KAIROS_IO (off at boot with
+`kairos.noioclass`). When a request is submitted, one with the default
+best-effort priority, for a batch group whose task chose no priority of
+its own, becomes idle class; writes the kernel waits for synchronously
+keep their priority, against inversion. The kernel's own write-out counts
+for the group that dirtied the pages (cgroup writeback). mq-deadline
+serves every LC request before any idle one, and init sets its aging
+limit to 2 s, so a batch request waits at most that long. Init switches
+the I/O controller on for the class groups and below.
+
+What each step did, in order:
+1. The checks first, failing (io, iosched in the boot test;
+   `io-test.sh`), with the probe's disk mode and `run-qemu.sh
+   --disk-limit` (`bde1028`).
+2. The I/O controller, cgroup writeback and mq-deadline; init switches
+   the controller on and sets the 2 s aging limit; a baseline (`08509a5`).
+3. Patch 0011, the hook, and the test's setup (`5110a4f`; kernel
+   `2d2bfd8a4`).
+4. The starvation bound in the test (`7f6a053`).
+5. Patch 0012, documentation (`7726f5c`; kernel `6f77f5e92`).
+6. The suite, the lock-checking build and the 10-pair comparison (no code
+   change).
+
+Found on the way:
+- The first hook changed only requests nobody had given a priority and
+  made no difference (LC reads 15-23 ms on, 20-22 off): direct I/O
+  copies the task's default priority into the request in advance. The
+  hook now applies to any request with the default priority.
+- The test's first setup hid any effect: a 2-deep device left the
+  scheduler 4 requests, all held by batch's readers, so LC waited for a
+  request before the scheduler saw it; batch marked idle by hand with
+  ionice didn't help either (19.3 vs 19.7 ms). The test now uses a 1-deep
+  device, 64 scheduler requests (what a 32-deep disk gets), 8 batch
+  readers, and a limit derived from the setup (20 ms: halfway between
+  first in line and behind the whole queue, about 40 ms).
+- LC's fsync got faster with the hook, not slower: batch's write-out is
+  idle while the journal's synchronous writes keep their priority.
+- The starvation bound is exact: batch's longest wait was 2.013-2.016 s,
+  init's 2 s limit plus one request.
+
+How it's tested:
+- `./scripts/boot-test.sh`: 29 lines, all ok, at 1, 2, 4 and 8 CPUs, on 2
+  clusters x 2 cores x 2 threads, with kairos.noscheduler, --no-disk,
+  kairos.nomemclass and kairos.noioclass, and on the lock-checking build
+  (no lockdep or RCU reports). New checks, seen failing first: io (lc and
+  batch: cpu memory io), iosched (none [mq-deadline], aging 2000).
+- `./scripts/io-test.sh` (200 requests a second, 1-deep, 64 scheduler
+  requests): reads (LC under 20 ms with batch at work), charged (batch
+  charged 128 of its 128 MiB), starved (batch gets reads done, none over
+  3 s). 10 interleaved pairs, hook on vs kairos.noioclass
+  (`~/kairos-data/kairos-os/2026-11-24-ab-io`), Wilcoxon, Holm-adjusted:
+  LC read 11.7 vs 80.9 ms (99th percentile 18.7 vs 153.7), LC fsync 44.5
+  vs 295.0 ms, batch reads while LC saturates the disk 5 vs 328 in 8 s,
+  batch's longest wait 2.016 s vs 49 ms; every metric 10 of 10 pairs, p =
+  0.0098. On the lock-checking build: 3 of 3.
+- `./scripts/layout-test.sh` 16 of 16, `./scripts/disk-test.sh` 6 of 6,
+  `./scripts/memory-test.sh` 1 of 1; `./scripts/kernel-check.sh`: 12
+  patches, all ok.
+
+Interview questions:
+1. Your hook marks batch requests idle when they are submitted. Why did
+   the first version, which only touched requests with no priority,
+   change nothing, and where does a request's priority come from?
+2. An I/O scheduler can only reorder what it holds. Explain the device's
+   queue depth and the scheduler's request slots, and why your first
+   test showed no effect even with batch marked idle by hand.
+3. What is priority inversion in disk I/O, how could an LC fsync end up
+   waiting for batch, and how did you prevent it? What bounds batch's
+   starvation, and what did the test show?
+
+Resume line: "Made Kairos's block layer honour task classes (kernel
+patch): batch cgroups' disk requests get the idle I/O priority class,
+synchronous writes excepted against priority inversion, under mq-deadline
+with a 2 s starvation bound. In a 10-pair interleaved QEMU A/B on a
+throttled disk, the LC service's median read latency fell from 81 to 12
+ms and its fsync from 295 to 45 ms (p = 0.01), with batch held to the 2 s
+bound."
+
+Open questions / next:
+- Inversion beyond the journal: LC reading a page batch is already
+  reading at idle priority, or a lock held by a batch task waiting on
+  idle I/O.
+- Fast multi-queue disks get no scheduler by default, so the classes do
+  nothing there unless mq-deadline (or BFQ) is chosen.
+- A shallow device's default scheduler slots (nr_requests) are too few to
+  reorder; Kairos sets them only in the test.
+- A request whose own explicit priority is best-effort (io_uring, aio)
+  becomes idle too when its task chose no priority.
+- Batch's write-out is idle, so its dirty pages pile up until dirty
+  throttling slows it; the effect on memory pressure wasn't measured.
+- Push: this repository's component 11 commits.
+- Next on the roadmap: component 12, measurement at real speed (needs
+  QEMU on the Mac or a second VM: ask first).
